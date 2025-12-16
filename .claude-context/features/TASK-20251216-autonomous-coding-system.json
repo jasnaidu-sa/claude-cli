@@ -9,17 +9,17 @@
       "id": "FEAT-001",
       "name": "Python Venv Management Service",
       "type": "backend",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": ["claude-code-manager/src/main/services/venv-manager.ts"],
-        "modify": ["claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts"]
+        "create": ["claude-code-manager/src/main/services/venv-manager.ts", "claude-code-manager/src/main/ipc/venv-handlers.ts"],
+        "modify": ["claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts", "claude-code-manager/src/shared/types.ts"]
       },
       "subtasks": [
-        { "description": "Create VenvManager class with create/check/install methods", "done": false },
-        { "description": "Implement venv location at ~/.autonomous-coding/venv/", "done": false },
-        { "description": "Add dependency installation (claude-code-sdk, python-dotenv)", "done": false },
-        { "description": "Register IPC handlers for venv operations", "done": false },
-        { "description": "Add preload API for renderer access", "done": false }
+        { "description": "Create VenvManager class with create/check/install methods", "done": true },
+        { "description": "Implement venv location at ~/.autonomous-coding/venv/", "done": true },
+        { "description": "Add dependency installation (claude-code-sdk, python-dotenv)", "done": true },
+        { "description": "Register IPC handlers for venv operations", "done": true },
+        { "description": "Add preload API for renderer access", "done": true }
       ],
       "verification": [
         "Can create venv if not exists",
@@ -27,29 +27,29 @@
         "Returns correct Python executable path"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
-        "issues_found": 0,
-        "issues_fixed": 0,
-        "attempts": 0
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
+        "issues_found": 23,
+        "issues_fixed": 23,
+        "attempts": 1
       }
     },
     {
       "id": "FEAT-002",
       "name": "Python Orchestrator Runner Service",
       "type": "backend",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": ["claude-code-manager/src/main/services/orchestrator-runner.ts", "claude-code-manager/src/shared/types/autonomous.ts"],
-        "modify": []
+        "create": ["claude-code-manager/src/main/services/orchestrator-runner.ts", "claude-code-manager/src/main/ipc/orchestrator-handlers.ts"],
+        "modify": ["claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts", "claude-code-manager/src/shared/types.ts"]
       },
       "subtasks": [
-        { "description": "Create OrchestratorRunner class extending EventEmitter", "done": false },
-        { "description": "Implement spawn method using venv Python", "done": false },
-        { "description": "Add output streaming to renderer via IPC", "done": false },
-        { "description": "Add session lifecycle management (start, pause, stop)", "done": false },
-        { "description": "Parse output for progress events", "done": false }
+        { "description": "Create OrchestratorRunner class extending EventEmitter", "done": true },
+        { "description": "Implement spawn method using venv Python", "done": true },
+        { "description": "Add output streaming to renderer via IPC", "done": true },
+        { "description": "Add session lifecycle management (start, pause, stop)", "done": true },
+        { "description": "Parse output for progress events", "done": true }
       ],
       "verification": [
         "Can spawn Python process with correct env vars",
@@ -57,12 +57,12 @@
         "Graceful shutdown on stop"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
-        "issues_found": 0,
-        "issues_fixed": 0,
-        "attempts": 0
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
+        "issues_found": 29,
+        "issues_fixed": 29,
+        "attempts": 1
       }
     },
     {

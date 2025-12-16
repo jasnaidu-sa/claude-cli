@@ -232,7 +232,46 @@ class SessionManager extends EventEmitter {
 **IPC Handler Registration**
 
 - Registers all IPC handlers for main-renderer communication
-- Handles: Session management, File operations, Config, Window controls, Dialogs
+- Handles: Session management, File operations, Config, Window controls, Dialogs, Venv, Orchestrator, Git
+
+#### `src/main/services/venv-manager.ts` (FEAT-001)
+**Python Virtual Environment Management**
+
+- Manages shared Python venv at `~/.autonomous-coding/venv/`
+- Creates venv if not exists, installs dependencies (claude-code-sdk, python-dotenv)
+- Security hardened: path traversal prevention, command injection protection
+- Mutex for concurrent operations, timeout handling
+
+```typescript
+class VenvManager extends EventEmitter {
+  async findSystemPython(): Promise<PythonCommand | null>
+  async ensureVenv(): Promise<VenvStatus>
+  async installPackages(packages: string[]): Promise<void>
+  getPythonPath(): string
+  getOrchestratorPath(): string
+}
+```
+
+#### `src/main/services/orchestrator-runner.ts` (FEAT-002)
+**Python Orchestrator Process Management**
+
+- Spawns and manages Python orchestrator processes for autonomous workflows
+- Supports phases: validation, generation, implementation
+- Process lifecycle: start, stop, pause with signal handling
+- Output streaming and progress parsing
+- Rate limiting (5 concurrent, 50/hour), credential sanitization
+
+```typescript
+class OrchestratorRunner extends EventEmitter {
+  async start(config: OrchestratorConfig): Promise<OrchestratorSession>
+  async stop(sessionId: string): Promise<boolean>
+  async pause(sessionId: string): Promise<boolean>
+  getSession(sessionId: string): OrchestratorSession | undefined
+  getAllSessions(): OrchestratorSession[]
+  getWorkflowSessions(workflowId: string): OrchestratorSession[]
+  cleanup(): void
+}
+```
 
 ### Preload
 
@@ -341,6 +380,20 @@ const pty = spawn('powershell.exe', [], {
 | `window:maximize` | send | Maximize/restore window |
 | `window:close` | send | Close window |
 | `dialog:select-folder` | invoke | Open folder picker |
+| `venv:status` | invoke | Get venv status |
+| `venv:ensure` | invoke | Ensure venv exists |
+| `venv:upgrade` | invoke | Upgrade venv packages |
+| `venv:progress` | on | Venv creation progress |
+| `orchestrator:start` | invoke | Start orchestrator session |
+| `orchestrator:stop` | invoke | Stop orchestrator session |
+| `orchestrator:pause` | invoke | Pause orchestrator session |
+| `orchestrator:get-session` | invoke | Get session by ID |
+| `orchestrator:get-all-sessions` | invoke | Get all sessions |
+| `orchestrator:get-workflow-sessions` | invoke | Get sessions for workflow |
+| `orchestrator:cleanup` | invoke | Clean up completed sessions |
+| `orchestrator:output` | on | Orchestrator output events |
+| `orchestrator:progress` | on | Orchestrator progress events |
+| `orchestrator:session` | on | Orchestrator session updates |
 
 ---
 
@@ -384,6 +437,52 @@ interface AppConfig {
   theme: 'dark' | 'light' | 'system'
   fontSize: number
   recentProjects: string[]
+}
+```
+
+### Orchestrator Types (`src/shared/types.ts`)
+
+```typescript
+type OrchestratorPhase = 'validation' | 'generation' | 'implementation'
+type OrchestratorStatus = 'idle' | 'starting' | 'running' | 'paused' | 'stopping' | 'completed' | 'error'
+type OrchestratorOutputType = 'stdout' | 'stderr' | 'system' | 'progress'
+
+interface OrchestratorConfig {
+  projectPath: string
+  workflowId: string
+  phase: OrchestratorPhase
+  model?: string
+  supabaseProjectId?: string
+  specFile?: string
+}
+
+interface OrchestratorSession {
+  id: string
+  config: OrchestratorConfig
+  status: OrchestratorStatus
+  phase: OrchestratorPhase
+  startedAt: number
+  endedAt?: number
+  exitCode?: number
+  error?: string
+  testsTotal?: number
+  testsPassing?: number
+}
+
+interface OrchestratorOutput {
+  sessionId: string
+  type: OrchestratorOutputType
+  data: string
+  timestamp: number
+}
+
+interface OrchestratorProgress {
+  sessionId: string
+  phase: OrchestratorPhase
+  testsTotal?: number
+  testsPassing?: number
+  currentTest?: string
+  message?: string
 }
 ```
 
@@ -516,3 +615,5 @@ sequenceDiagram
 | Date | Version | Changes |
 |------|---------|---------|
 | 2024-12-10 | 1.0.0 | Initial project structure and documentation |
+| 2025-12-16 | 1.1.0 | FEAT-001: Python Venv Management Service |
+| 2025-12-16 | 1.2.0 | FEAT-002: Python Orchestrator Runner Service (security hardened) |

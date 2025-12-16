@@ -1,0 +1,508 @@
+{
+  "task_id": "TASK-20251216-autonomous-coding-system",
+  "created": "2025-12-16T21:30:00Z",
+  "description": "Implement Autonomous Coding System - Electron app for managing Python-based autonomous coding workflows",
+  "workflow_version": "7.0",
+
+  "features": [
+    {
+      "id": "FEAT-001",
+      "name": "Python Venv Management Service",
+      "type": "backend",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/main/services/venv-manager.ts"],
+        "modify": ["claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts"]
+      },
+      "subtasks": [
+        { "description": "Create VenvManager class with create/check/install methods", "done": false },
+        { "description": "Implement venv location at ~/.autonomous-coding/venv/", "done": false },
+        { "description": "Add dependency installation (claude-code-sdk, python-dotenv)", "done": false },
+        { "description": "Register IPC handlers for venv operations", "done": false },
+        { "description": "Add preload API for renderer access", "done": false }
+      ],
+      "verification": [
+        "Can create venv if not exists",
+        "Can install Python packages",
+        "Returns correct Python executable path"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-002",
+      "name": "Python Orchestrator Runner Service",
+      "type": "backend",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/main/services/orchestrator-runner.ts", "claude-code-manager/src/shared/types/autonomous.ts"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create OrchestratorRunner class extending EventEmitter", "done": false },
+        { "description": "Implement spawn method using venv Python", "done": false },
+        { "description": "Add output streaming to renderer via IPC", "done": false },
+        { "description": "Add session lifecycle management (start, pause, stop)", "done": false },
+        { "description": "Parse output for progress events", "done": false }
+      ],
+      "verification": [
+        "Can spawn Python process with correct env vars",
+        "Output streams to renderer in real-time",
+        "Graceful shutdown on stop"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-003",
+      "name": "Workflow Manager Service",
+      "type": "backend",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/main/services/workflow-manager.ts"],
+        "modify": ["claude-code-manager/src/shared/types/autonomous.ts"]
+      },
+      "subtasks": [
+        { "description": "Create WorkflowManager for tracking .autonomous/ state", "done": false },
+        { "description": "Implement workflow CRUD (create, read, update, list)", "done": false },
+        { "description": "Add workflow config parsing (.autonomous/workflows/*.yaml)", "done": false },
+        { "description": "Track workflow status (pending, in_progress, paused, completed)", "done": false },
+        { "description": "Integrate with worktree creation", "done": false }
+      ],
+      "verification": [
+        "Can create new workflow with worktree",
+        "Persists workflow state to YAML files",
+        "Lists all workflows for a project"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-004",
+      "name": "Progress Watcher Service",
+      "type": "backend",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/main/services/progress-watcher.ts"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create ProgressWatcher using chokidar", "done": false },
+        { "description": "Watch feature_list.json for changes", "done": false },
+        { "description": "Parse test completion (passes: true/false)", "done": false },
+        { "description": "Calculate completion percentage by category", "done": false },
+        { "description": "Emit progress events to renderer", "done": false }
+      ],
+      "verification": [
+        "Detects feature_list.json changes",
+        "Correctly calculates pass/fail counts",
+        "Updates UI in real-time"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-005",
+      "name": "Python Orchestrator Code",
+      "type": "backend",
+      "status": "pending",
+      "files": {
+        "create": [
+          "autonomous-orchestrator/autonomous_agent_demo.py",
+          "autonomous-orchestrator/agent.py",
+          "autonomous-orchestrator/client.py",
+          "autonomous-orchestrator/security.py",
+          "autonomous-orchestrator/config.py"
+        ],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create entry point (autonomous_agent_demo.py)", "done": false },
+        { "description": "Implement session loop (agent.py)", "done": false },
+        { "description": "Create Claude SDK client with MCP config (client.py)", "done": false },
+        { "description": "Add bash security allowlist (security.py)", "done": false },
+        { "description": "Implement configuration loading (config.py)", "done": false }
+      ],
+      "verification": [
+        "Can run autonomously with test spec",
+        "MCP servers (Playwright, Supabase) connect",
+        "Respects bash security rules"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-006",
+      "name": "Brownfield Prompt Templates",
+      "type": "config",
+      "status": "pending",
+      "files": {
+        "create": [
+          "autonomous-orchestrator/prompts/schema_validation_prompt.md",
+          "autonomous-orchestrator/prompts/initializer_prompt_brownfield.md",
+          "autonomous-orchestrator/prompts/coding_prompt_brownfield.md"
+        ],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create schema validation prompt (Phase 0)", "done": false },
+        { "description": "Create test generation prompt (Phase 1)", "done": false },
+        { "description": "Create implementation prompt (Phase 2+)", "done": false },
+        { "description": "Add existing pattern references", "done": false }
+      ],
+      "verification": [
+        "Prompts follow spec requirements",
+        "All brownfield-specific instructions included"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-007",
+      "name": "Schema Validator Integration",
+      "type": "integration",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/main/services/schema-validator.ts"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create SchemaValidator service", "done": false },
+        { "description": "Implement validation trigger (runs orchestrator with validation prompt)", "done": false },
+        { "description": "Parse validation results from .autonomous/schema_validation.json", "done": false },
+        { "description": "Add IPC handlers for validation status", "done": false }
+      ],
+      "verification": [
+        "Triggers schema validation phase",
+        "Reports discrepancies correctly",
+        "Stores results for UI display"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-008",
+      "name": "Autonomous Store (Zustand)",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/renderer/stores/autonomous-store.ts"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create Zustand store for autonomous workflow state", "done": false },
+        { "description": "Add workflow list management", "done": false },
+        { "description": "Add progress tracking state", "done": false },
+        { "description": "Add orchestrator output state", "done": false },
+        { "description": "Add schema validation status", "done": false }
+      ],
+      "verification": [
+        "State updates trigger UI re-renders",
+        "Persists relevant state across sessions"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-009",
+      "name": "Workflow List Component",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/WorkflowList.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/WorkflowCard.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/WorkflowCreate.tsx"
+        ],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create WorkflowList component showing all workflows", "done": false },
+        { "description": "Create WorkflowCard with status/progress indicators", "done": false },
+        { "description": "Create WorkflowCreate modal for new workflows", "done": false },
+        { "description": "Add workflow selection handling", "done": false }
+      ],
+      "verification": [
+        "Shows all workflows for selected project",
+        "Displays correct progress percentages",
+        "Can create new workflow"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-010",
+      "name": "Progress Panel Component",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/ProgressPanel.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/CategoryProgress.tsx"
+        ],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create ProgressPanel with overall progress bar", "done": false },
+        { "description": "Create CategoryProgress table showing per-category stats", "done": false },
+        { "description": "Add current test indicator", "done": false },
+        { "description": "Add session info display", "done": false }
+      ],
+      "verification": [
+        "Updates in real-time as tests pass",
+        "Shows correct category breakdown"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-011",
+      "name": "Spec Editor Component",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/renderer/components/autonomous/SpecEditor.tsx"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create multi-line text area for spec input", "done": false },
+        { "description": "Add file import button (load from .md)", "done": false },
+        { "description": "Add save to .autonomous/app_spec.txt", "done": false },
+        { "description": "Add edit mode toggle", "done": false }
+      ],
+      "verification": [
+        "Can input spec manually",
+        "Can import from file",
+        "Saves correctly"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-012",
+      "name": "Output Viewer Component",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/renderer/components/autonomous/OutputViewer.tsx"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create scrolling log display", "done": false },
+        { "description": "Add timestamp formatting", "done": false },
+        { "description": "Add expand/collapse functionality", "done": false },
+        { "description": "Add clear button", "done": false }
+      ],
+      "verification": [
+        "Shows orchestrator output in real-time",
+        "Handles large output efficiently"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-013",
+      "name": "Control Panel Component",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": ["claude-code-manager/src/renderer/components/autonomous/ControlPanel.tsx"],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Create Start/Pause/Stop buttons", "done": false },
+        { "description": "Add model selector dropdown", "done": false },
+        { "description": "Add schema revalidate button", "done": false },
+        { "description": "Show session stats (duration, cost estimate)", "done": false }
+      ],
+      "verification": [
+        "Buttons trigger correct orchestrator actions",
+        "Shows accurate session info"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-014",
+      "name": "Main UI Integration",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/renderer/App.tsx",
+          "claude-code-manager/src/renderer/components/layout/Sidebar.tsx"
+        ]
+      },
+      "subtasks": [
+        { "description": "Add Autonomous mode to sidebar navigation", "done": false },
+        { "description": "Create AutonomousView combining all autonomous components", "done": false },
+        { "description": "Wire up IPC listeners for progress/output updates", "done": false },
+        { "description": "Add project selection for autonomous mode", "done": false }
+      ],
+      "verification": [
+        "Can switch to Autonomous mode from sidebar",
+        "All components render correctly",
+        "IPC events update UI"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-015",
+      "name": "Global Configuration",
+      "type": "config",
+      "status": "pending",
+      "files": {
+        "create": ["autonomous-orchestrator/config/global_config.yaml"],
+        "modify": ["claude-code-manager/src/main/services/config-store.ts"]
+      },
+      "subtasks": [
+        { "description": "Define global config schema (models, behavior, MCP)", "done": false },
+        { "description": "Add config migration for new settings", "done": false },
+        { "description": "Expose config through IPC", "done": false }
+      ],
+      "verification": [
+        "Config loads on app start",
+        "Settings persist correctly"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-016",
+      "name": "E2E Testing Setup",
+      "type": "testing",
+      "status": "pending",
+      "files": {
+        "create": [
+          "claude-code-manager/tests/e2e/autonomous-workflow.spec.ts",
+          "claude-code-manager/tests/e2e/venv-management.spec.ts"
+        ],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Set up Playwright for Electron testing", "done": false },
+        { "description": "Write E2E tests for workflow creation", "done": false },
+        { "description": "Write E2E tests for venv management", "done": false },
+        { "description": "Write E2E tests for progress tracking", "done": false }
+      ],
+      "verification": [
+        "All E2E tests pass",
+        "Coverage meets requirements"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    }
+  ],
+
+  "rules": {
+    "review_after_each_feature": true,
+    "all_priorities_block": true,
+    "developer_must_fix": true,
+    "max_fix_attempts": 3
+  },
+
+  "completion_criteria": {
+    "all_features_implemented": false,
+    "all_features_reviewed": false,
+    "all_issues_fixed": false,
+    "runtime_verification_passed": false
+  }
+}

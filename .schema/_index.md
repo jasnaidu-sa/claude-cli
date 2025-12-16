@@ -341,6 +341,23 @@ class ProgressWatcher extends EventEmitter {
 }
 ```
 
+#### `src/main/services/schema-validator.ts` (FEAT-007)
+**Schema Validation Orchestration**
+
+- Integrates with OrchestratorRunner to trigger validation phase
+- Parses `.autonomous/schema_validation.json` results
+- Tracks validation status per project (idle, validating, complete, error)
+- Path traversal prevention for file operations
+
+```typescript
+class SchemaValidator extends EventEmitter {
+  async validate(projectPath: string, workflowId: string, model?: string): Promise<{ success: boolean; sessionId?: string; error?: string }>
+  async getResult(projectPath: string): Promise<SchemaValidationResult | null>
+  async clear(projectPath: string): Promise<void>
+  getStatus(projectPath: string): ValidationState
+}
+```
+
 ### Preload
 
 #### `src/preload/index.ts`
@@ -387,6 +404,68 @@ interface ElectronAPI {
 - Manages list of active sessions
 - Tracks active session selection
 - Updates session status and edited files
+
+#### `src/renderer/stores/autonomous-store.ts` (FEAT-008)
+**Zustand Autonomous Coding State**
+
+Comprehensive state management for the autonomous coding system:
+
+- **Workflows**: CRUD operations, project grouping, active workflow tracking
+- **Orchestrator Sessions**: Session lifecycle, output history, progress tracking
+- **Progress**: Real-time test progress with category breakdown
+- **Schema Validation**: Validation status and results per project
+- **Venv**: Python environment status and creation progress
+
+Key features:
+- Automatic IPC subscription management via `initSubscriptions()`
+- Output history limiting (1000 max, trimmed to 500) to prevent memory issues
+- Type-safe integration with all preload APIs
+- Computed helpers: `getActiveWorkflow()`, `getActiveSession()`, etc.
+
+```typescript
+interface AutonomousState {
+  // State
+  workflows: WorkflowConfig[]
+  workflowsByProject: Record<string, WorkflowConfig[]>
+  activeWorkflowId: string | null
+  sessions: OrchestratorSession[]
+  sessionsByWorkflow: Record<string, OrchestratorSession[]>
+  activeSessionId: string | null
+  sessionOutput: Record<string, OrchestratorOutput[]>
+  progressByWorkflow: Record<string, ProgressSnapshot>
+  schemaResults: Record<string, SchemaValidationResult>
+  schemaStatus: Record<string, SchemaStatus>
+  venvStatus: VenvStatus | null
+  venvProgress: VenvCreationProgress | null
+
+  // Workflow Actions
+  refreshWorkflows(projectPath?: string): Promise<void>
+  createWorkflow(options: CreateWorkflowOptions): Promise<WorkflowConfig | null>
+  updateWorkflow(...): Promise<WorkflowConfig | null>
+  deleteWorkflow(...): Promise<boolean>
+
+  // Orchestrator Actions
+  startOrchestrator(config: OrchestratorConfig): Promise<OrchestratorSession | null>
+  stopOrchestrator(sessionId: string): Promise<boolean>
+  pauseOrchestrator(sessionId: string): Promise<boolean>
+
+  // Progress Actions
+  watchProgress(workflowId: string, projectPath: string): Promise<void>
+  unwatchProgress(workflowId: string): Promise<void>
+
+  // Schema Actions
+  validateSchema(projectPath: string, workflowId: string, model?: string): Promise<boolean>
+  getSchemaResult(projectPath: string): Promise<SchemaValidationResult | null>
+
+  // Venv Actions
+  checkVenv(): Promise<VenvStatus | null>
+  ensureVenv(): Promise<VenvStatus | null>
+  upgradeVenv(): Promise<boolean>
+
+  // Subscription management
+  initSubscriptions(): () => void  // Returns cleanup function
+}
+```
 
 ---
 
@@ -475,6 +554,10 @@ const pty = spawn('powershell.exe', [], {
 | `progress:unwatch` | invoke | Stop watching workflow progress |
 | `progress:get` | invoke | Get current progress snapshot |
 | `progress:update` | on | Progress update events |
+| `schema:validate` | invoke | Trigger schema validation |
+| `schema:get-result` | invoke | Get validation result |
+| `schema:clear` | invoke | Clear validation result |
+| `schema:status` | invoke/on | Get/observe validation status |
 
 ---
 
@@ -806,3 +889,4 @@ sequenceDiagram
 | 2025-12-16 | 1.5.0 | FEAT-005: Python Orchestrator Code (agent, client, security modules) |
 | 2025-12-16 | 1.6.0 | FEAT-006: Brownfield Prompt Templates (validation, generation, coding) |
 | 2025-12-16 | 1.7.0 | FEAT-007: Schema Validator Integration (orchestrator integration) |
+| 2025-12-16 | 1.8.0 | FEAT-008: Autonomous Store (Zustand state management) |

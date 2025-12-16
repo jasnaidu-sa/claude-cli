@@ -227,29 +227,29 @@
       "id": "FEAT-008",
       "name": "Autonomous Store (Zustand)",
       "type": "ui",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": ["claude-code-manager/src/renderer/stores/autonomous-store.ts"],
         "modify": []
       },
       "subtasks": [
-        { "description": "Create Zustand store for autonomous workflow state", "done": false },
-        { "description": "Add workflow list management", "done": false },
-        { "description": "Add progress tracking state", "done": false },
-        { "description": "Add orchestrator output state", "done": false },
-        { "description": "Add schema validation status", "done": false }
+        { "description": "Create Zustand store for autonomous workflow state", "done": true },
+        { "description": "Add workflow list management", "done": true },
+        { "description": "Add progress tracking state", "done": true },
+        { "description": "Add orchestrator output state", "done": true },
+        { "description": "Add schema validation status", "done": true }
       ],
       "verification": [
         "State updates trigger UI re-renders",
         "Persists relevant state across sessions"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

@@ -273,6 +273,41 @@ class OrchestratorRunner extends EventEmitter {
 }
 ```
 
+#### `src/main/services/workflow-manager.ts` (FEAT-003)
+**Autonomous Workflow State Management**
+
+- Manages autonomous coding workflows stored in `.autonomous/` directories
+- Workflow CRUD operations (create, read, update, delete, list)
+- Persistent state storage as JSON files
+- Status tracking: pending, validating, generating, implementing, paused, completed, error
+- Progress tracking with test pass/fail counts and category breakdown
+- Git worktree integration for isolated development branches
+- Path traversal prevention, atomic file operations
+
+**Storage Structure:**
+```
+{projectPath}/.autonomous/
+├── workflows/{id}.json    # Workflow configuration
+├── specs/{id}.txt         # Spec content files
+├── progress/{id}.json     # Progress tracking data
+└── worktrees/{id}/        # Git worktrees (optional)
+```
+
+```typescript
+class WorkflowManager extends EventEmitter {
+  async create(options: CreateWorkflowOptions): Promise<WorkflowConfig>
+  async get(projectPath: string, workflowId: string): Promise<WorkflowConfig | null>
+  async update(projectPath: string, workflowId: string, updates: UpdateWorkflowOptions): Promise<WorkflowConfig | null>
+  async delete(projectPath: string, workflowId: string): Promise<boolean>
+  async listForProject(projectPath: string): Promise<WorkflowConfig[]>
+  listAll(): WorkflowConfig[]
+  async updateStatus(projectPath: string, workflowId: string, status: WorkflowStatus, error?: string): Promise<WorkflowConfig | null>
+  async updateProgress(projectPath: string, workflowId: string, progress: WorkflowProgress): Promise<WorkflowConfig | null>
+  async getSpecContent(workflow: WorkflowConfig): Promise<string>
+  async updateSpecContent(workflow: WorkflowConfig, content: string): Promise<void>
+}
+```
+
 ### Preload
 
 #### `src/preload/index.ts`
@@ -394,6 +429,15 @@ const pty = spawn('powershell.exe', [], {
 | `orchestrator:output` | on | Orchestrator output events |
 | `orchestrator:progress` | on | Orchestrator progress events |
 | `orchestrator:session` | on | Orchestrator session updates |
+| `workflow:create` | invoke | Create new workflow |
+| `workflow:get` | invoke | Get workflow by ID |
+| `workflow:update` | invoke | Update workflow properties |
+| `workflow:delete` | invoke | Delete workflow and files |
+| `workflow:list` | invoke | List all workflows (cached) |
+| `workflow:list-for-project` | invoke | List workflows for project |
+| `workflow:update-status` | invoke | Update workflow status |
+| `workflow:update-progress` | invoke | Update workflow progress |
+| `workflow:change` | on | Workflow change events |
 
 ---
 
@@ -483,6 +527,75 @@ interface OrchestratorProgress {
   testsPassing?: number
   currentTest?: string
   message?: string
+}
+```
+
+### Workflow Types (`src/shared/types.ts`)
+
+```typescript
+type WorkflowStatus = 'pending' | 'validating' | 'generating' | 'implementing' | 'paused' | 'completed' | 'error'
+
+interface WorkflowConfig {
+  id: string
+  name: string
+  description?: string
+  projectPath: string
+  worktreePath?: string
+  specFile: string
+  model: string
+  status: WorkflowStatus
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  completedAt?: number
+  progress?: WorkflowProgress
+  schemaValidation?: SchemaValidationResult
+  error?: string
+}
+
+interface WorkflowProgress {
+  phase: OrchestratorPhase
+  testsTotal: number
+  testsPassing: number
+  currentTest?: string
+  categories?: CategoryProgress[]
+}
+
+interface CategoryProgress {
+  name: string
+  total: number
+  passing: number
+}
+
+interface SchemaValidationResult {
+  valid: boolean
+  discrepancies: SchemaDiscrepancy[]
+  validatedAt: number
+}
+
+interface SchemaDiscrepancy {
+  type: 'missing' | 'outdated' | 'inconsistent'
+  location: string
+  message: string
+  severity: 'warning' | 'error'
+}
+
+interface CreateWorkflowOptions {
+  projectPath: string
+  name: string
+  description?: string
+  specContent: string
+  model?: string
+  useWorktree?: boolean
+  worktreeBranch?: string
+}
+
+interface UpdateWorkflowOptions {
+  name?: string
+  description?: string
+  status?: WorkflowStatus
+  progress?: WorkflowProgress
+  error?: string
 }
 ```
 
@@ -617,3 +730,4 @@ sequenceDiagram
 | 2024-12-10 | 1.0.0 | Initial project structure and documentation |
 | 2025-12-16 | 1.1.0 | FEAT-001: Python Venv Management Service |
 | 2025-12-16 | 1.2.0 | FEAT-002: Python Orchestrator Runner Service (security hardened) |
+| 2025-12-16 | 1.3.0 | FEAT-003: Workflow Manager Service (CRUD, git worktree integration) |

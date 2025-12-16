@@ -69,30 +69,30 @@
       "id": "FEAT-003",
       "name": "Workflow Manager Service",
       "type": "backend",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": ["claude-code-manager/src/main/services/workflow-manager.ts"],
-        "modify": ["claude-code-manager/src/shared/types/autonomous.ts"]
+        "create": ["claude-code-manager/src/main/services/workflow-manager.ts", "claude-code-manager/src/main/ipc/workflow-handlers.ts"],
+        "modify": ["claude-code-manager/src/shared/types.ts", "claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts"]
       },
       "subtasks": [
-        { "description": "Create WorkflowManager for tracking .autonomous/ state", "done": false },
-        { "description": "Implement workflow CRUD (create, read, update, list)", "done": false },
-        { "description": "Add workflow config parsing (.autonomous/workflows/*.yaml)", "done": false },
-        { "description": "Track workflow status (pending, in_progress, paused, completed)", "done": false },
-        { "description": "Integrate with worktree creation", "done": false }
+        { "description": "Create WorkflowManager for tracking .autonomous/ state", "done": true },
+        { "description": "Implement workflow CRUD (create, read, update, list)", "done": true },
+        { "description": "Add workflow config parsing (.autonomous/workflows/*.json)", "done": true },
+        { "description": "Track workflow status (pending, in_progress, paused, completed)", "done": true },
+        { "description": "Integrate with worktree creation", "done": true }
       ],
       "verification": [
         "Can create new workflow with worktree",
-        "Persists workflow state to YAML files",
+        "Persists workflow state to JSON files",
         "Lists all workflows for a project"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

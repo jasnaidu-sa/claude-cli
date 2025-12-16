@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
 
 // Venv types (matching venv-manager.ts)
@@ -162,6 +162,38 @@ export interface ElectronAPI {
     onProgress: (callback: (progress: OrchestratorProgress) => void) => () => void
     onSession: (callback: (session: OrchestratorSession) => void) => () => void
   }
+
+  // Workflow management
+  workflow: {
+    create: (options: CreateWorkflowOptions) => Promise<{ success: boolean; workflow?: WorkflowConfig; error?: string }>
+    get: (projectPath: string, workflowId: string) => Promise<WorkflowConfig | null>
+    update: (projectPath: string, workflowId: string, updates: UpdateWorkflowOptions) => Promise<{ success: boolean; workflow?: WorkflowConfig; error?: string }>
+    delete: (projectPath: string, workflowId: string) => Promise<{ success: boolean; error?: string }>
+    list: () => Promise<WorkflowConfig[]>
+    listForProject: (projectPath: string) => Promise<WorkflowConfig[]>
+    updateStatus: (projectPath: string, workflowId: string, status: WorkflowStatus, error?: string) => Promise<{ success: boolean; workflow?: WorkflowConfig; error?: string }>
+    updateProgress: (projectPath: string, workflowId: string, progress: WorkflowProgress) => Promise<{ success: boolean; workflow?: WorkflowConfig; error?: string }>
+    onChange: (callback: (change: { workflow: WorkflowConfig; action: 'created' | 'updated' | 'deleted' }) => void) => () => void
+  }
+}
+
+// Workflow options types (matching workflow-manager.ts)
+export interface CreateWorkflowOptions {
+  projectPath: string
+  name: string
+  description?: string
+  specContent: string
+  model?: string
+  useWorktree?: boolean
+  worktreeBranch?: string
+}
+
+export interface UpdateWorkflowOptions {
+  name?: string
+  description?: string
+  status?: WorkflowStatus
+  progress?: WorkflowProgress
+  error?: string
 }
 
 // Create the API object
@@ -317,6 +349,22 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, session: OrchestratorSession) => callback(session)
       ipcRenderer.on(IPC_CHANNELS.ORCHESTRATOR_SESSION, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.ORCHESTRATOR_SESSION, handler)
+    }
+  },
+
+  workflow: {
+    create: (options) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_CREATE, options),
+    get: (projectPath, workflowId) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_GET, projectPath, workflowId),
+    update: (projectPath, workflowId, updates) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_UPDATE, projectPath, workflowId, updates),
+    delete: (projectPath, workflowId) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_DELETE, projectPath, workflowId),
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_LIST),
+    listForProject: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_LIST_FOR_PROJECT, projectPath),
+    updateStatus: (projectPath, workflowId, status, error) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_UPDATE_STATUS, projectPath, workflowId, status, error),
+    updateProgress: (projectPath, workflowId, progress) => ipcRenderer.invoke(IPC_CHANNELS.WORKFLOW_UPDATE_PROGRESS, projectPath, workflowId, progress),
+    onChange: (callback) => {
+      const handler = (_event: unknown, change: { workflow: WorkflowConfig; action: 'created' | 'updated' | 'deleted' }) => callback(change)
+      ipcRenderer.on(IPC_CHANNELS.WORKFLOW_CHANGE, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKFLOW_CHANGE, handler)
     }
   }
 }

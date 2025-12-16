@@ -121,6 +121,54 @@ export interface OrchestratorProgress {
   message?: string
 }
 
+// Workflow types
+export type WorkflowStatus = 'pending' | 'validating' | 'generating' | 'implementing' | 'paused' | 'completed' | 'error'
+
+export interface WorkflowConfig {
+  id: string
+  name: string
+  description?: string
+  projectPath: string
+  worktreePath?: string
+  specFile: string
+  model: string
+  status: WorkflowStatus
+  createdAt: number
+  updatedAt: number
+  startedAt?: number
+  completedAt?: number
+  progress?: WorkflowProgress
+  schemaValidation?: SchemaValidationResult
+  error?: string
+}
+
+export interface WorkflowProgress {
+  phase: OrchestratorPhase
+  testsTotal: number
+  testsPassing: number
+  currentTest?: string
+  categories?: CategoryProgress[]
+}
+
+export interface CategoryProgress {
+  name: string
+  total: number
+  passing: number
+}
+
+export interface SchemaValidationResult {
+  valid: boolean
+  discrepancies: SchemaDiscrepancy[]
+  validatedAt: number
+}
+
+export interface SchemaDiscrepancy {
+  type: 'missing' | 'outdated' | 'inconsistent'
+  location: string
+  message: string
+  severity: 'warning' | 'error'
+}
+
 // Config types
 export interface AppConfig {
   claudeCliPath: string
@@ -203,7 +251,18 @@ export const IPC_CHANNELS = {
   ORCHESTRATOR_CLEANUP: 'orchestrator:cleanup',
   ORCHESTRATOR_OUTPUT: 'orchestrator:output',
   ORCHESTRATOR_PROGRESS: 'orchestrator:progress',
-  ORCHESTRATOR_SESSION: 'orchestrator:session'
+  ORCHESTRATOR_SESSION: 'orchestrator:session',
+
+  // Workflow Management
+  WORKFLOW_CREATE: 'workflow:create',
+  WORKFLOW_GET: 'workflow:get',
+  WORKFLOW_UPDATE: 'workflow:update',
+  WORKFLOW_DELETE: 'workflow:delete',
+  WORKFLOW_LIST: 'workflow:list',
+  WORKFLOW_LIST_FOR_PROJECT: 'workflow:list-for-project',
+  WORKFLOW_UPDATE_STATUS: 'workflow:update-status',
+  WORKFLOW_UPDATE_PROGRESS: 'workflow:update-progress',
+  WORKFLOW_CHANGE: 'workflow:change'
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]

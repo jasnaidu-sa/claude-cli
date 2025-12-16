@@ -6,6 +6,7 @@ import { fileWatcher } from '../services/file-watcher'
 import { registerGitHandlers } from './git-handlers'
 import { registerVenvHandlers } from './venv-handlers'
 import { registerOrchestratorHandlers } from './orchestrator-handlers'
+import { registerWorkflowHandlers } from './workflow-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -31,6 +32,9 @@ export function registerIpcHandlers(): void {
 
   // Python orchestrator handlers
   registerOrchestratorHandlers()
+
+  // Workflow management handlers
+  registerWorkflowHandlers()
 }
 
 function registerSessionHandlers(): void {

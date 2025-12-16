@@ -198,16 +198,16 @@
       "id": "FEAT-007",
       "name": "Schema Validator Integration",
       "type": "integration",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": ["claude-code-manager/src/main/services/schema-validator.ts"],
-        "modify": []
+        "create": ["claude-code-manager/src/main/services/schema-validator.ts", "claude-code-manager/src/main/ipc/schema-handlers.ts"],
+        "modify": ["claude-code-manager/src/shared/types.ts", "claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts"]
       },
       "subtasks": [
-        { "description": "Create SchemaValidator service", "done": false },
-        { "description": "Implement validation trigger (runs orchestrator with validation prompt)", "done": false },
-        { "description": "Parse validation results from .autonomous/schema_validation.json", "done": false },
-        { "description": "Add IPC handlers for validation status", "done": false }
+        { "description": "Create SchemaValidator service", "done": true },
+        { "description": "Implement validation trigger (runs orchestrator with validation prompt)", "done": true },
+        { "description": "Parse validation results from .autonomous/schema_validation.json", "done": true },
+        { "description": "Add IPC handlers for validation status", "done": true }
       ],
       "verification": [
         "Triggers schema validation phase",
@@ -215,12 +215,12 @@
         "Stores results for UI display"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
 
 // Venv types (matching venv-manager.ts)
@@ -182,6 +182,15 @@ export interface ElectronAPI {
     unwatch: (workflowId: string) => Promise<{ success: boolean; error?: string }>
     get: (workflowId: string) => Promise<ProgressSnapshot | null>
     onUpdate: (callback: (snapshot: ProgressSnapshot) => void) => () => void
+  }
+
+  // Schema validator
+  schema: {
+    validate: (projectPath: string, workflowId: string, model?: string) => Promise<{ success: boolean; sessionId?: string; error?: string }>
+    getResult: (projectPath: string) => Promise<SchemaValidationResult | null>
+    clear: (projectPath: string) => Promise<{ success: boolean; error?: string }>
+    getStatus: (projectPath: string) => Promise<{ status: string; error?: string }>
+    onStatus: (callback: (status: { projectPath: string; status: string; error?: string }) => void) => () => void
   }
 }
 
@@ -384,6 +393,18 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, snapshot: ProgressSnapshot) => callback(snapshot)
       ipcRenderer.on(IPC_CHANNELS.PROGRESS_UPDATE, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.PROGRESS_UPDATE, handler)
+    }
+  },
+
+  schema: {
+    validate: (projectPath, workflowId, model) => ipcRenderer.invoke(IPC_CHANNELS.SCHEMA_VALIDATE, projectPath, workflowId, model),
+    getResult: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.SCHEMA_GET_RESULT, projectPath),
+    clear: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.SCHEMA_CLEAR, projectPath),
+    getStatus: (projectPath) => ipcRenderer.invoke(IPC_CHANNELS.SCHEMA_STATUS, projectPath),
+    onStatus: (callback) => {
+      const handler = (_event: unknown, status: { projectPath: string; status: string; error?: string }) => callback(status)
+      ipcRenderer.on(IPC_CHANNELS.SCHEMA_STATUS, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SCHEMA_STATUS, handler)
     }
   }
 }

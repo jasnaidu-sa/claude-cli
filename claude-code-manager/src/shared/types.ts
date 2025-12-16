@@ -299,7 +299,13 @@ export const IPC_CHANNELS = {
   PROGRESS_WATCH: 'progress:watch',
   PROGRESS_UNWATCH: 'progress:unwatch',
   PROGRESS_GET: 'progress:get',
-  PROGRESS_UPDATE: 'progress:update'
+  PROGRESS_UPDATE: 'progress:update',
+
+  // Schema Validator
+  SCHEMA_VALIDATE: 'schema:validate',
+  SCHEMA_GET_RESULT: 'schema:get-result',
+  SCHEMA_CLEAR: 'schema:clear',
+  SCHEMA_STATUS: 'schema:status'
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]

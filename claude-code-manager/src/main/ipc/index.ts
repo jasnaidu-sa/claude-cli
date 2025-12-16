@@ -8,6 +8,7 @@ import { registerVenvHandlers } from './venv-handlers'
 import { registerOrchestratorHandlers } from './orchestrator-handlers'
 import { registerWorkflowHandlers } from './workflow-handlers'
 import { registerProgressHandlers } from './progress-handlers'
+import { registerSchemaHandlers } from './schema-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -39,6 +40,9 @@ export function registerIpcHandlers(): void {
 
   // Progress watcher handlers
   registerProgressHandlers()
+
+  // Schema validator handlers
+  registerSchemaHandlers()
 }
 
 function registerSessionHandlers(): void {

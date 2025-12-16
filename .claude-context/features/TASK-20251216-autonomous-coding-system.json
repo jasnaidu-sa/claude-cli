@@ -99,17 +99,17 @@
       "id": "FEAT-004",
       "name": "Progress Watcher Service",
       "type": "backend",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": ["claude-code-manager/src/main/services/progress-watcher.ts"],
-        "modify": []
+        "create": ["claude-code-manager/src/main/services/progress-watcher.ts", "claude-code-manager/src/main/ipc/progress-handlers.ts"],
+        "modify": ["claude-code-manager/src/shared/types.ts", "claude-code-manager/src/preload/index.ts", "claude-code-manager/src/main/ipc/index.ts"]
       },
       "subtasks": [
-        { "description": "Create ProgressWatcher using chokidar", "done": false },
-        { "description": "Watch feature_list.json for changes", "done": false },
-        { "description": "Parse test completion (passes: true/false)", "done": false },
-        { "description": "Calculate completion percentage by category", "done": false },
-        { "description": "Emit progress events to renderer", "done": false }
+        { "description": "Create ProgressWatcher using chokidar", "done": true },
+        { "description": "Watch feature_list.json for changes", "done": true },
+        { "description": "Parse test completion (passes: true/false)", "done": true },
+        { "description": "Calculate completion percentage by category", "done": true },
+        { "description": "Emit progress events to renderer", "done": true }
       ],
       "verification": [
         "Detects feature_list.json changes",
@@ -117,12 +117,12 @@
         "Updates UI in real-time"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

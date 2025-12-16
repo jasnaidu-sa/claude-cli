@@ -169,6 +169,37 @@ export interface SchemaDiscrepancy {
   severity: 'warning' | 'error'
 }
 
+// Progress Watcher types
+export interface FeatureListEntry {
+  id: string
+  name: string
+  category: string
+  status: 'pending' | 'in_progress' | 'passed' | 'failed'
+  testFile?: string
+  error?: string
+}
+
+export interface ProgressSnapshot {
+  workflowId: string
+  timestamp: number
+  total: number
+  passing: number
+  failing: number
+  pending: number
+  percentage: number
+  categories: CategoryProgressDetail[]
+  currentTest?: string
+}
+
+export interface CategoryProgressDetail {
+  name: string
+  total: number
+  passing: number
+  failing: number
+  pending: number
+  percentage: number
+}
+
 // Config types
 export interface AppConfig {
   claudeCliPath: string
@@ -262,7 +293,13 @@ export const IPC_CHANNELS = {
   WORKFLOW_LIST_FOR_PROJECT: 'workflow:list-for-project',
   WORKFLOW_UPDATE_STATUS: 'workflow:update-status',
   WORKFLOW_UPDATE_PROGRESS: 'workflow:update-progress',
-  WORKFLOW_CHANGE: 'workflow:change'
+  WORKFLOW_CHANGE: 'workflow:change',
+
+  // Progress Watcher
+  PROGRESS_WATCH: 'progress:watch',
+  PROGRESS_UNWATCH: 'progress:unwatch',
+  PROGRESS_GET: 'progress:get',
+  PROGRESS_UPDATE: 'progress:update'
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]

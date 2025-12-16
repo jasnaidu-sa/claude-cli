@@ -308,6 +308,39 @@ class WorkflowManager extends EventEmitter {
 }
 ```
 
+#### `src/main/services/progress-watcher.ts` (FEAT-004)
+**File-based Progress Monitoring**
+
+- Watches `feature_list.json` files in `.autonomous/` directories using chokidar
+- Real-time progress calculation as tests pass/fail
+- Category-based progress breakdown
+- Emits progress events to renderer for live UI updates
+- Multiple concurrent workflow watch support
+- Debounced file change handling for stability
+
+**Expected File Format:**
+```json
+{
+  "features": [
+    { "id": "feat-1", "name": "Feature 1", "category": "auth", "status": "passed" },
+    { "id": "feat-2", "name": "Feature 2", "category": "api", "status": "pending" }
+  ],
+  "currentTest": "feat-2"
+}
+```
+
+```typescript
+class ProgressWatcher extends EventEmitter {
+  async watch(workflowId: string, projectPath: string): Promise<ProgressSnapshot | null>
+  async unwatch(workflowId: string): Promise<void>
+  async unwatchAll(): Promise<void>
+  async getProgress(workflowId: string): Promise<ProgressSnapshot | null>
+  async refreshProgress(workflowId: string): Promise<ProgressSnapshot | null>
+  getWatchedWorkflows(): string[]
+  isWatching(workflowId: string): boolean
+}
+```
+
 ### Preload
 
 #### `src/preload/index.ts`
@@ -438,6 +471,10 @@ const pty = spawn('powershell.exe', [], {
 | `workflow:update-status` | invoke | Update workflow status |
 | `workflow:update-progress` | invoke | Update workflow progress |
 | `workflow:change` | on | Workflow change events |
+| `progress:watch` | invoke | Start watching workflow progress |
+| `progress:unwatch` | invoke | Stop watching workflow progress |
+| `progress:get` | invoke | Get current progress snapshot |
+| `progress:update` | on | Progress update events |
 
 ---
 
@@ -599,6 +636,40 @@ interface UpdateWorkflowOptions {
 }
 ```
 
+### Progress Types (`src/shared/types.ts`)
+
+```typescript
+interface FeatureListEntry {
+  id: string
+  name: string
+  category: string
+  status: 'pending' | 'in_progress' | 'passed' | 'failed'
+  testFile?: string
+  error?: string
+}
+
+interface ProgressSnapshot {
+  workflowId: string
+  timestamp: number
+  total: number
+  passing: number
+  failing: number
+  pending: number
+  percentage: number
+  categories: CategoryProgressDetail[]
+  currentTest?: string
+}
+
+interface CategoryProgressDetail {
+  name: string
+  total: number
+  passing: number
+  failing: number
+  pending: number
+  percentage: number
+}
+```
+
 ---
 
 ## Build Configuration
@@ -731,3 +802,4 @@ sequenceDiagram
 | 2025-12-16 | 1.1.0 | FEAT-001: Python Venv Management Service |
 | 2025-12-16 | 1.2.0 | FEAT-002: Python Orchestrator Runner Service (security hardened) |
 | 2025-12-16 | 1.3.0 | FEAT-003: Workflow Manager Service (CRUD, git worktree integration) |
+| 2025-12-16 | 1.4.0 | FEAT-004: Progress Watcher Service (chokidar file monitoring) |

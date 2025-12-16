@@ -7,6 +7,7 @@ import { registerGitHandlers } from './git-handlers'
 import { registerVenvHandlers } from './venv-handlers'
 import { registerOrchestratorHandlers } from './orchestrator-handlers'
 import { registerWorkflowHandlers } from './workflow-handlers'
+import { registerProgressHandlers } from './progress-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -35,6 +36,9 @@ export function registerIpcHandlers(): void {
 
   // Workflow management handlers
   registerWorkflowHandlers()
+
+  // Progress watcher handlers
+  registerProgressHandlers()
 }
 
 function registerSessionHandlers(): void {

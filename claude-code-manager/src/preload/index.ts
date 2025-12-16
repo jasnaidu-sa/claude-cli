@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
 
 // Venv types (matching venv-manager.ts)
@@ -174,6 +174,14 @@ export interface ElectronAPI {
     updateStatus: (projectPath: string, workflowId: string, status: WorkflowStatus, error?: string) => Promise<{ success: boolean; workflow?: WorkflowConfig; error?: string }>
     updateProgress: (projectPath: string, workflowId: string, progress: WorkflowProgress) => Promise<{ success: boolean; workflow?: WorkflowConfig; error?: string }>
     onChange: (callback: (change: { workflow: WorkflowConfig; action: 'created' | 'updated' | 'deleted' }) => void) => () => void
+  }
+
+  // Progress watcher
+  progress: {
+    watch: (workflowId: string, projectPath: string) => Promise<{ success: boolean; snapshot?: ProgressSnapshot | null; error?: string }>
+    unwatch: (workflowId: string) => Promise<{ success: boolean; error?: string }>
+    get: (workflowId: string) => Promise<ProgressSnapshot | null>
+    onUpdate: (callback: (snapshot: ProgressSnapshot) => void) => () => void
   }
 }
 
@@ -365,6 +373,17 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, change: { workflow: WorkflowConfig; action: 'created' | 'updated' | 'deleted' }) => callback(change)
       ipcRenderer.on(IPC_CHANNELS.WORKFLOW_CHANGE, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKFLOW_CHANGE, handler)
+    }
+  },
+
+  progress: {
+    watch: (workflowId, projectPath) => ipcRenderer.invoke(IPC_CHANNELS.PROGRESS_WATCH, workflowId, projectPath),
+    unwatch: (workflowId) => ipcRenderer.invoke(IPC_CHANNELS.PROGRESS_UNWATCH, workflowId),
+    get: (workflowId) => ipcRenderer.invoke(IPC_CHANNELS.PROGRESS_GET, workflowId),
+    onUpdate: (callback) => {
+      const handler = (_event: unknown, snapshot: ProgressSnapshot) => callback(snapshot)
+      ipcRenderer.on(IPC_CHANNELS.PROGRESS_UPDATE, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.PROGRESS_UPDATE, handler)
     }
   }
 }

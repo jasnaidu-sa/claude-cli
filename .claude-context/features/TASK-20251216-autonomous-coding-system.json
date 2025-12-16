@@ -406,19 +406,21 @@
       "id": "FEAT-014",
       "name": "Main UI Integration",
       "type": "ui",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": [],
+        "create": ["claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx"],
         "modify": [
           "claude-code-manager/src/renderer/App.tsx",
-          "claude-code-manager/src/renderer/components/layout/Sidebar.tsx"
+          "claude-code-manager/src/renderer/components/layout/Sidebar.tsx",
+          "claude-code-manager/src/renderer/stores/ui-store.ts",
+          "claude-code-manager/src/renderer/components/autonomous/index.ts"
         ]
       },
       "subtasks": [
-        { "description": "Add Autonomous mode to sidebar navigation", "done": false },
-        { "description": "Create AutonomousView combining all autonomous components", "done": false },
-        { "description": "Wire up IPC listeners for progress/output updates", "done": false },
-        { "description": "Add project selection for autonomous mode", "done": false }
+        { "description": "Add Autonomous mode to sidebar navigation", "done": true },
+        { "description": "Create AutonomousView combining all autonomous components", "done": true },
+        { "description": "Wire up IPC listeners for progress/output updates", "done": true },
+        { "description": "Add project selection for autonomous mode", "done": true }
       ],
       "verification": [
         "Can switch to Autonomous mode from sidebar",
@@ -426,12 +428,12 @@
         "IPC events update UI"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

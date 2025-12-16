@@ -8,6 +8,7 @@ import { FileViewer } from './components/file-explorer/FileViewer'
 import { NewSessionModal } from './components/session/NewSessionModal'
 import { ResizeHandle } from './components/ui/ResizeHandle'
 import { WorktreePanel } from './components/worktree'
+import { AutonomousView } from './components/autonomous'
 import { useUIStore } from './stores/ui-store'
 import { useSessionStore } from './stores/session-store'
 import { useDevServerAutoStart } from './hooks/useDevServerAutoStart'
@@ -53,7 +54,7 @@ export default function App() {
   }, [setSessions])
 
   // Check if we should show a right panel
-  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || (activePanel === 'files' && selectedFile)
+  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || (activePanel === 'files' && selectedFile)
 
   // Handle resize of right panel
   const handleRightPanelResize = useCallback((delta: number) => {
@@ -75,6 +76,9 @@ export default function App() {
     }
     if (activePanel === 'worktrees') {
       return <WorktreePanel />
+    }
+    if (activePanel === 'autonomous') {
+      return <AutonomousView onClose={() => setActivePanel(null)} />
     }
     if (activePanel === 'files' && selectedFile) {
       return <FileViewer />

@@ -895,3 +895,4 @@ sequenceDiagram
 | 2025-12-16 | 1.11.0 | FEAT-011: Spec Editor Component (view, edit, import, export) |
 | 2025-12-16 | 1.12.0 | FEAT-012: Output Viewer Component (scrolling log, filtering, export) |
 | 2025-12-16 | 1.13.0 | FEAT-013: Control Panel Component (start/pause/stop, model select) |
+| 2025-12-16 | 1.14.0 | FEAT-014: Main UI Integration (AutonomousView, sidebar nav) |

@@ -5,6 +5,7 @@ import { sessionManager, configStore, getMainWindow } from '../index'
 import { fileWatcher } from '../services/file-watcher'
 import { registerGitHandlers } from './git-handlers'
 import { registerVenvHandlers } from './venv-handlers'
+import { registerOrchestratorHandlers } from './orchestrator-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -27,6 +28,9 @@ export function registerIpcHandlers(): void {
 
   // Python venv handlers
   registerVenvHandlers()
+
+  // Python orchestrator handlers
+  registerOrchestratorHandlers()
 }
 
 function registerSessionHandlers(): void {

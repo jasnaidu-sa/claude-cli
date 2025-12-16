@@ -78,6 +78,49 @@ export interface DevServerInfo {
   running: boolean
 }
 
+// Orchestrator types
+export type OrchestratorPhase = 'validation' | 'generation' | 'implementation'
+export type OrchestratorStatus = 'idle' | 'starting' | 'running' | 'paused' | 'stopping' | 'completed' | 'error'
+export type OrchestratorOutputType = 'stdout' | 'stderr' | 'system' | 'progress'
+
+export interface OrchestratorConfig {
+  projectPath: string
+  workflowId: string
+  phase: OrchestratorPhase
+  model?: string
+  supabaseProjectId?: string
+  specFile?: string
+}
+
+export interface OrchestratorSession {
+  id: string
+  config: OrchestratorConfig
+  status: OrchestratorStatus
+  phase: OrchestratorPhase
+  startedAt: number
+  endedAt?: number
+  exitCode?: number
+  error?: string
+  testsTotal?: number
+  testsPassing?: number
+}
+
+export interface OrchestratorOutput {
+  sessionId: string
+  type: OrchestratorOutputType
+  data: string
+  timestamp: number
+}
+
+export interface OrchestratorProgress {
+  sessionId: string
+  phase: OrchestratorPhase
+  testsTotal?: number
+  testsPassing?: number
+  currentTest?: string
+  message?: string
+}
+
 // Config types
 export interface AppConfig {
   claudeCliPath: string
@@ -148,7 +191,19 @@ export const IPC_CHANNELS = {
   VENV_STATUS: 'venv:status',
   VENV_ENSURE: 'venv:ensure',
   VENV_UPGRADE: 'venv:upgrade',
-  VENV_PROGRESS: 'venv:progress'
+  VENV_PROGRESS: 'venv:progress',
+
+  // Python Orchestrator Runner
+  ORCHESTRATOR_START: 'orchestrator:start',
+  ORCHESTRATOR_STOP: 'orchestrator:stop',
+  ORCHESTRATOR_PAUSE: 'orchestrator:pause',
+  ORCHESTRATOR_GET_SESSION: 'orchestrator:get-session',
+  ORCHESTRATOR_GET_ALL_SESSIONS: 'orchestrator:get-all-sessions',
+  ORCHESTRATOR_GET_WORKFLOW_SESSIONS: 'orchestrator:get-workflow-sessions',
+  ORCHESTRATOR_CLEANUP: 'orchestrator:cleanup',
+  ORCHESTRATOR_OUTPUT: 'orchestrator:output',
+  ORCHESTRATOR_PROGRESS: 'orchestrator:progress',
+  ORCHESTRATOR_SESSION: 'orchestrator:session'
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]

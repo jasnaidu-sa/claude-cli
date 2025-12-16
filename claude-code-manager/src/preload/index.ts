@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
 
 // Venv types (matching venv-manager.ts)
@@ -148,6 +148,20 @@ export interface ElectronAPI {
     upgrade: () => Promise<{ success: boolean; error?: string }>
     onProgress: (callback: (progress: VenvCreationProgress) => void) => () => void
   }
+
+  // Python orchestrator runner
+  orchestrator: {
+    start: (config: OrchestratorConfig) => Promise<{ success: boolean; session?: OrchestratorSession; error?: string }>
+    stop: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    pause: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    getSession: (sessionId: string) => Promise<OrchestratorSession | null>
+    getAllSessions: () => Promise<OrchestratorSession[]>
+    getWorkflowSessions: (workflowId: string) => Promise<OrchestratorSession[]>
+    cleanup: () => Promise<{ success: boolean }>
+    onOutput: (callback: (output: OrchestratorOutput) => void) => () => void
+    onProgress: (callback: (progress: OrchestratorProgress) => void) => () => void
+    onSession: (callback: (session: OrchestratorSession) => void) => () => void
+  }
 }
 
 // Create the API object
@@ -278,6 +292,31 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, progress: VenvCreationProgress) => callback(progress)
       ipcRenderer.on(IPC_CHANNELS.VENV_PROGRESS, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.VENV_PROGRESS, handler)
+    }
+  },
+
+  orchestrator: {
+    start: (config) => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_START, config),
+    stop: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_STOP, sessionId),
+    pause: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_PAUSE, sessionId),
+    getSession: (sessionId) => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_GET_SESSION, sessionId),
+    getAllSessions: () => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_GET_ALL_SESSIONS),
+    getWorkflowSessions: (workflowId) => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_GET_WORKFLOW_SESSIONS, workflowId),
+    cleanup: () => ipcRenderer.invoke(IPC_CHANNELS.ORCHESTRATOR_CLEANUP),
+    onOutput: (callback) => {
+      const handler = (_event: unknown, output: OrchestratorOutput) => callback(output)
+      ipcRenderer.on(IPC_CHANNELS.ORCHESTRATOR_OUTPUT, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.ORCHESTRATOR_OUTPUT, handler)
+    },
+    onProgress: (callback) => {
+      const handler = (_event: unknown, progress: OrchestratorProgress) => callback(progress)
+      ipcRenderer.on(IPC_CHANNELS.ORCHESTRATOR_PROGRESS, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.ORCHESTRATOR_PROGRESS, handler)
+    },
+    onSession: (callback) => {
+      const handler = (_event: unknown, session: OrchestratorSession) => callback(session)
+      ipcRenderer.on(IPC_CHANNELS.ORCHESTRATOR_SESSION, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.ORCHESTRATOR_SESSION, handler)
     }
   }
 }

@@ -1,0 +1,13 @@
+# Autonomous Coding Agent Dependencies
+
+# Claude Agent SDK (when available)
+# claude-code-sdk>=0.1.0
+
+# Core dependencies
+python-dotenv>=1.0.0
+
+# Async support
+asyncio-throttle>=1.0.0
+
+# For future MCP server support
+# mcp>=0.1.0

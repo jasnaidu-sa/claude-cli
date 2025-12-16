@@ -129,23 +129,24 @@
       "id": "FEAT-005",
       "name": "Python Orchestrator Code",
       "type": "backend",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": [
           "autonomous-orchestrator/autonomous_agent_demo.py",
           "autonomous-orchestrator/agent.py",
           "autonomous-orchestrator/client.py",
           "autonomous-orchestrator/security.py",
-          "autonomous-orchestrator/config.py"
+          "autonomous-orchestrator/config.py",
+          "autonomous-orchestrator/requirements.txt"
         ],
         "modify": []
       },
       "subtasks": [
-        { "description": "Create entry point (autonomous_agent_demo.py)", "done": false },
-        { "description": "Implement session loop (agent.py)", "done": false },
-        { "description": "Create Claude SDK client with MCP config (client.py)", "done": false },
-        { "description": "Add bash security allowlist (security.py)", "done": false },
-        { "description": "Implement configuration loading (config.py)", "done": false }
+        { "description": "Create entry point (autonomous_agent_demo.py)", "done": true },
+        { "description": "Implement session loop (agent.py)", "done": true },
+        { "description": "Create Claude SDK client with MCP config (client.py)", "done": true },
+        { "description": "Add bash security allowlist (security.py)", "done": true },
+        { "description": "Implement configuration loading (config.py)", "done": true }
       ],
       "verification": [
         "Can run autonomously with test spec",
@@ -153,12 +154,12 @@
         "Respects bash security rules"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

@@ -256,20 +256,21 @@
       "id": "FEAT-009",
       "name": "Workflow List Component",
       "type": "ui",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": [
           "claude-code-manager/src/renderer/components/autonomous/WorkflowList.tsx",
           "claude-code-manager/src/renderer/components/autonomous/WorkflowCard.tsx",
-          "claude-code-manager/src/renderer/components/autonomous/WorkflowCreate.tsx"
+          "claude-code-manager/src/renderer/components/autonomous/WorkflowCreate.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/index.ts"
         ],
         "modify": []
       },
       "subtasks": [
-        { "description": "Create WorkflowList component showing all workflows", "done": false },
-        { "description": "Create WorkflowCard with status/progress indicators", "done": false },
-        { "description": "Create WorkflowCreate modal for new workflows", "done": false },
-        { "description": "Add workflow selection handling", "done": false }
+        { "description": "Create WorkflowList component showing all workflows", "done": true },
+        { "description": "Create WorkflowCard with status/progress indicators", "done": true },
+        { "description": "Create WorkflowCreate modal for new workflows", "done": true },
+        { "description": "Add workflow selection handling", "done": true }
       ],
       "verification": [
         "Shows all workflows for selected project",
@@ -277,12 +278,12 @@
         "Can create new workflow"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

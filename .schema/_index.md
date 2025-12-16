@@ -804,3 +804,4 @@ sequenceDiagram
 | 2025-12-16 | 1.3.0 | FEAT-003: Workflow Manager Service (CRUD, git worktree integration) |
 | 2025-12-16 | 1.4.0 | FEAT-004: Progress Watcher Service (chokidar file monitoring) |
 | 2025-12-16 | 1.5.0 | FEAT-005: Python Orchestrator Code (agent, client, security modules) |
+| 2025-12-16 | 1.6.0 | FEAT-006: Brownfield Prompt Templates (validation, generation, coding) |

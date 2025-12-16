@@ -166,7 +166,7 @@
       "id": "FEAT-006",
       "name": "Brownfield Prompt Templates",
       "type": "config",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": [
           "autonomous-orchestrator/prompts/schema_validation_prompt.md",
@@ -176,22 +176,22 @@
         "modify": []
       },
       "subtasks": [
-        { "description": "Create schema validation prompt (Phase 0)", "done": false },
-        { "description": "Create test generation prompt (Phase 1)", "done": false },
-        { "description": "Create implementation prompt (Phase 2+)", "done": false },
-        { "description": "Add existing pattern references", "done": false }
+        { "description": "Create schema validation prompt (Phase 0)", "done": true },
+        { "description": "Create test generation prompt (Phase 1)", "done": true },
+        { "description": "Create implementation prompt (Phase 2+)", "done": true },
+        { "description": "Add existing pattern references", "done": true }
       ],
       "verification": [
         "Prompts follow spec requirements",
         "All brownfield-specific instructions included"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

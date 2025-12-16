@@ -321,16 +321,16 @@
       "id": "FEAT-011",
       "name": "Spec Editor Component",
       "type": "ui",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": ["claude-code-manager/src/renderer/components/autonomous/SpecEditor.tsx"],
-        "modify": []
+        "modify": ["claude-code-manager/src/renderer/components/autonomous/index.ts"]
       },
       "subtasks": [
-        { "description": "Create multi-line text area for spec input", "done": false },
-        { "description": "Add file import button (load from .md)", "done": false },
-        { "description": "Add save to .autonomous/app_spec.txt", "done": false },
-        { "description": "Add edit mode toggle", "done": false }
+        { "description": "Create multi-line text area for spec input", "done": true },
+        { "description": "Add file import button (load from .md)", "done": true },
+        { "description": "Add save to .autonomous/app_spec.txt", "done": true },
+        { "description": "Add edit mode toggle", "done": true }
       ],
       "verification": [
         "Can input spec manually",
@@ -338,68 +338,68 @@
         "Saves correctly"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {
       "id": "FEAT-012",
       "name": "Output Viewer Component",
       "type": "ui",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": ["claude-code-manager/src/renderer/components/autonomous/OutputViewer.tsx"],
-        "modify": []
+        "modify": ["claude-code-manager/src/renderer/components/autonomous/index.ts"]
       },
       "subtasks": [
-        { "description": "Create scrolling log display", "done": false },
-        { "description": "Add timestamp formatting", "done": false },
-        { "description": "Add expand/collapse functionality", "done": false },
-        { "description": "Add clear button", "done": false }
+        { "description": "Create scrolling log display", "done": true },
+        { "description": "Add timestamp formatting", "done": true },
+        { "description": "Add expand/collapse functionality", "done": true },
+        { "description": "Add clear button", "done": true }
       ],
       "verification": [
         "Shows orchestrator output in real-time",
         "Handles large output efficiently"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {
       "id": "FEAT-013",
       "name": "Control Panel Component",
       "type": "ui",
-      "status": "pending",
+      "status": "completed",
       "files": {
         "create": ["claude-code-manager/src/renderer/components/autonomous/ControlPanel.tsx"],
-        "modify": []
+        "modify": ["claude-code-manager/src/renderer/components/autonomous/index.ts"]
       },
       "subtasks": [
-        { "description": "Create Start/Pause/Stop buttons", "done": false },
-        { "description": "Add model selector dropdown", "done": false },
-        { "description": "Add schema revalidate button", "done": false },
-        { "description": "Show session stats (duration, cost estimate)", "done": false }
+        { "description": "Create Start/Pause/Stop buttons", "done": true },
+        { "description": "Add model selector dropdown", "done": true },
+        { "description": "Add schema revalidate button", "done": true },
+        { "description": "Show session stats (duration, cost estimate)", "done": true }
       ],
       "verification": [
         "Buttons trigger correct orchestrator actions",
         "Shows accurate session info"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

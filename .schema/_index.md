@@ -892,3 +892,6 @@ sequenceDiagram
 | 2025-12-16 | 1.8.0 | FEAT-008: Autonomous Store (Zustand state management) |
 | 2025-12-16 | 1.9.0 | FEAT-009: Workflow List Component (WorkflowCard, WorkflowCreate) |
 | 2025-12-16 | 1.10.0 | FEAT-010: Progress Panel Component (CategoryProgress, real-time updates) |
+| 2025-12-16 | 1.11.0 | FEAT-011: Spec Editor Component (view, edit, import, export) |
+| 2025-12-16 | 1.12.0 | FEAT-012: Output Viewer Component (scrolling log, filtering, export) |
+| 2025-12-16 | 1.13.0 | FEAT-013: Control Panel Component (start/pause/stop, model select) |

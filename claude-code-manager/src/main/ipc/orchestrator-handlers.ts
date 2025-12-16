@@ -2,27 +2,13 @@
  * IPC Handlers for Python Orchestrator Runner
  *
  * Provides IPC bridge between renderer and orchestrator service.
+ * Events are forwarded directly by the OrchestratorRunner service.
  */
 
 import { ipcMain } from 'electron'
+import { IPC_CHANNELS } from '@shared/types'
 import { orchestratorRunner } from '../services/orchestrator-runner'
-import type { OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress } from '../services/orchestrator-runner'
-import { getMainWindow } from '../index'
-
-// IPC Channel constants for orchestrator
-export const ORCHESTRATOR_CHANNELS = {
-  START: 'orchestrator:start',
-  STOP: 'orchestrator:stop',
-  PAUSE: 'orchestrator:pause',
-  GET_SESSION: 'orchestrator:get-session',
-  GET_ALL_SESSIONS: 'orchestrator:get-all-sessions',
-  GET_WORKFLOW_SESSIONS: 'orchestrator:get-workflow-sessions',
-  CLEANUP: 'orchestrator:cleanup',
-  // Events (renderer listens)
-  OUTPUT: 'orchestrator:output',
-  PROGRESS: 'orchestrator:progress',
-  SESSION: 'orchestrator:session'
-} as const
+import type { OrchestratorConfig, OrchestratorSession } from '../services/orchestrator-runner'
 
 /**
  * Extract error message safely from unknown error type
@@ -35,7 +21,7 @@ function getErrorMessage(error: unknown): string {
 
 export function registerOrchestratorHandlers(): void {
   // Start orchestrator session
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.START, async (_event, config: OrchestratorConfig): Promise<{ success: boolean; session?: OrchestratorSession; error?: string }> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_START, async (_event, config: OrchestratorConfig): Promise<{ success: boolean; session?: OrchestratorSession; error?: string }> => {
     try {
       const session = await orchestratorRunner.start(config)
       return { success: true, session }
@@ -46,7 +32,7 @@ export function registerOrchestratorHandlers(): void {
   })
 
   // Stop orchestrator session
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.STOP, async (_event, sessionId: string): Promise<{ success: boolean; error?: string }> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_STOP, async (_event, sessionId: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const stopped = await orchestratorRunner.stop(sessionId)
       if (!stopped) {
@@ -60,7 +46,7 @@ export function registerOrchestratorHandlers(): void {
   })
 
   // Pause orchestrator session
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.PAUSE, async (_event, sessionId: string): Promise<{ success: boolean; error?: string }> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_PAUSE, async (_event, sessionId: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const paused = await orchestratorRunner.pause(sessionId)
       if (!paused) {
@@ -74,45 +60,26 @@ export function registerOrchestratorHandlers(): void {
   })
 
   // Get session by ID
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.GET_SESSION, async (_event, sessionId: string): Promise<OrchestratorSession | null> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_GET_SESSION, async (_event, sessionId: string): Promise<OrchestratorSession | null> => {
     return orchestratorRunner.getSession(sessionId) || null
   })
 
   // Get all sessions
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.GET_ALL_SESSIONS, async (): Promise<OrchestratorSession[]> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_GET_ALL_SESSIONS, async (): Promise<OrchestratorSession[]> => {
     return orchestratorRunner.getAllSessions()
   })
 
   // Get sessions for workflow
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.GET_WORKFLOW_SESSIONS, async (_event, workflowId: string): Promise<OrchestratorSession[]> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_GET_WORKFLOW_SESSIONS, async (_event, workflowId: string): Promise<OrchestratorSession[]> => {
     return orchestratorRunner.getWorkflowSessions(workflowId)
   })
 
   // Cleanup completed sessions
-  ipcMain.handle(ORCHESTRATOR_CHANNELS.CLEANUP, async (): Promise<{ success: boolean }> => {
+  ipcMain.handle(IPC_CHANNELS.ORCHESTRATOR_CLEANUP, async (): Promise<{ success: boolean }> => {
     orchestratorRunner.cleanup()
     return { success: true }
   })
 
-  // Forward orchestrator events to renderer
-  orchestratorRunner.on('output', (output: OrchestratorOutput) => {
-    const mainWindow = getMainWindow()
-    if (mainWindow) {
-      mainWindow.webContents.send(ORCHESTRATOR_CHANNELS.OUTPUT, output)
-    }
-  })
-
-  orchestratorRunner.on('progress', (progress: OrchestratorProgress) => {
-    const mainWindow = getMainWindow()
-    if (mainWindow) {
-      mainWindow.webContents.send(ORCHESTRATOR_CHANNELS.PROGRESS, progress)
-    }
-  })
-
-  orchestratorRunner.on('session', (session: OrchestratorSession) => {
-    const mainWindow = getMainWindow()
-    if (mainWindow) {
-      mainWindow.webContents.send(ORCHESTRATOR_CHANNELS.SESSION, session)
-    }
-  })
+  // Note: Event forwarding (output, progress, session) is handled directly
+  // by OrchestratorRunner via mainWindow.webContents.send()
 }

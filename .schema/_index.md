@@ -896,3 +896,4 @@ sequenceDiagram
 | 2025-12-16 | 1.12.0 | FEAT-012: Output Viewer Component (scrolling log, filtering, export) |
 | 2025-12-16 | 1.13.0 | FEAT-013: Control Panel Component (start/pause/stop, model select) |
 | 2025-12-16 | 1.14.0 | FEAT-014: Main UI Integration (AutonomousView, sidebar nav) |
+| 2025-12-16 | 1.15.0 | FEAT-015: Global Configuration (autonomous settings, MCP, security) |

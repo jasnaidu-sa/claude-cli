@@ -207,6 +207,39 @@ export interface AppConfig {
   theme: 'dark' | 'light' | 'system'
   fontSize: number
   recentProjects: string[]
+  // Autonomous coding configuration
+  autonomous: AutonomousConfig
+}
+
+export interface AutonomousConfig {
+  // Model settings
+  defaultModel: string
+  availableModels: ModelConfig[]
+  // Behavior settings
+  autoStartOnCreate: boolean
+  confirmBeforeStart: boolean
+  autoWatchProgress: boolean
+  // MCP server settings
+  mcpServers: McpServerConfig[]
+  // Security settings
+  bashAllowlist: boolean
+  maxConcurrentSessions: number
+  sessionRateLimitPerHour: number
+}
+
+export interface ModelConfig {
+  id: string
+  name: string
+  description?: string
+  enabled: boolean
+}
+
+export interface McpServerConfig {
+  name: string
+  command: string
+  args: string[]
+  env?: Record<string, string>
+  enabled: boolean
 }
 
 // IPC channel names

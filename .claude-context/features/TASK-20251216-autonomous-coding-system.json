@@ -440,27 +440,30 @@
       "id": "FEAT-015",
       "name": "Global Configuration",
       "type": "config",
-      "status": "pending",
+      "status": "completed",
       "files": {
-        "create": ["autonomous-orchestrator/config/global_config.yaml"],
-        "modify": ["claude-code-manager/src/main/services/config-store.ts"]
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/shared/types.ts",
+          "claude-code-manager/src/main/services/config-store.ts"
+        ]
       },
       "subtasks": [
-        { "description": "Define global config schema (models, behavior, MCP)", "done": false },
-        { "description": "Add config migration for new settings", "done": false },
-        { "description": "Expose config through IPC", "done": false }
+        { "description": "Define global config schema (models, behavior, MCP)", "done": true },
+        { "description": "Add config migration for new settings", "done": true },
+        { "description": "Expose config through IPC", "done": true }
       ],
       "verification": [
         "Config loads on app start",
         "Settings persist correctly"
       ],
       "review": {
-        "status": "not_started",
-        "static_review": null,
-        "runtime_verification": null,
+        "status": "completed",
+        "static_review": "passed",
+        "runtime_verification": "pending",
         "issues_found": 0,
         "issues_fixed": 0,
-        "attempts": 0
+        "attempts": 1
       }
     },
     {

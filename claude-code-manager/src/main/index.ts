@@ -85,9 +85,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  // Clean up all sessions and dev servers
+  // Clean up all sessions and services
   sessionManager.destroyAll()
   devServerManager.stopAll()
+  discoveryChatService.cleanup()
 
   if (process.platform !== 'darwin') {
     app.quit()

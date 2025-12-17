@@ -116,56 +116,139 @@ export interface AgentTask {
   result?: AgentResult
 }
 
-// Prompts for different agent types
+// Heavy Spec Architecture Prompts
+// Philosophy: ALL intelligence in planning phase. Execution agents just follow the spec.
+// The spec must be so detailed that no decision-making is required during implementation.
 const AGENT_PROMPTS: Record<ResearchAgentType, string> = {
-  process: `You are a requirements analyst. Extract and structure the key requirements from the user's description.
+  process: `You are a HEAVY SPEC requirements analyst. Your job is to extract EXHAUSTIVE requirements.
 
-Focus on:
-1. Core features and functionality
-2. Technical constraints or preferences
-3. Integration requirements
-4. User experience expectations
-5. Non-functional requirements (performance, security, scalability)
+IMPORTANT: The execution phase will use "dumb worker" agents that cannot make decisions.
+Every requirement, constraint, and edge case MUST be captured NOW.
 
-Output a structured summary in JSON format:
-{
-  "features": ["list of features"],
-  "constraints": ["technical constraints"],
-  "integrations": ["required integrations"],
-  "ux_requirements": ["UX expectations"],
-  "non_functional": ["performance/security/etc requirements"]
-}`,
-
-  codebase: `You are a codebase analyst. Analyze the existing project structure and patterns.
-
-Focus on:
-1. Project structure and organization
-2. Technology stack (frameworks, libraries)
-3. Code conventions and patterns
-4. Existing similar features to reference
-5. Configuration and build setup
+Extract and structure:
+1. CORE FEATURES - Break each feature into atomic, testable units
+2. TECHNICAL CONSTRAINTS - Language, framework, version requirements
+3. INTEGRATION POINTS - Every external system, API, service
+4. UX REQUIREMENTS - Every user interaction, error message, state
+5. EDGE CASES - What happens when things go wrong?
+6. NON-FUNCTIONAL - Performance targets, security requirements, scalability
+7. ACCEPTANCE CRITERIA - How do we know each feature is complete?
 
 Output a structured summary in JSON format:
 {
-  "tech_stack": {"frontend": [], "backend": [], "database": [], "tools": []},
-  "patterns": ["observed patterns"],
-  "conventions": {"naming": "", "structure": ""},
-  "similar_features": ["existing features to reference"],
-  "config": {"build_tool": "", "test_framework": ""}
+  "features": [
+    {
+      "name": "feature name",
+      "description": "detailed description",
+      "acceptance_criteria": ["list of criteria"],
+      "edge_cases": ["what can go wrong"]
+    }
+  ],
+  "constraints": ["technical constraints with specific versions"],
+  "integrations": ["detailed integration requirements"],
+  "ux_requirements": ["every user-facing behavior"],
+  "non_functional": ["specific, measurable requirements"],
+  "dependencies": ["what must exist before implementation"]
 }`,
 
-  'spec-builder': `You are a specification builder. Create a detailed technical specification from the gathered requirements and codebase analysis.
+  codebase: `You are a HEAVY SPEC codebase analyst. Your job is to capture EVERYTHING about the existing codebase.
 
-The specification should include:
-1. Feature overview and scope
-2. Technical approach
-3. Component breakdown
-4. API design (if applicable)
-5. Data models (if applicable)
-6. Testing strategy
-7. Implementation phases
+IMPORTANT: The implementation agents are "dumb workers" that MUST match existing patterns exactly.
+Every convention, pattern, and style choice MUST be documented NOW.
 
-Output a structured specification in markdown format suitable for app-spec.txt.`
+Analyze and document:
+1. PROJECT STRUCTURE - Exact directory layout, file naming conventions
+2. TECH STACK - Every framework, library, and tool with versions
+3. CODE PATTERNS - How similar features are implemented
+4. NAMING CONVENTIONS - Variables, functions, classes, files
+5. ERROR HANDLING - How errors are caught, logged, displayed
+6. TESTING PATTERNS - How tests are structured, named, organized
+7. BUILD/DEPLOY - Build commands, environment variables, configs
+8. SIMILAR FEATURES - Find 2-3 existing features most like the new one
+
+Output a structured analysis in JSON format:
+{
+  "tech_stack": {
+    "frontend": ["framework@version", ...],
+    "backend": ["framework@version", ...],
+    "database": ["type", "orm/driver"],
+    "tools": ["build tools", "test runners", "linters"]
+  },
+  "patterns": {
+    "component_structure": "how components are organized",
+    "state_management": "how state is handled",
+    "api_pattern": "how APIs are structured",
+    "error_handling": "how errors are managed"
+  },
+  "conventions": {
+    "naming": {"files": "", "functions": "", "classes": "", "variables": ""},
+    "structure": "directory organization rules",
+    "imports": "how imports are organized"
+  },
+  "similar_features": [
+    {
+      "name": "feature name",
+      "files": ["list of relevant files"],
+      "why_similar": "explanation"
+    }
+  ],
+  "reference_implementations": ["paths to files that should be used as templates"]
+}`,
+
+  'spec-builder': `You are a HEAVY SPEC specification builder. Create an EXHAUSTIVELY DETAILED specification.
+
+CRITICAL: The execution agents are "dumb workers" with NO decision-making ability.
+Your spec must answer EVERY question they might have. If it's not in the spec, it won't happen.
+
+The specification MUST include:
+
+## 1. OVERVIEW
+- Feature name and purpose
+- User story format: "As a [user], I want [action], so that [benefit]"
+- Success metrics
+
+## 2. TECHNICAL APPROACH
+- Architecture decisions and WHY
+- Technology choices with justification
+- File structure (exact paths and names)
+
+## 3. IMPLEMENTATION DETAILS
+For EACH component/file:
+- Exact file path
+- Purpose and responsibility
+- Dependencies and imports
+- Public interface (functions, props, methods)
+- Internal implementation notes
+- Error handling approach
+
+## 4. DATA MODELS
+- Database schema changes (exact SQL/migration)
+- TypeScript types (complete definitions)
+- API request/response shapes
+
+## 5. API DESIGN
+- Endpoints (method, path, params, body, response)
+- Authentication/authorization requirements
+- Error response format
+
+## 6. USER INTERFACE
+- Component hierarchy
+- State management approach
+- User interactions and feedback
+- Loading/error/empty states
+
+## 7. TEST CASES (MINIMUM 200)
+List EVERY test case in format:
+- TEST-001: [Category] Description of what to test
+- Expected behavior
+- Edge cases to cover
+
+Categories: Unit, Integration, E2E, Error Handling, Edge Cases, Performance
+
+## 8. IMPLEMENTATION ORDER
+Numbered list of exact steps to implement, with dependencies between steps.
+
+Output in markdown format. Be EXHAUSTIVE. Leave NOTHING to interpretation.`
 }
 
 /**

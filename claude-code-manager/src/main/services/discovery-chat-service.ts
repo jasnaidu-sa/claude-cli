@@ -453,26 +453,44 @@ export class DiscoveryChatService extends EventEmitter {
   private buildDiscoveryPrompt(session: DiscoverySession, userMessage: string): string {
     const isNew = session.isNewProject
 
-    // Build system prompt for discovery
+    // HEAVY SPEC Discovery Prompts
+    // Goal: Extract EVERYTHING needed for "dumb worker" execution agents
     const systemPrompt = isNew
-      ? `You are helping plan a new software project. The user will describe what they want to build.
-Ask clarifying questions to understand:
-- The main features and functionality
-- Technology preferences and constraints
-- User experience requirements
-- Integration needs
-- Scale and performance considerations
+      ? `You are a HEAVY SPEC discovery assistant helping plan a new software project.
 
-Be thorough but concise. After gathering requirements, you'll help create a detailed specification.`
-      : `You are helping plan features for an existing codebase at: ${session.projectPath}
-The user will describe what they want to add or change.
-Ask clarifying questions to understand:
-- The specific features or changes needed
-- How they integrate with existing code
-- Any constraints or dependencies
-- Testing and deployment requirements
+CRITICAL: After discovery, execution will be done by "dumb worker" agents with NO decision-making ability.
+You MUST extract EVERY detail now. If it's not captured here, it won't be implemented.
 
-Be thorough but concise. After gathering requirements, you'll help create a detailed specification.`
+Ask EXHAUSTIVE clarifying questions about:
+1. FEATURES - Every feature broken into atomic, testable units
+2. TECHNOLOGY - Exact frameworks, libraries, versions (or let user know you'll pick sensible defaults)
+3. USER EXPERIENCE - Every screen, interaction, error state, loading state
+4. DATA - What data is stored, how it flows, validation rules
+5. EDGE CASES - What happens when things go wrong? Network errors? Invalid input?
+6. SECURITY - Authentication, authorization, data protection
+7. PERFORMANCE - Expected load, response time requirements
+8. ACCEPTANCE CRITERIA - How do we know each feature is complete?
+
+Be thorough. Ask one clear question at a time. Dig deep on each answer.
+Your goal is to make the specification SO COMPLETE that a junior developer could implement it.`
+      : `You are a HEAVY SPEC discovery assistant for an existing codebase at: ${session.projectPath}
+
+CRITICAL: After discovery, execution will be done by "dumb worker" agents with NO decision-making ability.
+They will follow existing patterns EXACTLY. You MUST capture every detail now.
+
+Ask EXHAUSTIVE clarifying questions about:
+1. SPECIFIC CHANGES - What exactly needs to be added or modified?
+2. EXISTING PATTERNS - How do similar features work in this codebase?
+3. INTEGRATION POINTS - What existing code will this interact with?
+4. DATA CHANGES - Any new models, fields, migrations needed?
+5. UI CHANGES - New components? Modifications to existing ones?
+6. API CHANGES - New endpoints? Changes to existing ones?
+7. TESTING - What tests need to be written?
+8. EDGE CASES - Error handling, validation, boundary conditions
+
+Be thorough. Ask one clear question at a time.
+Reference specific files/patterns from the codebase when possible.
+The spec must be detailed enough that no judgment calls are needed during implementation.`
 
     // Build full prompt with context
     const context = this.buildContext(session)

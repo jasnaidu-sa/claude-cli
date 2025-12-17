@@ -192,6 +192,45 @@ export interface ElectronAPI {
     getStatus: (projectPath: string) => Promise<{ status: string; error?: string }>
     onStatus: (callback: (status: { projectPath: string; status: string; error?: string }) => void) => () => void
   }
+
+  // Discovery Chat
+  discovery: {
+    createSession: (projectPath: string, isNewProject: boolean) => Promise<{ success: boolean; session?: DiscoverySession; error?: string }>
+    sendMessage: (sessionId: string, content: string) => Promise<{ success: boolean; error?: string }>
+    getMessages: (sessionId: string) => Promise<{ success: boolean; messages?: DiscoveryChatMessage[]; error?: string }>
+    getSession: (sessionId: string) => Promise<{ success: boolean; session?: DiscoverySession | null; error?: string }>
+    cancelRequest: () => Promise<{ success: boolean; error?: string }>
+    closeSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    updateAgentStatus: (sessionId: string, agentName: string, status: string, output?: string, error?: string) => Promise<{ success: boolean; error?: string }>
+    onResponseChunk: (callback: (data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => void) => () => void
+    onResponseComplete: (callback: (data: { sessionId: string; message: DiscoveryChatMessage }) => void) => () => void
+    onAgentStatus: (callback: (data: { sessionId: string; agent: DiscoveryAgentStatus }) => void) => () => void
+    onError: (callback: (data: { sessionId: string; error: string }) => void) => () => void
+  }
+}
+
+// Discovery Chat types
+export interface DiscoveryChatMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: number
+}
+
+export interface DiscoveryAgentStatus {
+  name: string
+  status: 'idle' | 'running' | 'complete' | 'error'
+  output?: string
+  error?: string
+}
+
+export interface DiscoverySession {
+  id: string
+  projectPath: string
+  isNewProject: boolean
+  messages: DiscoveryChatMessage[]
+  agentStatuses: DiscoveryAgentStatus[]
+  createdAt: number
 }
 
 // Workflow options types (matching workflow-manager.ts)
@@ -405,6 +444,45 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, status: { projectPath: string; status: string; error?: string }) => callback(status)
       ipcRenderer.on(IPC_CHANNELS.SCHEMA_STATUS, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SCHEMA_STATUS, handler)
+    }
+  },
+
+  // Discovery Chat
+  discovery: {
+    createSession: (projectPath: string, isNewProject: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_CREATE_SESSION, projectPath, isNewProject),
+    sendMessage: (sessionId: string, content: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_SEND_MESSAGE, sessionId, content),
+    getMessages: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_GET_MESSAGES, sessionId),
+    getSession: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_GET_SESSION, sessionId),
+    cancelRequest: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_CANCEL_REQUEST),
+    closeSession: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_CLOSE_SESSION, sessionId),
+    updateAgentStatus: (sessionId: string, agentName: string, status: string, output?: string, error?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_UPDATE_AGENT_STATUS, sessionId, agentName, status, output, error),
+    // Event listeners
+    onResponseChunk: (callback: (data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => void) => {
+      const handler = (_event: unknown, data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.DISCOVERY_RESPONSE_CHUNK, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.DISCOVERY_RESPONSE_CHUNK, handler)
+    },
+    onResponseComplete: (callback: (data: { sessionId: string; message: DiscoveryChatMessage }) => void) => {
+      const handler = (_event: unknown, data: { sessionId: string; message: DiscoveryChatMessage }) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.DISCOVERY_RESPONSE_COMPLETE, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.DISCOVERY_RESPONSE_COMPLETE, handler)
+    },
+    onAgentStatus: (callback: (data: { sessionId: string; agent: DiscoveryAgentStatus }) => void) => {
+      const handler = (_event: unknown, data: { sessionId: string; agent: DiscoveryAgentStatus }) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.DISCOVERY_AGENT_STATUS, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.DISCOVERY_AGENT_STATUS, handler)
+    },
+    onError: (callback: (data: { sessionId: string; error: string }) => void) => {
+      const handler = (_event: unknown, data: { sessionId: string; error: string }) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.DISCOVERY_ERROR, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.DISCOVERY_ERROR, handler)
     }
   }
 }

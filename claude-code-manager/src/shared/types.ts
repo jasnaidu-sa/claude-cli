@@ -338,7 +338,23 @@ export const IPC_CHANNELS = {
   SCHEMA_VALIDATE: 'schema:validate',
   SCHEMA_GET_RESULT: 'schema:get-result',
   SCHEMA_CLEAR: 'schema:clear',
-  SCHEMA_STATUS: 'schema:status'
+  SCHEMA_STATUS: 'schema:status',
+
+  // Discovery Chat
+  DISCOVERY_CREATE_SESSION: 'discovery:create-session',
+  DISCOVERY_SEND_MESSAGE: 'discovery:send-message',
+  DISCOVERY_GET_MESSAGES: 'discovery:get-messages',
+  DISCOVERY_GET_SESSION: 'discovery:get-session',
+  DISCOVERY_CANCEL_REQUEST: 'discovery:cancel-request',
+  DISCOVERY_CLOSE_SESSION: 'discovery:close-session',
+  DISCOVERY_UPDATE_AGENT_STATUS: 'discovery:update-agent-status',
+  // Discovery Chat Events
+  DISCOVERY_MESSAGE: 'discovery:message',
+  DISCOVERY_RESPONSE: 'discovery:response',
+  DISCOVERY_RESPONSE_CHUNK: 'discovery:response-chunk',
+  DISCOVERY_RESPONSE_COMPLETE: 'discovery:response-complete',
+  DISCOVERY_AGENT_STATUS: 'discovery:agent-status',
+  DISCOVERY_ERROR: 'discovery:error'
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]

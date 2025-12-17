@@ -40,6 +40,7 @@ export function DiscoveryChat() {
   const [error, setError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void)[]>([])
+  const hasInitializedRef = useRef(false)
 
   // Count user messages for "Generate Spec" button visibility
   const userMessageCount = chatMessages.filter(m => m.role === 'user').length
@@ -64,8 +65,9 @@ export function DiscoveryChat() {
         if (result.success && result.session) {
           setSessionId(result.session.id)
 
-          // Add initial system message from session if not already present
-          if (chatMessages.length === 0) {
+          // Add initial messages only once (use ref to prevent duplicates from React StrictMode)
+          if (!hasInitializedRef.current) {
+            hasInitializedRef.current = true
             addChatMessage({
               role: 'system',
               content: `Starting discovery for ${selectedProject.isNew ? 'new' : 'existing'} project: ${selectedProject.name}`

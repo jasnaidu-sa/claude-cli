@@ -53,8 +53,15 @@ export default function App() {
     loadSessions()
   }, [setSessions])
 
+  // Get sessions for layout decisions
+  const { sessions } = useSessionStore()
+  const hasActiveSessions = sessions.length > 0
+
   // Check if we should show a right panel
   const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || (activePanel === 'files' && selectedFile)
+
+  // Check if autonomous should take full width (no active sessions)
+  const autonomousFullWidth = activePanel === 'autonomous' && !hasActiveSessions
 
   // Handle resize of right panel
   const handleRightPanelResize = useCallback((delta: number) => {
@@ -96,24 +103,28 @@ export default function App() {
         {/* Sidebar */}
         <Sidebar />
 
-        {/* Main area - sessions always visible, right panel slides in */}
+        {/* Main area - sessions visible unless autonomous takes full width */}
         <div className="flex-1 min-w-0 h-full flex">
-          {/* Sessions area - always present */}
-          <div className={`h-full transition-all duration-200 ${showRightPanel ? 'flex-[6]' : 'flex-1'}`}>
-            <SessionGrid />
-          </div>
+          {/* Sessions area - hidden when autonomous takes full width */}
+          {!autonomousFullWidth && (
+            <div className={`h-full transition-all duration-200 ${showRightPanel ? 'flex-[6]' : 'flex-1'}`}>
+              <SessionGrid />
+            </div>
+          )}
 
-          {/* Right panel - slides in/out */}
+          {/* Right panel - slides in/out, or full width for autonomous mode */}
           {showRightPanel && (
             <>
-              <ResizeHandle
-                direction="horizontal"
-                onResize={handleRightPanelResize}
-                className="bg-border"
-              />
+              {!autonomousFullWidth && (
+                <ResizeHandle
+                  direction="horizontal"
+                  onResize={handleRightPanelResize}
+                  className="bg-border"
+                />
+              )}
               <div
-                style={{ width: rightPanelWidth }}
-                className="h-full p-4 pl-2 overflow-auto shrink-0"
+                style={autonomousFullWidth ? { width: '100%' } : { width: rightPanelWidth }}
+                className={`h-full overflow-auto shrink-0 ${autonomousFullWidth ? 'p-4' : 'p-4 pl-2'}`}
               >
                 {renderRightPanel()}
               </div>

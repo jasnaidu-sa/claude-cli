@@ -64,17 +64,20 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
   // Initialize subscriptions on mount
   useEffect(() => {
     const cleanup = initSubscriptions()
-
-    // Check venv status and auto-setup if needed
-    checkVenv().then((status) => {
-      if (status && !status.isValid) {
-        // Auto-setup venv in background
-        ensureVenv()
-      }
-    })
-
     return cleanup
-  }, [initSubscriptions, checkVenv, ensureVenv])
+  }, [initSubscriptions])
+
+  // Check and setup venv only when entering executing phase
+  useEffect(() => {
+    if (currentPhase === 'executing') {
+      checkVenv().then((status) => {
+        if (status && !status.isValid) {
+          // Auto-setup venv in background
+          ensureVenv()
+        }
+      })
+    }
+  }, [currentPhase, checkVenv, ensureVenv])
 
   // Refresh workflows when project is selected
   useEffect(() => {
@@ -156,8 +159,8 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
             </div>
           )}
 
-          {/* Venv status indicator - shown only when setting up */}
-          {venvStatus && !venvStatus.isValid && (
+          {/* Venv status indicator - only shown during executing phase when setting up */}
+          {currentPhase === 'executing' && venvStatus && !venvStatus.isValid && (
             <span className="text-xs bg-yellow-500/20 text-yellow-500 px-2 py-1 rounded animate-pulse">
               Setting up environment...
             </span>

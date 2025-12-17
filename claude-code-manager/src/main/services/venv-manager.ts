@@ -28,14 +28,14 @@ const execFileAsync = promisify(execFile)
 
 // Required Python packages for the autonomous orchestrator
 const REQUIRED_PACKAGES = [
-  'claude-code-sdk>=0.0.25',
+  'claude-agent-sdk>=0.1.17',
+  'anthropic>=0.40.0',
   'python-dotenv>=1.0.0',
   'pyyaml>=6.0'
 ]
 
-// Python version constraints (3.10-3.12, NOT 3.13 due to distutils removal)
+// Python version constraint - minimum only, no max (future versions should work)
 const MIN_PYTHON_VERSION = [3, 10]
-const MAX_PYTHON_VERSION = [3, 12]
 
 // Timeout configuration (5 minutes for pip operations)
 const PIP_TIMEOUT = 300000
@@ -246,10 +246,10 @@ export class VenvManager extends EventEmitter {
 
       const { major, minor } = parsedVersion
 
-      // Check if version is in valid range
+      // Check if version meets minimum requirement (3.10+)
       const versionValid =
-        (major === MIN_PYTHON_VERSION[0] && minor >= MIN_PYTHON_VERSION[1]) &&
-        (major === MAX_PYTHON_VERSION[0] && minor <= MAX_PYTHON_VERSION[1])
+        major > MIN_PYTHON_VERSION[0] ||
+        (major === MIN_PYTHON_VERSION[0] && minor >= MIN_PYTHON_VERSION[1])
 
       if (!versionValid) {
         return {
@@ -259,7 +259,7 @@ export class VenvManager extends EventEmitter {
           isValid: false,
           installedPackages: [],
           missingPackages: REQUIRED_PACKAGES.map(p => p.split('>=')[0]),
-          error: `Python ${pythonVersion} not supported. Requires 3.10-3.12.`
+          error: `Python ${pythonVersion} not supported. Requires Python ${MIN_PYTHON_VERSION[0]}.${MIN_PYTHON_VERSION[1]}+.`
         }
       }
 
@@ -329,8 +329,8 @@ export class VenvManager extends EventEmitter {
 
         const { major, minor } = parsedVersion
 
-        // Check version is in valid range
-        if (major === 3 && minor >= 10 && minor <= 12) {
+        // Check version meets minimum requirement (3.10+)
+        if (major > MIN_PYTHON_VERSION[0] || (major === MIN_PYTHON_VERSION[0] && minor >= MIN_PYTHON_VERSION[1])) {
           console.log(`[VenvManager] Found suitable Python: ${pythonCmd.cmd} ${pythonCmd.args.join(' ')} (${version})`)
           return pythonCmd
         }
@@ -377,7 +377,7 @@ export class VenvManager extends EventEmitter {
 
       const systemPython = await this.findSystemPython()
       if (!systemPython) {
-        const error = 'No suitable Python found. Install Python 3.10-3.12.'
+        const error = `No suitable Python found. Install Python ${MIN_PYTHON_VERSION[0]}.${MIN_PYTHON_VERSION[1]}+.`
         this.emitProgress('error', error, 0)
         throw new Error(error)
       }

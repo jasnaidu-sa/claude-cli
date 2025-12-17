@@ -129,15 +129,23 @@ export class DiscoveryChatService extends EventEmitter {
 
       // Spawn Claude CLI with the message
       // Using --print flag for non-interactive mode
-      this.activeProcess = spawn(claudePath, ['--print', prompt], {
+      // SECURITY: Using shell: false and passing prompt via stdin to prevent command injection
+      this.activeProcess = spawn(claudePath, ['--print', '-'], {
         cwd: session.projectPath,
-        shell: true,
+        shell: false,
+        stdio: ['pipe', 'pipe', 'pipe'],
         env: {
           ...process.env,
           // Disable any interactive features
           CI: 'true'
         }
       })
+
+      // Write prompt to stdin to avoid shell injection
+      if (this.activeProcess.stdin) {
+        this.activeProcess.stdin.write(prompt)
+        this.activeProcess.stdin.end()
+      }
 
       let responseContent = ''
       const responseId = this.generateId()

@@ -2,11 +2,14 @@
  * Autonomous Coding Store (Zustand)
  *
  * Manages state for the autonomous coding system including:
+ * - Phase management (project_select → discovery_chat → spec_review → executing → completed)
  * - Workflows (WorkflowConfig)
  * - Orchestrator sessions (OrchestratorSession)
  * - Progress tracking (ProgressSnapshot)
  * - Schema validation (SchemaValidationResult)
  * - Python venv status (VenvStatus)
+ * - Discovery chat state
+ * - Generated spec state
  */
 
 import { create } from 'zustand'
@@ -23,10 +26,62 @@ import type {
 } from '@shared/types'
 import type { VenvStatus, VenvCreationProgress, CreateWorkflowOptions, UpdateWorkflowOptions } from '../../preload/index'
 
+// Phase types for the autonomous workflow
+export type AutonomousPhase =
+  | 'project_select'   // User selects new or existing project
+  | 'discovery_chat'   // User describes what they want, agents research
+  | 'spec_review'      // User reviews and approves generated spec
+  | 'executing'        // Python orchestrator running
+  | 'completed'        // All tests pass, ready for commit
+
+// Chat message for discovery chat
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: number
+}
+
+// Agent status for visibility in UI
+export interface AgentStatus {
+  name: string
+  status: 'idle' | 'running' | 'complete' | 'error'
+  output?: string
+  error?: string
+}
+
+// Generated spec structure
+export interface GeneratedSpec {
+  markdown: string          // Human-readable markdown
+  appSpecTxt: string        // Plain text for Python (app_spec.txt)
+  sections: SpecSection[]   // Parsed sections for editing
+}
+
+export interface SpecSection {
+  id: string
+  title: string
+  content: string
+  editable: boolean
+}
+
 // Schema validation status type
 type SchemaStatus = 'idle' | 'validating' | 'complete' | 'error'
 
+// Selected project for autonomous workflow
+export interface SelectedProject {
+  path: string
+  name: string
+  isNew: boolean
+}
+
 interface AutonomousState {
+  // Phase Management (new planning phase flow)
+  currentPhase: AutonomousPhase
+  selectedProject: SelectedProject | null
+  chatMessages: ChatMessage[]
+  agentStatuses: AgentStatus[]
+  generatedSpec: GeneratedSpec | null
+
   // Workflows
   workflows: WorkflowConfig[]
   workflowsByProject: Record<string, WorkflowConfig[]>
@@ -87,6 +142,21 @@ interface AutonomousState {
   upgradeVenv: () => Promise<boolean>
   setVenvProgress: (progress: VenvCreationProgress | null) => void
 
+  // Phase Management Actions
+  setPhase: (phase: AutonomousPhase) => void
+  goToNextPhase: () => void
+  goToPreviousPhase: () => void
+  setSelectedProject: (project: SelectedProject | null) => void
+  addChatMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
+  clearChatMessages: () => void
+  updateAgentStatus: (name: string, status: AgentStatus['status'], output?: string, error?: string) => void
+  clearAgentStatuses: () => void
+  setGeneratedSpec: (spec: GeneratedSpec | null) => void
+  resetPhaseState: () => void
+  canGoBack: () => boolean
+  canGoForward: () => boolean
+  getCurrentPhaseIndex: () => number
+
   // Helpers
   getActiveWorkflow: () => WorkflowConfig | undefined
   getActiveSession: () => OrchestratorSession | undefined
@@ -100,8 +170,24 @@ interface AutonomousState {
   initSubscriptions: () => () => void
 }
 
+// Phase order for navigation
+const PHASE_ORDER: AutonomousPhase[] = [
+  'project_select',
+  'discovery_chat',
+  'spec_review',
+  'executing',
+  'completed'
+]
+
 export const useAutonomousStore = create<AutonomousState>((set, get) => ({
-  // Initial state
+  // Initial state - Phase Management
+  currentPhase: 'project_select',
+  selectedProject: null,
+  chatMessages: [],
+  agentStatuses: [],
+  generatedSpec: null,
+
+  // Workflows
   workflows: [],
   workflowsByProject: {},
   activeWorkflowId: null,
@@ -592,6 +678,100 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
   setError: (error: string | null) => set({ error }),
 
   setLoading: (isLoading: boolean) => set({ isLoading }),
+
+  // Phase Management Actions
+  setPhase: (phase: AutonomousPhase) => {
+    set({ currentPhase: phase })
+  },
+
+  goToNextPhase: () => {
+    const state = get()
+    const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
+    if (currentIndex < PHASE_ORDER.length - 1) {
+      set({ currentPhase: PHASE_ORDER[currentIndex + 1] })
+    }
+  },
+
+  goToPreviousPhase: () => {
+    const state = get()
+    const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
+    if (currentIndex > 0) {
+      set({ currentPhase: PHASE_ORDER[currentIndex - 1] })
+    }
+  },
+
+  setSelectedProject: (project: SelectedProject | null) => {
+    set({ selectedProject: project })
+  },
+
+  addChatMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
+    const newMessage: ChatMessage = {
+      ...message,
+      id: crypto.randomUUID(),
+      timestamp: Date.now()
+    }
+    set((state) => ({
+      chatMessages: [...state.chatMessages, newMessage]
+    }))
+  },
+
+  clearChatMessages: () => {
+    set({ chatMessages: [] })
+  },
+
+  updateAgentStatus: (name: string, status: AgentStatus['status'], output?: string, error?: string) => {
+    set((state) => {
+      const existingIndex = state.agentStatuses.findIndex(a => a.name === name)
+      const newStatus: AgentStatus = { name, status, output, error }
+
+      if (existingIndex >= 0) {
+        const agentStatuses = [...state.agentStatuses]
+        agentStatuses[existingIndex] = newStatus
+        return { agentStatuses }
+      } else {
+        return { agentStatuses: [...state.agentStatuses, newStatus] }
+      }
+    })
+  },
+
+  clearAgentStatuses: () => {
+    set({ agentStatuses: [] })
+  },
+
+  setGeneratedSpec: (spec: GeneratedSpec | null) => {
+    set({ generatedSpec: spec })
+  },
+
+  resetPhaseState: () => {
+    set({
+      currentPhase: 'project_select',
+      selectedProject: null,
+      chatMessages: [],
+      agentStatuses: [],
+      generatedSpec: null,
+      activeWorkflowId: null
+    })
+  },
+
+  canGoBack: () => {
+    const state = get()
+    const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
+    // Can go back from discovery_chat to project_select
+    // Cannot go back from executing or completed
+    return currentIndex > 0 && currentIndex < 3
+  },
+
+  canGoForward: () => {
+    const state = get()
+    const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
+    // Forward navigation is controlled by phase logic, not manual navigation
+    // Only spec_review can manually advance to executing
+    return state.currentPhase === 'spec_review' && state.generatedSpec !== null
+  },
+
+  getCurrentPhaseIndex: () => {
+    return PHASE_ORDER.indexOf(get().currentPhase)
+  },
 
   // Subscription management - call once in app initialization
   initSubscriptions: () => {

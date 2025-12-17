@@ -1,0 +1,573 @@
+{
+  "task_id": "TASK-20251217-planning-phase",
+  "created": "2025-12-17T10:00:00Z",
+  "description": "Implement Planning Phase - Discovery Chat, Agents, and Heavy Spec Generation",
+  "workflow_version": "7.0",
+  "architecture_decision": "Heavy Spec → Simple Execution: All intelligence in Planning Phase, Python agents just follow instructions",
+
+  "user_journey_reference": {
+    "phases": [
+      {
+        "id": "U1",
+        "name": "Project Selection",
+        "user_action": "Click 'New Project' or 'Existing Project'",
+        "system_action": "Auto venv setup, codebase scan (background)",
+        "ui_state": "Two-button choice with recent projects list"
+      },
+      {
+        "id": "U2",
+        "name": "Discovery Chat",
+        "user_action": "Describe what they want in natural language",
+        "system_action": "Research agents run in parallel (visible), Claude asks clarifying questions",
+        "ui_state": "Chat interface with agent status panel"
+      },
+      {
+        "id": "U3",
+        "name": "Spec Review",
+        "user_action": "Review generated spec, edit if needed, approve",
+        "system_action": "Spec Builder compiles heavy spec from all agent outputs",
+        "ui_state": "Structured spec viewer with edit capability"
+      },
+      {
+        "id": "U4",
+        "name": "Execution",
+        "user_action": "Watch progress, intervene if needed",
+        "system_action": "Python orchestrator runs (Initializer → Coding loop)",
+        "ui_state": "Progress dashboard with completed/remaining split"
+      },
+      {
+        "id": "U5",
+        "name": "Completion",
+        "user_action": "Review changes, choose commit strategy, done",
+        "system_action": "Summarize changes, offer commit options",
+        "ui_state": "Completion summary with file changes and commit options"
+      }
+    ]
+  },
+
+  "features": [
+    {
+      "id": "FEAT-017",
+      "name": "Project Picker Component",
+      "type": "ui",
+      "status": "pending",
+      "agent": "frontend-developer",
+      "description": "Entry point UI - two paths: New Project or Existing Project",
+      "user_journey_phase": "U1",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/ProjectPicker.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/RecentProjects.tsx"
+        ],
+        "modify": [
+          "claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx",
+          "claude-code-manager/src/renderer/stores/autonomous-store.ts"
+        ]
+      },
+      "ui_spec": {
+        "layout": "Centered content with two large action cards",
+        "components": [
+          {
+            "name": "NewProjectCard",
+            "description": "Card with folder icon, 'New Project' title, 'Start fresh with a new idea' subtitle",
+            "action": "Opens folder picker dialog, creates project structure"
+          },
+          {
+            "name": "ExistingProjectCard",
+            "description": "Card with folder-open icon, 'Existing Code' title, 'Add features to existing project' subtitle",
+            "action": "Opens folder picker dialog, validates project structure"
+          },
+          {
+            "name": "RecentProjectsList",
+            "description": "Below cards, shows last 5 projects with 'Continue where you left off' heading",
+            "fields": ["project name", "last activity", "workflow status if any", "Resume button"]
+          }
+        ],
+        "states": {
+          "loading": "Show spinner while venv/deps setup runs in background",
+          "ready": "Transition to Discovery Chat phase"
+        }
+      },
+      "subtasks": [
+        { "description": "Create ProjectPicker component with two-card layout", "done": false },
+        { "description": "Add folder picker dialog integration", "done": false },
+        { "description": "Create RecentProjects component with resume capability", "done": false },
+        { "description": "Add auto venv setup on project selection (silent background)", "done": false },
+        { "description": "Add phase state to autonomous-store (project_select → discovery)", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-018",
+      "name": "Discovery Chat Service",
+      "type": "backend",
+      "status": "pending",
+      "description": "Dedicated Claude chat for requirements gathering, separate from Sessions",
+      "user_journey_phase": "U2",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/discovery-chat.ts",
+          "claude-code-manager/src/main/ipc/discovery-handlers.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/preload/index.ts",
+          "claude-code-manager/src/main/ipc/index.ts",
+          "claude-code-manager/src/shared/types.ts"
+        ]
+      },
+      "implementation": {
+        "approach": "Use Claude API directly (not claude-code-sdk) for chat",
+        "features": [
+          "Streaming responses",
+          "Conversation history management",
+          "System prompt includes project context from agents",
+          "Structured output extraction for spec building"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create DiscoveryChat service class", "done": false },
+        { "description": "Implement streaming message handling", "done": false },
+        { "description": "Add conversation history management", "done": false },
+        { "description": "Create IPC handlers for chat operations", "done": false },
+        { "description": "Add preload API for renderer access", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-019",
+      "name": "Discovery Chat UI",
+      "type": "ui",
+      "status": "pending",
+      "agent": "frontend-developer",
+      "description": "Chat interface for Discovery phase with agent status panel",
+      "user_journey_phase": "U2",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/DiscoveryChat.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/ChatMessage.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/AgentStatusPanel.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/QuickResponseButtons.tsx"
+        ],
+        "modify": [
+          "claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx",
+          "claude-code-manager/src/renderer/stores/autonomous-store.ts"
+        ]
+      },
+      "ui_spec": {
+        "layout": "Two-column: Chat (left 60%), Agent Status (right 40%)",
+        "components": [
+          {
+            "name": "ChatMessage",
+            "variants": ["user", "assistant", "system"],
+            "features": ["Markdown rendering", "Code blocks", "Timestamps"]
+          },
+          {
+            "name": "ChatInput",
+            "features": ["Multi-line textarea", "Send button", "Attachment option (future)"]
+          },
+          {
+            "name": "AgentStatusPanel",
+            "description": "Shows research agents and their progress",
+            "agents": [
+              { "name": "Process Agent", "status": "idle|running|complete", "output_preview": true },
+              { "name": "Codebase Analyzer", "status": "idle|running|complete", "output_preview": true },
+              { "name": "Best Practices", "status": "idle|running|complete", "output_preview": true }
+            ]
+          },
+          {
+            "name": "QuickResponseButtons",
+            "description": "When Claude asks questions, show clickable options",
+            "example": "Auth method: [Email/Password] [OAuth] [Both]"
+          }
+        ],
+        "states": {
+          "initial": "Claude greeting, agents start scanning",
+          "chatting": "User and Claude exchange messages",
+          "spec_ready": "Show 'Spec ready for review' button"
+        }
+      },
+      "subtasks": [
+        { "description": "Create DiscoveryChat main component", "done": false },
+        { "description": "Create ChatMessage component with markdown support", "done": false },
+        { "description": "Create AgentStatusPanel showing agent progress", "done": false },
+        { "description": "Create QuickResponseButtons for structured questions", "done": false },
+        { "description": "Add chat state to autonomous-store", "done": false },
+        { "description": "Connect to DiscoveryChat service via IPC", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-020",
+      "name": "Process Agent Integration",
+      "type": "backend",
+      "status": "pending",
+      "description": "Agent that maps user journeys from user's description",
+      "user_journey_phase": "U2",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/agents/process-agent.ts",
+          "claude-code-manager/src/main/services/agents/agent-types.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/main/services/discovery-chat.ts"
+        ]
+      },
+      "implementation": {
+        "approach": "Claude API call with specialized prompt",
+        "input": "User's description of what they want",
+        "output": {
+          "personas": ["New User", "Returning User", "Admin"],
+          "journeys": [
+            {
+              "name": "User Registration",
+              "steps": ["Enter email", "Enter password", "Submit", "Verify email", "Access dashboard"],
+              "interaction_points": ["Form inputs", "Submit button", "Email link"]
+            }
+          ],
+          "edge_cases": ["Invalid email", "Weak password", "Email already exists"]
+        }
+      },
+      "subtasks": [
+        { "description": "Create ProcessAgent class with Claude API integration", "done": false },
+        { "description": "Design prompt for user journey extraction", "done": false },
+        { "description": "Implement structured output parsing", "done": false },
+        { "description": "Emit progress events for UI status panel", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-021",
+      "name": "Codebase Analyzer Agent",
+      "type": "backend",
+      "status": "pending",
+      "description": "Agent that extracts patterns, conventions, and structure from existing code",
+      "user_journey_phase": "U2",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/agents/codebase-analyzer.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/main/services/discovery-chat.ts"
+        ]
+      },
+      "implementation": {
+        "approach": "File system scanning + Claude analysis",
+        "steps": [
+          "1. Scan project structure (glob for key files)",
+          "2. Identify tech stack (package.json, requirements.txt, etc)",
+          "3. Find similar components (if user wants auth, find existing forms)",
+          "4. Extract patterns (read 2-3 example files)",
+          "5. Document conventions (naming, structure, imports)"
+        ],
+        "output": {
+          "tech_stack": { "frontend": "React", "backend": "Next.js", "database": "Supabase" },
+          "patterns": {
+            "components": "Functional React with hooks, see src/components/CustomerForm.tsx",
+            "services": "Service classes with async methods, see src/services/customerService.ts",
+            "state": "Zustand stores, see src/stores/customer-store.ts"
+          },
+          "conventions": {
+            "naming": "camelCase for files, PascalCase for components",
+            "structure": "src/components/, src/services/, src/stores/"
+          },
+          "similar_code": [
+            { "pattern": "Form component", "file": "src/components/CustomerForm.tsx" },
+            { "pattern": "API route", "file": "pages/api/customers.ts" }
+          ]
+        }
+      },
+      "subtasks": [
+        { "description": "Create CodebaseAnalyzer class", "done": false },
+        { "description": "Implement tech stack detection", "done": false },
+        { "description": "Implement pattern extraction (find similar code)", "done": false },
+        { "description": "Implement convention documentation", "done": false },
+        { "description": "Emit progress events for UI status panel", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-022",
+      "name": "Spec Builder Agent",
+      "type": "backend",
+      "status": "pending",
+      "description": "Agent that compiles heavy spec from all other agent outputs",
+      "user_journey_phase": "U2-U3",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/agents/spec-builder.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/main/services/discovery-chat.ts"
+        ]
+      },
+      "implementation": {
+        "approach": "Template-based generation with Claude refinement",
+        "inputs": [
+          "User requirements (from chat)",
+          "User journeys (from Process Agent)",
+          "Codebase patterns (from Codebase Analyzer)",
+          "Best practices (optional, from web research)"
+        ],
+        "output_format": "Heavy spec document (markdown) with sections",
+        "sections": [
+          "## Overview",
+          "## User Journeys (from Process Agent)",
+          "## Technical Context (from Codebase Analyzer)",
+          "## File Structure (paths to create)",
+          "## Implementation Details (patterns to follow)",
+          "## Database Schema (if applicable)",
+          "## API Contracts (if applicable)",
+          "## Verification Steps (for each feature)"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create SpecBuilder class", "done": false },
+        { "description": "Design spec template structure", "done": false },
+        { "description": "Implement section generators for each part", "done": false },
+        { "description": "Add Claude refinement pass for coherence", "done": false },
+        { "description": "Output as both markdown (display) and app_spec.txt (Python)", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-023",
+      "name": "Spec Review UI",
+      "type": "ui",
+      "status": "pending",
+      "agent": "frontend-developer",
+      "description": "UI for reviewing, editing, and approving the generated spec",
+      "user_journey_phase": "U3",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/SpecReview.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/SpecSection.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/SpecEditor.tsx"
+        ],
+        "modify": [
+          "claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx",
+          "claude-code-manager/src/renderer/stores/autonomous-store.ts"
+        ]
+      },
+      "ui_spec": {
+        "layout": "Full-width document view with collapsible sections",
+        "components": [
+          {
+            "name": "SpecSection",
+            "features": ["Collapsible", "Edit button per section", "Validation indicator"],
+            "sections": ["Overview", "User Journeys", "Technical Context", "File Structure", "Verification Steps"]
+          },
+          {
+            "name": "SpecEditor",
+            "description": "Inline or modal editor for modifying spec sections",
+            "features": ["Markdown editor", "Preview mode", "Save/Cancel"]
+          },
+          {
+            "name": "ApprovalBar",
+            "description": "Fixed bottom bar with approval actions",
+            "buttons": ["Request Changes (back to chat)", "Approve & Start Building"]
+          }
+        ],
+        "states": {
+          "viewing": "Read-only view of spec",
+          "editing": "Section being edited",
+          "approved": "Transition to Execution phase"
+        }
+      },
+      "subtasks": [
+        { "description": "Create SpecReview main component", "done": false },
+        { "description": "Create SpecSection collapsible component", "done": false },
+        { "description": "Create inline SpecEditor with markdown support", "done": false },
+        { "description": "Add approval bar with actions", "done": false },
+        { "description": "Handle 'Request Changes' flow back to chat", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-024",
+      "name": "Phase Router & State Machine",
+      "type": "ui",
+      "status": "pending",
+      "agent": "frontend-developer",
+      "description": "Update AutonomousView to route between phases based on state",
+      "user_journey_phase": "All",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx",
+          "claude-code-manager/src/renderer/stores/autonomous-store.ts"
+        ]
+      },
+      "implementation": {
+        "phases": ["project_select", "discovery_chat", "spec_review", "executing", "completed"],
+        "state_machine": {
+          "project_select": { "next": "discovery_chat", "trigger": "project selected" },
+          "discovery_chat": { "next": "spec_review", "trigger": "spec ready", "back": "project_select" },
+          "spec_review": { "next": "executing", "trigger": "approved", "back": "discovery_chat" },
+          "executing": { "next": "completed", "trigger": "all tests pass" },
+          "completed": { "next": "project_select", "trigger": "new task" }
+        }
+      },
+      "subtasks": [
+        { "description": "Add phase state to autonomous-store", "done": false },
+        { "description": "Create phase transition functions", "done": false },
+        { "description": "Update AutonomousView to render correct phase component", "done": false },
+        { "description": "Add back navigation capability", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-025",
+      "name": "Update Prompts for Heavy Spec",
+      "type": "config",
+      "status": "pending",
+      "description": "Update Python prompts to expect and use heavy spec format",
+      "user_journey_phase": "U4",
+      "files": {
+        "create": [],
+        "modify": [
+          "autonomous-orchestrator/prompts/initializer_prompt_brownfield.md",
+          "autonomous-orchestrator/prompts/coding_prompt_brownfield.md"
+        ]
+      },
+      "changes": {
+        "initializer_prompt": [
+          "Expect heavy spec with all decisions made",
+          "Extract test cases directly from 'Verification Steps' sections",
+          "Do NOT analyze codebase - spec already contains patterns",
+          "Generate 200 tests by parsing spec sections"
+        ],
+        "coding_prompt": [
+          "Reference spec for HOW to implement (patterns, file paths)",
+          "Spec contains exact file names to create",
+          "Spec contains patterns to copy from existing files",
+          "No creative decisions needed - follow spec exactly"
+        ]
+      },
+      "subtasks": [
+        { "description": "Update initializer_prompt_brownfield.md for heavy spec", "done": false },
+        { "description": "Update coding_prompt_brownfield.md for heavy spec", "done": false },
+        { "description": "Test prompts with sample heavy spec", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-026",
+      "name": "Execution Dashboard Update",
+      "type": "ui",
+      "status": "pending",
+      "agent": "frontend-developer",
+      "description": "Update execution view with completed/remaining split from user journey",
+      "user_journey_phase": "U4",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/ExecutionDashboard.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/CompletedList.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/RemainingList.tsx"
+        ],
+        "modify": [
+          "claude-code-manager/src/renderer/components/autonomous/ProgressPanel.tsx"
+        ]
+      },
+      "ui_spec": {
+        "layout": "As designed in user journey phase U4",
+        "components": [
+          {
+            "name": "ProgressHeader",
+            "features": ["Overall progress bar", "Elapsed time", "Estimated remaining"]
+          },
+          {
+            "name": "CompletedList",
+            "description": "Left column showing completed tests by category",
+            "features": ["Grouped by category", "Checkmark icons", "Collapsible"]
+          },
+          {
+            "name": "RemainingList",
+            "description": "Right column showing pending tests",
+            "features": ["Current test highlighted", "Pending tests dimmed"]
+          },
+          {
+            "name": "CurrentActivity",
+            "description": "Live log of what's happening",
+            "features": ["Streaming updates", "Timestamps", "Auto-scroll"]
+          },
+          {
+            "name": "InterventionButton",
+            "description": "Pause and chat with Claude if needed"
+          }
+        ]
+      },
+      "subtasks": [
+        { "description": "Create ExecutionDashboard layout", "done": false },
+        { "description": "Create CompletedList component", "done": false },
+        { "description": "Create RemainingList component", "done": false },
+        { "description": "Update CurrentActivity with better streaming", "done": false },
+        { "description": "Add Intervention capability", "done": false }
+      ]
+    },
+    {
+      "id": "FEAT-027",
+      "name": "Completion Summary",
+      "type": "ui",
+      "status": "pending",
+      "agent": "frontend-developer",
+      "description": "Completion screen with summary, file changes, and commit options",
+      "user_journey_phase": "U5",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/autonomous/CompletionSummary.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/FileChanges.tsx",
+          "claude-code-manager/src/renderer/components/autonomous/CommitOptions.tsx"
+        ],
+        "modify": []
+      },
+      "ui_spec": {
+        "layout": "Centered summary card with action buttons",
+        "components": [
+          {
+            "name": "SummaryStats",
+            "fields": ["Duration", "Tests passed", "Files created", "Files modified", "Lines of code"]
+          },
+          {
+            "name": "FileChanges",
+            "description": "Expandable list of all files changed",
+            "features": ["Click to view diff", "Grouped by type (created/modified)"]
+          },
+          {
+            "name": "CommitOptions",
+            "description": "How to commit the changes",
+            "options": ["Keep all commits", "Squash by category", "Single commit"]
+          },
+          {
+            "name": "NextActions",
+            "buttons": ["Review Changes", "Run Locally", "Commit & Push", "Add More Features"]
+          }
+        ]
+      },
+      "subtasks": [
+        { "description": "Create CompletionSummary layout", "done": false },
+        { "description": "Create SummaryStats component", "done": false },
+        { "description": "Create FileChanges with diff view integration", "done": false },
+        { "description": "Create CommitOptions selector", "done": false },
+        { "description": "Add next action buttons", "done": false }
+      ]
+    }
+  ],
+
+  "implementation_order": [
+    "FEAT-024: Phase Router (foundation for all phases)",
+    "FEAT-017: Project Picker (entry point)",
+    "FEAT-018: Discovery Chat Service (backend)",
+    "FEAT-020: Process Agent",
+    "FEAT-021: Codebase Analyzer Agent",
+    "FEAT-022: Spec Builder Agent",
+    "FEAT-019: Discovery Chat UI (needs backend)",
+    "FEAT-023: Spec Review UI",
+    "FEAT-025: Update Prompts",
+    "FEAT-026: Execution Dashboard Update",
+    "FEAT-027: Completion Summary"
+  ],
+
+  "agent_usage": {
+    "frontend-developer": ["FEAT-017", "FEAT-019", "FEAT-023", "FEAT-024", "FEAT-026", "FEAT-027"],
+    "backend-developer": ["FEAT-018", "FEAT-020", "FEAT-021", "FEAT-022"],
+    "manual": ["FEAT-025"]
+  },
+
+  "rules": {
+    "review_after_each_feature": true,
+    "typecheck_after_each_feature": true,
+    "commit_after_each_feature": true,
+    "use_frontend_developer_for_ui": true
+  }
+}

@@ -7,16 +7,16 @@
 import { ipcMain } from 'electron'
 import { DiscoveryChatService, DISCOVERY_CHAT_CHANNELS } from '../services/discovery-chat-service'
 
-// IPC channel names
+// IPC channel names - use service channels plus handler-specific ones
 export const DISCOVERY_IPC_CHANNELS = {
-  CREATE_SESSION: 'discovery:create-session',
+  // Handler-specific channels
   SEND_MESSAGE: 'discovery:send-message',
   GET_MESSAGES: 'discovery:get-messages',
   GET_SESSION: 'discovery:get-session',
   CANCEL_REQUEST: 'discovery:cancel-request',
   CLOSE_SESSION: 'discovery:close-session',
   UPDATE_AGENT_STATUS: 'discovery:update-agent-status',
-  // Events (renderer listens)
+  // Events from service (renderer listens) - spread last to avoid duplicates
   ...DISCOVERY_CHAT_CHANNELS
 } as const
 
@@ -25,10 +25,10 @@ let discoveryChatService: DiscoveryChatService | null = null
 export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   discoveryChatService = service
 
-  // Create a new discovery session
+  // Create a new discovery session (may load existing from disk)
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.CREATE_SESSION, async (_event, projectPath: string, isNewProject: boolean) => {
     try {
-      const session = discoveryChatService!.createSession(projectPath, isNewProject)
+      const session = await discoveryChatService!.createSession(projectPath, isNewProject)
       return { success: true, session }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create session'

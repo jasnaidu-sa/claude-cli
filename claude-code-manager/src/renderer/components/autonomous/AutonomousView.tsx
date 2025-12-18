@@ -19,6 +19,9 @@ import { DiscoveryChat } from './DiscoveryChat'
 import { SpecReview } from './SpecReview'
 import { ExecutionDashboard } from './ExecutionDashboard'
 import { CompletionSummary } from './CompletionSummary'
+import { PreflightCheck } from './PreflightCheck'
+import { JourneyAnalysis } from './JourneyAnalysis'
+import { SpecGenerating } from './SpecGenerating'
 import { useAutonomousStore, type AutonomousPhase } from '@renderer/stores/autonomous-store'
 import { useSessionStore } from '@renderer/stores/session-store'
 import { cn } from '@renderer/lib/utils'
@@ -26,7 +29,10 @@ import { cn } from '@renderer/lib/utils'
 // Phase metadata for display
 const PHASE_INFO: Record<AutonomousPhase, { title: string; description: string }> = {
   project_select: { title: 'Select Project', description: 'Choose a new or existing project' },
+  preflight: { title: 'Pre-flight Check', description: 'Validating environment and setup' },
+  journey_analysis: { title: 'Analyzing Codebase', description: 'Understanding existing patterns and user flows' },
   discovery_chat: { title: 'Discovery', description: 'Describe what you want to build' },
+  spec_generating: { title: 'Generating Spec', description: 'Building detailed specification' },
   spec_review: { title: 'Review Spec', description: 'Review and approve the generated specification' },
   executing: { title: 'Executing', description: 'Autonomous coding in progress' },
   completed: { title: 'Complete', description: 'All tests passing' }
@@ -101,8 +107,14 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
     switch (currentPhase) {
       case 'project_select':
         return <ProjectPicker />
+      case 'preflight':
+        return <PreflightCheck />
+      case 'journey_analysis':
+        return <JourneyAnalysis />
       case 'discovery_chat':
         return <DiscoveryChat />
+      case 'spec_generating':
+        return <SpecGenerating />
       case 'spec_review':
         return <SpecReview />
       case 'executing':

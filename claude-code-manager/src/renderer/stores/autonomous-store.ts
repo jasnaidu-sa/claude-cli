@@ -26,13 +26,37 @@ import type {
 } from '@shared/types'
 import type { VenvStatus, VenvCreationProgress, CreateWorkflowOptions, UpdateWorkflowOptions } from '../../preload/index'
 
-// Phase types for the autonomous workflow
+// Phase types for the autonomous workflow (Option C: Full Architecture)
 export type AutonomousPhase =
-  | 'project_select'   // User selects new or existing project
-  | 'discovery_chat'   // User describes what they want, agents research
-  | 'spec_review'      // User reviews and approves generated spec
-  | 'executing'        // Python orchestrator running
-  | 'completed'        // All tests pass, ready for commit
+  | 'project_select'      // Phase 0a: User selects new or existing project
+  | 'preflight'           // Phase 0b: Environment validation (venv, schema, etc.)
+  | 'journey_analysis'    // Phase 1: Automatic user journey analysis (brownfield only)
+  | 'discovery_chat'      // Phase 2: User describes what they want (conversation only)
+  | 'spec_generating'     // Phase 3: Background spec generation
+  | 'spec_review'         // Phase 4: User reviews and approves generated spec
+  | 'executing'           // Phase 5: Python orchestrator running
+  | 'completed'           // Phase 6: All tests pass, ready for commit
+
+// Pre-flight check status
+export interface PreflightStatus {
+  venvReady: boolean
+  schemaFresh: boolean
+  mcpConfigured: boolean
+  gitClean: boolean
+  errors: string[]
+  warnings: string[]
+}
+
+// User journey analysis result
+export interface JourneyAnalysis {
+  completed: boolean
+  userFlows: string[]
+  entryPoints: string[]
+  dataModels: string[]
+  techStack: string[]
+  patterns: string[]
+  summary: string
+}
 
 // Chat message for discovery chat
 export interface ChatMessage {
@@ -55,6 +79,8 @@ export interface GeneratedSpec {
   markdown: string          // Human-readable markdown
   appSpecTxt: string        // Plain text for Python (app_spec.txt)
   sections: SpecSection[]   // Parsed sections for editing
+  featureCount: number      // Number of features extracted
+  readyForExecution: boolean
 }
 
 export interface SpecSection {
@@ -75,11 +101,17 @@ export interface SelectedProject {
 }
 
 interface AutonomousState {
-  // Phase Management (new planning phase flow)
+  // Phase Management (Option C flow)
   currentPhase: AutonomousPhase
   selectedProject: SelectedProject | null
+  preflightStatus: PreflightStatus | null
+  journeyAnalysis: JourneyAnalysis | null
+  
+  // Discovery Chat State
   chatMessages: ChatMessage[]
   agentStatuses: AgentStatus[]
+  
+  // Spec Generation State
   generatedSpec: GeneratedSpec | null
 
   // Workflows
@@ -147,6 +179,8 @@ interface AutonomousState {
   goToNextPhase: () => void
   goToPreviousPhase: () => void
   setSelectedProject: (project: SelectedProject | null) => void
+  setPreflightStatus: (status: PreflightStatus | null) => void
+  setJourneyAnalysis: (analysis: JourneyAnalysis | null) => void
   addChatMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => void
   clearChatMessages: () => void
   updateAgentStatus: (name: string, status: AgentStatus['status'], output?: string, error?: string) => void
@@ -173,18 +207,29 @@ interface AutonomousState {
 // Phase order for navigation
 const PHASE_ORDER: AutonomousPhase[] = [
   'project_select',
+  'preflight',
+  'journey_analysis',
   'discovery_chat',
+  'spec_generating',
   'spec_review',
   'executing',
   'completed'
 ]
 
+const MIN_DISCOVERY_MESSAGES = 4
+
 export const useAutonomousStore = create<AutonomousState>((set, get) => ({
-  // Initial state - Phase Management
+  // Initial state - Phase Management (Option C flow)
   currentPhase: 'project_select',
   selectedProject: null,
+  preflightStatus: null,
+  journeyAnalysis: null,
+  
+  // Discovery Chat
   chatMessages: [],
   agentStatuses: [],
+  
+  // Spec Generation
   generatedSpec: null,
 
   // Workflows
@@ -688,7 +733,13 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
     const state = get()
     const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
     if (currentIndex < PHASE_ORDER.length - 1) {
-      set({ currentPhase: PHASE_ORDER[currentIndex + 1] })
+      const nextPhase = PHASE_ORDER[currentIndex + 1]
+      // Skip journey_analysis for new projects
+      if (nextPhase === 'journey_analysis' && state.selectedProject?.isNew) {
+        set({ currentPhase: 'discovery_chat' })
+      } else {
+        set({ currentPhase: nextPhase })
+      }
     }
   },
 
@@ -696,12 +747,34 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
     const state = get()
     const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
     if (currentIndex > 0) {
-      set({ currentPhase: PHASE_ORDER[currentIndex - 1] })
+      const prevPhase = PHASE_ORDER[currentIndex - 1]
+      // Skip journey_analysis for new projects when going back
+      if (prevPhase === 'journey_analysis' && state.selectedProject?.isNew) {
+        set({ currentPhase: 'preflight' })
+      } else {
+        set({ currentPhase: prevPhase })
+      }
     }
   },
 
   setSelectedProject: (project: SelectedProject | null) => {
-    set({ selectedProject: project })
+    // Clear all phase state when changing projects
+    set({
+      selectedProject: project,
+      preflightStatus: null,
+      journeyAnalysis: null,
+      chatMessages: [],
+      agentStatuses: [],
+      generatedSpec: null
+    })
+  },
+  
+  setPreflightStatus: (status: PreflightStatus | null) => {
+    set({ preflightStatus: status })
+  },
+  
+  setJourneyAnalysis: (analysis: JourneyAnalysis | null) => {
+    set({ journeyAnalysis: analysis })
   },
 
   addChatMessage: (message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
@@ -746,6 +819,8 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
     set({
       currentPhase: 'project_select',
       selectedProject: null,
+      preflightStatus: null,
+      journeyAnalysis: null,
       chatMessages: [],
       agentStatuses: [],
       generatedSpec: null,
@@ -756,17 +831,31 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
   canGoBack: () => {
     const state = get()
     const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
-    // Can go back from discovery_chat to project_select
-    // Cannot go back from executing or completed
-    return currentIndex > 0 && currentIndex < 3
+    // Can go back from most phases except executing and completed
+    return currentIndex > 0 && currentIndex < 6
   },
 
   canGoForward: () => {
     const state = get()
-    const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
-    // Forward navigation is controlled by phase logic, not manual navigation
-    // Only spec_review can manually advance to executing
-    return state.currentPhase === 'spec_review' && state.generatedSpec !== null
+    
+    switch (state.currentPhase) {
+      case 'project_select':
+        return state.selectedProject !== null
+      case 'preflight':
+        return state.preflightStatus !== null && state.preflightStatus.errors.length === 0
+      case 'journey_analysis':
+        return state.journeyAnalysis?.completed ?? false
+      case 'discovery_chat':
+        // Require minimum messages before advancing
+        const userMessages = state.chatMessages.filter(m => m.role === 'user').length
+        return userMessages >= MIN_DISCOVERY_MESSAGES
+      case 'spec_generating':
+        return state.generatedSpec !== null
+      case 'spec_review':
+        return state.generatedSpec !== null
+      default:
+        return false
+    }
   },
 
   getCurrentPhaseIndex: () => {

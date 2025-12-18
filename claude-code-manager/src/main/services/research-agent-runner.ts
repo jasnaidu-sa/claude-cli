@@ -22,7 +22,66 @@ import { randomBytes } from 'crypto'
 import { EventEmitter } from 'events'
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { platform } from 'os'
 import { ConfigStore } from './config-store'
+
+/**
+ * MCP servers required for autonomous mode research agents
+ * Uses npx for cross-platform compatibility
+ */
+const AUTONOMOUS_MCP_CONFIG = {
+  mcpServers: {
+    // Playwright for web research
+    playwright: {
+      command: 'npx',
+      args: ['-y', '@playwright/mcp@latest']
+    }
+  }
+}
+
+/**
+ * Ensure project has a clean MCP config for autonomous mode
+ * Creates .mcp.json in project root with ONLY the servers needed
+ * This overrides user-level MCP config to avoid tool name conflicts
+ */
+async function ensureProjectMcpConfig(projectPath: string): Promise<void> {
+  const mcpConfigPath = path.join(projectPath, '.mcp.json')
+
+  try {
+    const existingContent = await fs.readFile(mcpConfigPath, 'utf-8')
+    const existing = JSON.parse(existingContent)
+
+    const hasSupabase = existing.mcpServers?.supabase
+    const hasPlaywright = existing.mcpServers?.playwright
+
+    if (hasSupabase && hasPlaywright) {
+      return // Already configured
+    }
+
+    const merged = {
+      mcpServers: {
+        ...existing.mcpServers,
+        ...AUTONOMOUS_MCP_CONFIG.mcpServers
+      }
+    }
+    await fs.writeFile(mcpConfigPath, JSON.stringify(merged, null, 2))
+  } catch {
+    await fs.writeFile(mcpConfigPath, JSON.stringify(AUTONOMOUS_MCP_CONFIG, null, 2))
+  }
+}
+
+/**
+ * Get spawn options for cross-platform CLI execution
+ * On Windows, .cmd files require shell interpretation
+ */
+function getSpawnConfig(cliPath: string): { command: string; shellOption: boolean } {
+  if (platform() === 'win32') {
+    // On Windows, use shell: true for .cmd files (npm scripts)
+    // This is safe because we pass input via stdin, not command line args
+    return { command: cliPath, shellOption: true }
+  }
+  return { command: cliPath, shellOption: false }
+}
 
 /**
  * Validate project path is safe to use
@@ -76,17 +135,26 @@ async function validateProjectPath(projectPath: string): Promise<boolean> {
  * Security: Only passes essential variables, not credentials
  */
 function createSafeEnv(): NodeJS.ProcessEnv {
-  const allowedVars = ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'SHELL']
-  const safeEnv: NodeJS.ProcessEnv = {
-    CI: 'true'
-  }
-
+  const allowedVars = [
+    // System paths
+    'PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP',
+    // Windows app data paths (needed for Claude CLI to find credentials)
+    'APPDATA', 'LOCALAPPDATA',
+    // Locale
+    'LANG', 'LC_ALL', 'SHELL',
+    // Claude CLI authentication (required for API access)
+    'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
+    // Node.js
+    'NODE_ENV', 'npm_config_prefix',
+    // System
+    'SystemRoot', 'COMSPEC'
+  ]
+  const safeEnv: NodeJS.ProcessEnv = { CI: 'true' }
   for (const key of allowedVars) {
     if (process.env[key]) {
       safeEnv[key] = process.env[key]
     }
   }
-
   return safeEnv
 }
 
@@ -334,11 +402,25 @@ export class ResearchAgentRunner extends EventEmitter {
       // SECURITY: Create minimal safe environment (no credentials)
       const safeEnv = createSafeEnv()
 
+      // Ensure project has clean MCP config with only required servers (supabase, playwright)
+      await ensureProjectMcpConfig(projectPath)
+
+      // Build path to project MCP config
+      const projectMcpConfig = path.join(projectPath, '.mcp.json')
+
       // Spawn Claude CLI
-      // SECURITY: Using shell: false and stdin to prevent command injection
-      const proc = spawn(claudePath, ['--print', '-'], {
+      // Using --strict-mcp-config to ONLY use project's .mcp.json, ignoring user's MCP servers
+      // This fixes "tools: Tool names must be unique" error from tool conflicts
+      // SECURITY: Input passed via stdin to prevent command injection
+      const { command, shellOption } = getSpawnConfig(claudePath)
+      const proc = spawn(command, [
+        '--print',
+        `--mcp-config=${projectMcpConfig}`,
+        '--strict-mcp-config',
+        '-'
+      ], {
         cwd: projectPath,
-        shell: false,
+        shell: shellOption,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: safeEnv
       })

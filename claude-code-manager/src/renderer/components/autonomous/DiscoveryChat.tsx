@@ -38,9 +38,13 @@ export function DiscoveryChat() {
   const [streamingContent, setStreamingContent] = useState('')
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Track tool activity for "thinking" display
+  const [activeTools, setActiveTools] = useState<Array<{ name: string; status: 'running' | 'complete'; timestamp: number }>>([])
+  const [thinkingEvents, setThinkingEvents] = useState<Array<{ type: string; content: string; timestamp: number }>>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void)[]>([])
   const hasInitializedRef = useRef(false)
+  const lastProjectPathRef = useRef<string | null>(null)
 
   // Count user messages for "Generate Spec" button visibility
   const userMessageCount = chatMessages.filter(m => m.role === 'user').length
@@ -54,6 +58,19 @@ export function DiscoveryChat() {
   useEffect(() => {
     if (!selectedProject) return
 
+    // Reset initialization flag if project changed
+    if (lastProjectPathRef.current !== selectedProject.path) {
+      console.log('[DiscoveryChat] Project changed, resetting initialization')
+      hasInitializedRef.current = false
+      lastProjectPathRef.current = selectedProject.path
+      // Also reset local state
+      setStreamingContent('')
+      setStreamingMessageId(null)
+      setActiveTools([])
+      setThinkingEvents([])
+      setError(null)
+    }
+
     const initSession = async () => {
       try {
         setError(null)
@@ -65,17 +82,38 @@ export function DiscoveryChat() {
         if (result.success && result.session) {
           setSessionId(result.session.id)
 
+          // Check if session was loaded from disk with existing messages
+          const loadedMessages = result.session.messages || []
+          const hasExistingMessages = loadedMessages.length > 1 // More than just system message
+
           // Add initial messages only once (use ref to prevent duplicates from React StrictMode)
           if (!hasInitializedRef.current) {
             hasInitializedRef.current = true
-            addChatMessage({
-              role: 'system',
-              content: `Starting discovery for ${selectedProject.isNew ? 'new' : 'existing'} project: ${selectedProject.name}`
-            })
-            addChatMessage({
-              role: 'assistant',
-              content: `Welcome! I'll help you plan your ${selectedProject.isNew ? 'new project' : 'feature'}.\n\nPlease describe what you want to build. Be as detailed as possible about:\n- The main features and functionality\n- Any specific technologies or patterns you want to use\n- Integration requirements\n- User experience expectations`
-            })
+
+            if (hasExistingMessages) {
+              // Restore messages from loaded session
+              console.log('[DiscoveryChat] Restoring', loadedMessages.length, 'messages from saved session')
+              for (const msg of loadedMessages) {
+                // Only add if not already in the store (check by content to avoid duplicates)
+                const exists = chatMessages.some(m => m.content === msg.content && m.role === msg.role)
+                if (!exists) {
+                  addChatMessage({
+                    role: msg.role,
+                    content: msg.content
+                  })
+                }
+              }
+            } else {
+              // New session - add welcome messages
+              addChatMessage({
+                role: 'system',
+                content: `Starting discovery for ${selectedProject.isNew ? 'new' : 'existing'} project: ${selectedProject.name}`
+              })
+              addChatMessage({
+                role: 'assistant',
+                content: `Welcome! I'll help you plan your ${selectedProject.isNew ? 'new project' : 'feature'}.\n\nPlease describe what you want to build. Be as detailed as possible about:\n- The main features and functionality\n- Any specific technologies or patterns you want to use\n- Integration requirements\n- User experience expectations`
+              })
+            }
           }
         } else {
           setError(result.error || 'Failed to create discovery session')
@@ -100,12 +138,96 @@ export function DiscoveryChat() {
   useEffect(() => {
     if (!sessionId) return
 
-    // Response chunk handler - accumulate streaming content
+    // Response chunk handler - accumulate streaming content and track tool activity
     const unsubChunk = window.electron.discovery.onResponseChunk((data) => {
       if (data.sessionId !== sessionId) return
 
       setStreamingMessageId(data.messageId)
-      setStreamingContent(prev => prev + data.chunk)
+
+      // Handle different event types for "thinking" display
+      const eventType = (data as { eventType?: string }).eventType
+      const toolName = (data as { toolName?: string }).toolName
+
+      switch (eventType) {
+        case 'tool_start':
+          // Tool starting - add to active tools
+          if (toolName) {
+            setActiveTools(prev => [...prev, { name: toolName, status: 'running', timestamp: Date.now() }])
+            setThinkingEvents(prev => [...prev, {
+              type: 'tool_start',
+              content: `🔧 Using ${toolName}...`,
+              timestamp: Date.now()
+            }])
+          }
+          break
+
+        case 'tool_complete':
+          // Tool finished - update status
+          if (toolName) {
+            setActiveTools(prev =>
+              prev.map(t => t.name === toolName ? { ...t, status: 'complete' as const } : t)
+            )
+            setThinkingEvents(prev => [...prev, {
+              type: 'tool_complete',
+              content: `✓ ${toolName} complete`,
+              timestamp: Date.now()
+            }])
+          }
+          break
+
+        case 'tool_result':
+          // Tool result - show preview
+          if (data.chunk) {
+            setThinkingEvents(prev => [...prev, {
+              type: 'tool_result',
+              content: data.chunk,
+              timestamp: Date.now()
+            }])
+          }
+          break
+
+        case 'thinking_start':
+          setThinkingEvents(prev => [...prev, {
+            type: 'thinking',
+            content: '💭 Thinking...',
+            timestamp: Date.now()
+          }])
+          break
+
+        case 'thinking':
+          // Extended thinking content - could display if needed
+          break
+
+        case 'stderr':
+          // Stderr output from Claude CLI - show as warning
+          if (data.chunk) {
+            setThinkingEvents(prev => [...prev, {
+              type: 'stderr',
+              content: data.chunk,
+              timestamp: Date.now()
+            }])
+          }
+          break
+
+        case 'system':
+          // System initialization event - show progress
+          if (toolName) {
+            setThinkingEvents(prev => [...prev, {
+              type: 'system',
+              content: `⚙️ ${toolName}`,
+              timestamp: Date.now()
+            }])
+          }
+          break
+
+        case 'text':
+        default:
+          // Normal text streaming - accumulate content
+          if (data.chunk) {
+            setStreamingContent(prev => prev + data.chunk)
+          }
+          break
+      }
     })
     cleanupRef.current.push(unsubChunk)
 
@@ -119,10 +241,12 @@ export function DiscoveryChat() {
         content: data.message.content
       })
 
-      // Clear streaming state
+      // Clear streaming state and thinking events
       setStreamingContent('')
       setStreamingMessageId(null)
       setIsProcessing(false)
+      setActiveTools([])
+      setThinkingEvents([])
     })
     cleanupRef.current.push(unsubComplete)
 
@@ -290,6 +414,8 @@ export function DiscoveryChat() {
             </div>
           ))}
 
+          {/* Tool activity moved to right sidebar - just show a simple indicator here */}
+
           {/* Streaming response display */}
           {streamingContent && (
             <div className="flex gap-3 justify-start">
@@ -306,8 +432,8 @@ export function DiscoveryChat() {
             </div>
           )}
 
-          {/* Processing indicator (before streaming starts) */}
-          {isProcessing && !streamingContent && (
+          {/* Processing indicator (before any activity) */}
+          {isProcessing && !streamingContent && thinkingEvents.length === 0 && (
             <div className="flex gap-3 justify-start">
               <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                 <Bot className="h-4 w-4" />
@@ -315,7 +441,7 @@ export function DiscoveryChat() {
               <div className="rounded-lg px-4 py-2 bg-secondary">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Thinking...</span>
+                  <span>Starting...</span>
                 </div>
               </div>
             </div>
@@ -382,7 +508,64 @@ export function DiscoveryChat() {
       </div>
 
       {/* Agent Status Sidebar */}
-      <div className="w-64 border-l border-border p-4 shrink-0">
+      <div className="w-72 border-l border-border p-4 shrink-0 flex flex-col">
+        {/* Claude Activity Panel - Fixed height container */}
+        <div className="mb-4">
+          <h3 className="font-medium text-sm mb-2 flex items-center gap-2">
+            {isProcessing ? (
+              <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />
+            ) : (
+              <Cpu className="h-4 w-4 text-muted-foreground" />
+            )}
+            <span className={isProcessing ? 'text-amber-500' : ''}>
+              {isProcessing ? 'Claude is working...' : 'Claude Activity'}
+            </span>
+          </h3>
+          <div className="h-48 bg-secondary/30 rounded-lg border border-border overflow-hidden">
+            {thinkingEvents.length > 0 ? (
+              <div className="h-full overflow-y-auto p-2 space-y-1 font-mono text-xs">
+                {thinkingEvents.map((event, idx) => (
+                  <div
+                    key={`${event.timestamp}-${idx}`}
+                    className={cn(
+                      'break-words',
+                      event.type === 'system' && 'text-cyan-400',
+                      event.type === 'tool_start' && 'text-blue-400',
+                      event.type === 'tool_complete' && 'text-emerald-400',
+                      event.type === 'tool_result' && 'text-muted-foreground',
+                      event.type === 'thinking' && 'text-purple-400',
+                      event.type === 'stderr' && 'text-yellow-500'
+                    )}
+                  >
+                    {event.content.length > 200
+                      ? event.content.substring(0, 200) + '...'
+                      : event.content}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+                Activity will appear here
+              </div>
+            )}
+          </div>
+          {/* Active tools badges */}
+          {activeTools.filter(t => t.status === 'running').length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {activeTools.filter(t => t.status === 'running').map(tool => (
+                <span
+                  key={tool.name}
+                  className="inline-flex items-center gap-1 text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded"
+                >
+                  <Loader2 className="h-2 w-2 animate-spin" />
+                  {tool.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Research Agents Section */}
         <h3 className="font-medium text-sm mb-3 flex items-center gap-2">
           <Cpu className="h-4 w-4" />
           Research Agents

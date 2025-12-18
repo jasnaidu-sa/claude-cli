@@ -16,9 +16,79 @@ import { randomBytes } from 'crypto'
 import { EventEmitter } from 'events'
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { platform } from 'os'
+import { app } from 'electron'
 import { getMainWindow } from '../index'
 import { ConfigStore } from './config-store'
 import { ResearchAgentRunner } from './research-agent-runner'
+
+/**
+ * MCP servers required for autonomous mode discovery and research phases
+ * OPTIMIZATION: Use --prefer-offline and --no-install to avoid re-downloading
+ * For fastest startup, globally install: npm install -g @anthropic-ai/mcp-server-playwright
+ */
+const AUTONOMOUS_MCP_CONFIG = {
+  mcpServers: {
+    // Playwright for browser testing - cached npx for faster startup
+    playwright: {
+      command: 'npx',
+      args: ['--prefer-offline', '@anthropic-ai/mcp-server-playwright']
+    }
+  }
+}
+
+/**
+ * Ensure project has a clean MCP config for autonomous mode
+ * Creates .mcp.json in project root with ONLY the servers needed
+ * This overrides user-level MCP config to avoid tool name conflicts
+ *
+ * Per Claude Code docs: Project-level .mcp.json takes precedence over user config
+ */
+async function ensureProjectMcpConfig(projectPath: string): Promise<void> {
+  const mcpConfigPath = path.join(projectPath, '.mcp.json')
+
+  try {
+    // Check if .mcp.json already exists
+    const existingContent = await fs.readFile(mcpConfigPath, 'utf-8')
+    const existing = JSON.parse(existingContent)
+
+    // Check if it already has our required servers
+    const hasSupabase = existing.mcpServers?.supabase
+    const hasPlaywright = existing.mcpServers?.playwright
+
+    if (hasSupabase && hasPlaywright) {
+      console.log('[DiscoveryChat] Project MCP config already has required servers')
+      return
+    }
+
+    // Merge our servers with existing config
+    const merged = {
+      mcpServers: {
+        ...existing.mcpServers,
+        ...AUTONOMOUS_MCP_CONFIG.mcpServers
+      }
+    }
+    await fs.writeFile(mcpConfigPath, JSON.stringify(merged, null, 2))
+    console.log('[DiscoveryChat] Updated project MCP config with required servers')
+  } catch {
+    // No existing config - create new one with only our servers
+    await fs.writeFile(mcpConfigPath, JSON.stringify(AUTONOMOUS_MCP_CONFIG, null, 2))
+    console.log('[DiscoveryChat] Created project MCP config with required servers')
+  }
+}
+
+/**
+ * Get spawn options for cross-platform CLI execution
+ * On Windows, .cmd files require shell interpretation
+ */
+function getSpawnConfig(cliPath: string): { command: string; shellOption: boolean } {
+  if (platform() === 'win32') {
+    // On Windows, use shell: true for .cmd files (npm scripts)
+    // This is safe because we pass input via stdin, not command line args
+    return { command: cliPath, shellOption: true }
+  }
+  return { command: cliPath, shellOption: false }
+}
 
 /**
  * Validate project path is safe to use
@@ -65,14 +135,163 @@ async function validateProjectPath(projectPath: string): Promise<boolean> {
  * Create minimal safe environment for child processes
  */
 function createSafeEnv(): NodeJS.ProcessEnv {
-  const allowedVars = ['PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'SHELL']
-  const safeEnv: NodeJS.ProcessEnv = { CI: 'true' }
+  const allowedVars = [
+    // System paths
+    'PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP',
+    // Windows app data paths (needed for Claude CLI to find credentials)
+    'APPDATA', 'LOCALAPPDATA',
+    // Locale
+    'LANG', 'LC_ALL', 'SHELL',
+    // Claude CLI authentication (required for API access)
+    'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
+    // Node.js
+    'NODE_ENV', 'npm_config_prefix',
+    // System
+    'SystemRoot', 'COMSPEC'
+  ]
+  const safeEnv: NodeJS.ProcessEnv = {
+    CI: 'true',
+    // Allow longer responses for spec generation (default is 32000)
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '128000'
+  }
   for (const key of allowedVars) {
     if (process.env[key]) {
       safeEnv[key] = process.env[key]
     }
   }
   return safeEnv
+}
+
+// Autonomous directory for persistence
+const AUTONOMOUS_DIR = '.autonomous'
+const SESSION_FILE = 'session.json'
+const SPEC_FILE = 'spec.md'
+const AGENT_OUTPUTS_DIR = 'agent-outputs'
+
+/**
+ * Ensure .autonomous directory exists in project
+ */
+async function ensureAutonomousDir(projectPath: string): Promise<string> {
+  const autonomousPath = path.join(projectPath, AUTONOMOUS_DIR)
+  try {
+    await fs.mkdir(autonomousPath, { recursive: true })
+  } catch {
+    // Directory might already exist
+  }
+  return autonomousPath
+}
+
+/**
+ * Save session data to disk
+ * Saves to: project/.autonomous/session.json
+ */
+async function saveSessionToDisk(projectPath: string, session: DiscoverySession): Promise<void> {
+  const autonomousPath = await ensureAutonomousDir(projectPath)
+  const sessionPath = path.join(autonomousPath, SESSION_FILE)
+
+  const sessionData = {
+    id: session.id,
+    projectPath: session.projectPath,
+    isNewProject: session.isNewProject,
+    messages: session.messages,
+    agentStatuses: session.agentStatuses,
+    createdAt: session.createdAt,
+    updatedAt: Date.now()
+  }
+
+  await fs.writeFile(sessionPath, JSON.stringify(sessionData, null, 2))
+  console.log('[DiscoveryChat] Session saved to disk:', sessionPath)
+}
+
+/**
+ * Load session from disk if it exists
+ * Loads from: project/.autonomous/session.json
+ */
+async function loadSessionFromDisk(projectPath: string): Promise<DiscoverySession | null> {
+  const sessionPath = path.join(projectPath, AUTONOMOUS_DIR, SESSION_FILE)
+
+  try {
+    const content = await fs.readFile(sessionPath, 'utf-8')
+    const data = JSON.parse(content)
+
+    console.log('[DiscoveryChat] Loaded existing session from disk:', sessionPath)
+    console.log('[DiscoveryChat] Session has', data.messages?.length || 0, 'messages')
+
+    return {
+      id: data.id,
+      projectPath: data.projectPath,
+      isNewProject: data.isNewProject,
+      messages: data.messages || [],
+      agentStatuses: data.agentStatuses || [],
+      createdAt: data.createdAt
+    }
+  } catch {
+    // No existing session
+    return null
+  }
+}
+
+/**
+ * Save spec document to disk
+ * Saves to: project/.autonomous/spec.md
+ */
+async function saveSpecToDisk(projectPath: string, specContent: string): Promise<string> {
+  const autonomousPath = await ensureAutonomousDir(projectPath)
+  const specPath = path.join(autonomousPath, SPEC_FILE)
+
+  // Add header with timestamp
+  const header = `# Project Specification
+
+> Generated: ${new Date().toISOString()}
+> Project: ${projectPath}
+
+---
+
+`
+
+  await fs.writeFile(specPath, header + specContent)
+  console.log('[DiscoveryChat] Spec saved to disk:', specPath)
+  return specPath
+}
+
+/**
+ * Save agent output to disk
+ * Saves to: project/.autonomous/agent-outputs/{agentType}-{timestamp}.json
+ */
+async function saveAgentOutputToDisk(
+  projectPath: string,
+  agentType: string,
+  output: string
+): Promise<string> {
+  const autonomousPath = await ensureAutonomousDir(projectPath)
+  const outputsDir = path.join(autonomousPath, AGENT_OUTPUTS_DIR)
+
+  try {
+    await fs.mkdir(outputsDir, { recursive: true })
+  } catch {
+    // Directory might already exist
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const filename = `${agentType}-${timestamp}.md`
+  const outputPath = path.join(outputsDir, filename)
+
+  await fs.writeFile(outputPath, output)
+  console.log('[DiscoveryChat] Agent output saved:', outputPath)
+  return outputPath
+}
+
+/**
+ * Clear session from disk (for starting fresh)
+ */
+async function clearSessionFromDisk(projectPath: string): Promise<void> {
+  const sessionPath = path.join(projectPath, AUTONOMOUS_DIR, SESSION_FILE)
+  try {
+    await fs.unlink(sessionPath)
+    console.log('[DiscoveryChat] Session cleared from disk')
+  } catch {
+    // File might not exist
+  }
 }
 
 // Message types for discovery chat
@@ -108,8 +327,17 @@ export const DISCOVERY_CHAT_CHANNELS = {
   RESPONSE_CHUNK: 'discovery:response-chunk',
   RESPONSE_COMPLETE: 'discovery:response-complete',
   AGENT_STATUS: 'discovery:agent-status',
-  ERROR: 'discovery:error'
+  ERROR: 'discovery:error',
+  // Session management
+  CREATE_SESSION: 'discovery:create-session',
+  CREATE_FRESH_SESSION: 'discovery:create-fresh-session',
+  SESSION_LOADED: 'discovery:session-loaded',
+  // Spec management
+  SPEC_READY: 'discovery:spec-ready'
 } as const
+
+// Export persistence helpers for external use
+export { saveSpecToDisk, loadSessionFromDisk, clearSessionFromDisk }
 
 export class DiscoveryChatService extends EventEmitter {
   private sessions: Map<string, DiscoverySession> = new Map()
@@ -136,12 +364,63 @@ export class DiscoveryChatService extends EventEmitter {
         }
       })
     })
+
+    // Listen for agent completion to save outputs
+    this.researchRunner.on('complete', async (data: { taskId: string; result: { agentType: string; output?: string; status: string } }) => {
+      const { result } = data
+      if (result.status === 'complete' && result.output) {
+        // Find the session for this task to get project path
+        for (const session of this.sessions.values()) {
+          const tasks = this.researchRunner.getSessionTasks(session.id)
+          const task = tasks.find(t => t.id === data.taskId)
+          if (task) {
+            // Save agent output to disk
+            await saveAgentOutputToDisk(session.projectPath, result.agentType, result.output)
+
+            // If this is the spec-builder, also save as the main spec file
+            if (result.agentType === 'spec-builder') {
+              const specPath = await saveSpecToDisk(session.projectPath, result.output)
+              console.log('[DiscoveryChat] Spec document saved:', specPath)
+
+              // Notify renderer that spec is ready
+              this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.AGENT_STATUS, {
+                sessionId: session.id,
+                agent: {
+                  name: 'spec-builder',
+                  status: 'complete',
+                  output: result.output,
+                  specPath
+                }
+              })
+            }
+            break
+          }
+        }
+      }
+    })
   }
 
   /**
-   * Create a new discovery session for a project
+   * Create or load a discovery session for a project
+   * If a session already exists on disk, it will be loaded (resumable sessions)
    */
-  createSession(projectPath: string, isNewProject: boolean): DiscoverySession {
+  async createSession(projectPath: string, isNewProject: boolean): Promise<DiscoverySession> {
+    // Try to load existing session from disk
+    const existingSession = await loadSessionFromDisk(projectPath)
+
+    if (existingSession) {
+      // Resume existing session
+      console.log('[DiscoveryChat] Resuming existing session:', existingSession.id)
+
+      // Restore message count for agent triggering
+      const userMessageCount = existingSession.messages.filter(m => m.role === 'user').length
+      this.messageCount.set(existingSession.id, userMessageCount)
+
+      this.sessions.set(existingSession.id, existingSession)
+      return existingSession
+    }
+
+    // Create new session
     const id = this.generateId()
 
     const session: DiscoverySession = {
@@ -162,7 +441,30 @@ export class DiscoveryChatService extends EventEmitter {
     })
 
     this.sessions.set(id, session)
+
+    // Save new session to disk
+    await saveSessionToDisk(projectPath, session)
+
     return session
+  }
+
+  /**
+   * Start a fresh session, clearing any existing one
+   */
+  async createFreshSession(projectPath: string, isNewProject: boolean): Promise<DiscoverySession> {
+    // Clear existing session from disk
+    await clearSessionFromDisk(projectPath)
+
+    // Clear from memory if exists
+    for (const [sessionId, session] of this.sessions) {
+      if (session.projectPath === projectPath) {
+        this.sessions.delete(sessionId)
+        this.messageCount.delete(sessionId)
+      }
+    }
+
+    // Create new session (will not find existing on disk now)
+    return this.createSession(projectPath, isNewProject)
   }
 
   /**
@@ -222,49 +524,220 @@ export class DiscoveryChatService extends EventEmitter {
       // SECURITY: Create minimal safe environment (no credentials)
       const safeEnv = createSafeEnv()
 
+      // Ensure project has clean MCP config with only required servers (supabase, playwright)
+      // This creates .mcp.json in project root
+      await ensureProjectMcpConfig(session.projectPath)
+
+      // Build path to project MCP config
+      const projectMcpConfig = path.join(session.projectPath, '.mcp.json')
+
+      console.log('[DiscoveryChat] Project path:', session.projectPath)
+      console.log('[DiscoveryChat] MCP config path:', projectMcpConfig)
+      console.log('[DiscoveryChat] Claude CLI path:', claudePath)
+
       // Spawn Claude CLI with the message
-      // Using --print flag for non-interactive mode
-      // SECURITY: Using shell: false and passing prompt via stdin to prevent command injection
-      this.activeProcess = spawn(claudePath, ['--print', '-'], {
+      // Using --print with stream-json for real-time streaming output
+      // Using --strict-mcp-config to ONLY use project's .mcp.json, ignoring user's 9+ MCP servers
+      // This fixes "tools: Tool names must be unique" error from tool conflicts
+      // SECURITY: Input passed via stdin to prevent command injection
+      const { command, shellOption } = getSpawnConfig(claudePath)
+      const args = [
+        '--print',
+        '--verbose',
+        '--output-format', 'stream-json',
+        `--mcp-config=${projectMcpConfig}`,
+        '--strict-mcp-config',
+        '--dangerously-skip-permissions',  // Auto-approve since user selected project
+        '-'
+      ]
+      console.log('[DiscoveryChat] Spawn command:', command, args)
+      console.log('[DiscoveryChat] Spawning Claude CLI now...')
+
+      this.activeProcess = spawn(command, args, {
         cwd: session.projectPath,
-        shell: false,
+        shell: shellOption,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: safeEnv
       })
 
+      // Log spawn event
+      this.activeProcess.on('spawn', () => {
+        console.log('[DiscoveryChat] Claude CLI process spawned successfully, PID:', this.activeProcess?.pid)
+      })
+
       // Write prompt to stdin to avoid shell injection
       if (this.activeProcess.stdin) {
+        console.log('[DiscoveryChat] Writing prompt to stdin, length:', prompt.length)
         this.activeProcess.stdin.write(prompt)
         this.activeProcess.stdin.end()
+        console.log('[DiscoveryChat] stdin closed, waiting for response...')
+      } else {
+        console.error('[DiscoveryChat] No stdin available!')
       }
 
       let responseContent = ''
       const responseId = this.generateId()
+      let jsonBuffer = ''
 
-      // Handle stdout (Claude's response)
+      // Track current tool for activity panel
+      let currentToolName = ''
+
+      // Handle stdout (Claude's streaming JSON response)
       this.activeProcess.stdout?.on('data', (data: Buffer) => {
-        const chunk = data.toString()
-        responseContent += chunk
+        jsonBuffer += data.toString()
 
-        // Send chunk to renderer
-        this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
-          sessionId,
-          messageId: responseId,
-          chunk,
-          timestamp: Date.now()
-        })
+        // Process complete JSON lines (newline-delimited JSON)
+        const lines = jsonBuffer.split('\n')
+        jsonBuffer = lines.pop() || '' // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+
+          try {
+            const parsed = JSON.parse(line)
+
+            // Debug: log event types to understand the stream
+            console.log('[DiscoveryChat] Stream event type:', parsed.type, parsed.event?.type || '')
+
+            // NOTE: Claude CLI outputs 'system', 'assistant', 'user', 'result' types
+            // NOT 'stream_event' like the raw Anthropic API
+            // See: claude-cli-electron skill for documentation
+
+            if (parsed.type === 'system') {
+              // System initialization event - show in activity panel
+              const initInfo = parsed.subtype === 'init'
+                ? `Initializing... Model: ${parsed.model || 'unknown'}, Tools: ${parsed.tools?.length || 0}`
+                : 'System event received'
+              this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                sessionId,
+                messageId: responseId,
+                chunk: '',
+                fullContent: responseContent,
+                eventType: 'system',
+                toolName: initInfo,
+                timestamp: Date.now()
+              })
+            } else if (parsed.type === 'user') {
+              // User message with tool results
+              if (parsed.message?.content) {
+                for (const block of parsed.message.content) {
+                  if (block.type === 'tool_result') {
+                    // Tool result - show preview
+                    const content = typeof block.content === 'string'
+                      ? block.content
+                      : JSON.stringify(block.content)
+                    const preview = content.substring(0, 300)
+                    this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                      sessionId,
+                      messageId: responseId,
+                      chunk: `\n📄 Result: ${preview}${content.length > 300 ? '...' : ''}\n`,
+                      fullContent: responseContent,
+                      eventType: 'tool_result',
+                      timestamp: Date.now()
+                    })
+                  }
+                }
+              }
+            } else if (parsed.type === 'assistant' && parsed.message?.content) {
+              // Full message snapshot - extract text and tool usage
+              for (const block of parsed.message.content) {
+                if (block.type === 'text' && block.text) {
+                  // Calculate new content (delta) to stream
+                  const newText = block.text
+                  if (newText !== responseContent) {
+                    // Send the new portion as a chunk
+                    const delta = newText.startsWith(responseContent)
+                      ? newText.slice(responseContent.length)
+                      : newText
+                    if (delta) {
+                      this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                        sessionId,
+                        messageId: responseId,
+                        chunk: delta,
+                        fullContent: newText,
+                        eventType: 'text',
+                        timestamp: Date.now()
+                      })
+                    }
+                    responseContent = newText
+                  }
+                } else if (block.type === 'tool_use' && block.name) {
+                  // Tool usage detected - notify for activity panel
+                  // Only emit if this is a new tool (not already tracked)
+                  if (block.name !== currentToolName) {
+                    // Complete previous tool if any
+                    if (currentToolName) {
+                      this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                        sessionId,
+                        messageId: responseId,
+                        chunk: '',
+                        fullContent: responseContent,
+                        eventType: 'tool_complete',
+                        toolName: currentToolName,
+                        timestamp: Date.now()
+                      })
+                    }
+                    // Start new tool
+                    currentToolName = block.name
+                    this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                      sessionId,
+                      messageId: responseId,
+                      chunk: '',
+                      fullContent: responseContent,
+                      eventType: 'tool_start',
+                      toolName: block.name,
+                      timestamp: Date.now()
+                    })
+                  }
+                }
+              }
+            } else if (parsed.type === 'result' && parsed.result) {
+              // Final result - stream if different from what we have
+              if (typeof parsed.result === 'string' && parsed.result !== responseContent) {
+                const delta = parsed.result.startsWith(responseContent)
+                  ? parsed.result.slice(responseContent.length)
+                  : parsed.result
+                if (delta) {
+                  this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                    sessionId,
+                    messageId: responseId,
+                    chunk: delta,
+                    fullContent: parsed.result,
+                    eventType: 'text',
+                    timestamp: Date.now()
+                  })
+                }
+                responseContent = parsed.result
+              }
+            }
+          } catch {
+            // Not valid JSON, might be partial - ignore
+          }
+        }
       })
 
       // Handle stderr (errors or debug info)
       this.activeProcess.stderr?.on('data', (data: Buffer) => {
-        console.error('[DiscoveryChat] Claude stderr:', data.toString())
+        const stderrStr = data.toString()
+        console.error('[DiscoveryChat] Claude stderr:', stderrStr)
+        // Send stderr to renderer for debugging
+        this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+          sessionId,
+          messageId: responseId,
+          chunk: `\n⚠️ ${stderrStr}\n`,
+          fullContent: responseContent,
+          eventType: 'stderr',
+          timestamp: Date.now()
+        })
       })
 
       // Handle process completion
-      this.activeProcess.on('close', (code) => {
+      this.activeProcess.on('close', async (code) => {
         this.activeProcess = null
+        console.log('[DiscoveryChat] Process closed with code:', code, 'responseContent length:', responseContent.length)
 
-        if (code === 0 && responseContent) {
+        // Success if we have response content (code can be 0 or null for signal termination)
+        if (responseContent.trim()) {
           // Add assistant response to history
           const assistantMessage: DiscoveryChatMessage = {
             id: responseId,
@@ -274,16 +747,31 @@ export class DiscoveryChatService extends EventEmitter {
           }
           session.messages.push(assistantMessage)
 
+          // Save session to disk after each exchange
+          try {
+            await saveSessionToDisk(session.projectPath, session)
+            console.log('[DiscoveryChat] Session saved after message exchange')
+          } catch (saveError) {
+            console.error('[DiscoveryChat] Failed to save session:', saveError)
+          }
+
           // Send completion event
           this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_COMPLETE, {
             sessionId,
             message: assistantMessage
           })
-        } else {
-          // Send error event
+        } else if (code !== 0 && code !== null) {
+          // Only send error if we have no content AND non-zero exit code
           this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.ERROR, {
             sessionId,
             error: `Claude process exited with code ${code}`
+          })
+        } else {
+          // Process ended but no content - might be cancelled or empty response
+          console.log('[DiscoveryChat] Process ended with no response content')
+          this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_COMPLETE, {
+            sessionId,
+            message: null
           })
         }
       })
@@ -455,11 +943,21 @@ export class DiscoveryChatService extends EventEmitter {
 
     // HEAVY SPEC Discovery Prompts
     // Goal: Extract EVERYTHING needed for "dumb worker" execution agents
+    // CRITICAL: Added explicit STOP instructions to prevent auto-generating user responses
+    const baseInstructions = `
+IMPORTANT INTERACTION RULES:
+- This is a SINGLE-TURN interaction. You respond ONCE, then STOP.
+- NEVER generate fake user responses or continue the conversation.
+- NEVER write "user:" or simulate what the user might say.
+- Ask your questions, then STOP and WAIT for the actual user to respond.
+- Each of your responses should end with your questions - nothing more.`
+
     const systemPrompt = isNew
       ? `You are a HEAVY SPEC discovery assistant helping plan a new software project.
 
 CRITICAL: After discovery, execution will be done by "dumb worker" agents with NO decision-making ability.
 You MUST extract EVERY detail now. If it's not captured here, it won't be implemented.
+${baseInstructions}
 
 Ask EXHAUSTIVE clarifying questions about:
 1. FEATURES - Every feature broken into atomic, testable units
@@ -471,12 +969,16 @@ Ask EXHAUSTIVE clarifying questions about:
 7. PERFORMANCE - Expected load, response time requirements
 8. ACCEPTANCE CRITERIA - How do we know each feature is complete?
 
-Be thorough. Ask one clear question at a time. Dig deep on each answer.
-Your goal is to make the specification SO COMPLETE that a junior developer could implement it.`
+Be thorough. Ask ONE focused question set at a time (3-5 related questions max).
+Dig deep on each answer before moving to the next topic.
+Your goal is to make the specification SO COMPLETE that a junior developer could implement it.
+
+Remember: Respond ONCE with your questions, then STOP. Do not simulate user answers.`
       : `You are a HEAVY SPEC discovery assistant for an existing codebase at: ${session.projectPath}
 
 CRITICAL: After discovery, execution will be done by "dumb worker" agents with NO decision-making ability.
 They will follow existing patterns EXACTLY. You MUST capture every detail now.
+${baseInstructions}
 
 Ask EXHAUSTIVE clarifying questions about:
 1. SPECIFIC CHANGES - What exactly needs to be added or modified?
@@ -488,18 +990,25 @@ Ask EXHAUSTIVE clarifying questions about:
 7. TESTING - What tests need to be written?
 8. EDGE CASES - Error handling, validation, boundary conditions
 
-Be thorough. Ask one clear question at a time.
+Be thorough. Ask ONE focused question set at a time (3-5 related questions max).
 Reference specific files/patterns from the codebase when possible.
-The spec must be detailed enough that no judgment calls are needed during implementation.`
+The spec must be detailed enough that no judgment calls are needed during implementation.
 
-    // Build full prompt with context
+Remember: Respond ONCE with your questions, then STOP. Do not simulate user answers.`
+
+    // Build full prompt with context - use clear delimiters to avoid role confusion
     const context = this.buildContext(session)
+    const contextSection = context.trim()
+      ? `\n<conversation_history>\n${context}\n</conversation_history>\n`
+      : ''
+
     return `${systemPrompt}
+${contextSection}
+<current_user_message>
+${userMessage}
+</current_user_message>
 
-Previous conversation:
-${context}
-
-User: ${userMessage}`
+Respond as the assistant with your questions. STOP after your response - do not generate any user messages.`
   }
 
   private sendToRenderer(channel: string, data: unknown): void {

@@ -812,7 +812,9 @@ src/
         title: s.title,
         content: '',
         editable: true
-      }))
+      })),
+      featureCount: sections.length,
+      readyForExecution: true
     }
 
     setGeneratedSpec(newSpec)
@@ -849,7 +851,9 @@ src/
           title: s.title,
           content: '',
           editable: false
-        }))
+        })),
+        featureCount: sections.length,
+        readyForExecution: true
       }
 
       setGeneratedSpec(finalSpec)

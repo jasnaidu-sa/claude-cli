@@ -191,7 +191,8 @@ export function ProjectPicker() {
           </div>
         )}
 
-        {/* Venv Status Notice */}
+        {/* Venv Status Notice - Python venv not required for discovery phase (uses Claude CLI) */}
+        {/* Keeping this commented out in case we need Python orchestrator later
         {!isVenvReady && (
           <div className="flex items-center justify-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
             <Loader2 className="h-4 w-4 text-yellow-500 animate-spin" />
@@ -200,6 +201,7 @@ export function ProjectPicker() {
             </span>
           </div>
         )}
+        */}
       </div>
     </div>
   )

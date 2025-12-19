@@ -18,6 +18,7 @@ from client import get_client
 from security import BashSecurityFilter, sanitize_output
 from context_agent import ContextAgent
 from checkpoint_agent import CheckpointAgent
+from impact_agent import ImpactAgent
 
 
 @dataclass
@@ -54,8 +55,11 @@ class AutonomousAgent:
         # Initialize harness agents
         self.context_agent = ContextAgent(config.get_project_root())
         self.checkpoint_agent = CheckpointAgent(config.get_project_root())
+        self.impact_agent = ImpactAgent(config.get_project_root())
         self.completed_features: List[str] = []
         self.features_since_last_summary = 0
+        self.current_category: Optional[str] = None
+        self.category_features: Dict[str, List[str]] = {}
 
     def emit_output(self, output_type: str, data: str):
         """Emit output to stdout for the Electron app to capture."""
@@ -288,8 +292,42 @@ Report your progress."""
                 self.completed_features.append(feature_id)
                 self.features_since_last_summary += 1
 
+                # Track category progress
+                feature_category = current_feature.get("category", "uncategorized")
+                if feature_category not in self.category_features:
+                    self.category_features[feature_category] = []
+                self.category_features[feature_category].append(feature_id)
+
                 self.save_feature_list(features)
                 self.emit_progress(f"Completed: {self.state.current_test}")
+
+                # IMPACT ASSESSMENT: Trigger 1 - High-risk feature completion
+                if checkpoint_decision.decision == "hard-checkpoint":
+                    # High-risk feature completed, analyze direct dependencies
+                    remaining = [f for f in feature_items if f.get("status") == "pending"]
+                    if remaining:
+                        self.emit_progress("Analyzing impact of high-risk feature...")
+                        impact_results = self.impact_agent.assess_impact(
+                            completed_feature=current_feature,
+                            trigger="high-risk-completion",
+                            scope="direct-dependencies",
+                            remaining_features=remaining
+                        )
+                        self.handle_impact_results(impact_results)
+
+                # IMPACT ASSESSMENT: Trigger 2 - Category completion check
+                if self.is_category_complete(feature_category, feature_items):
+                    # Category completed, analyze all remaining features
+                    remaining = [f for f in feature_items if f.get("status") == "pending"]
+                    if remaining:
+                        self.emit_progress(f"Category '{feature_category}' complete. Analyzing impact...")
+                        impact_results = self.impact_agent.assess_impact(
+                            completed_category=feature_category,
+                            trigger="category-completion",
+                            scope="all-remaining",
+                            remaining_features=remaining
+                        )
+                        self.handle_impact_results(impact_results)
 
                 # Trigger context summarization every 5 features
                 if self.features_since_last_summary >= 5:
@@ -454,6 +492,92 @@ Report your progress."""
             return True
 
         return True
+
+    def is_category_complete(self, category: str, all_features: List[Dict[str, Any]]) -> bool:
+        """Check if all features in a category are completed."""
+        category_features = [f for f in all_features if f.get("category") == category]
+
+        if not category_features:
+            return False
+
+        # Check if all features in this category are completed (passed or failed, not pending)
+        completed_features = [
+            f for f in category_features
+            if f.get("status") in ["passed", "failed", "skipped"]
+        ]
+
+        return len(completed_features) == len(category_features)
+
+    def handle_impact_results(self, assessment) -> None:
+        """
+        Handle impact assessment results and trigger re-specs.
+
+        Args:
+            assessment: ImpactAssessment object from impact agent
+        """
+        if not assessment.flagged_features:
+            self.emit_progress("No impact conflicts detected")
+            return
+
+        for flagged_data in assessment.flagged_features:
+            # Reconstruct FlaggedFeature from dict (if needed)
+            feature_id = flagged_data.feature_id if hasattr(flagged_data, 'feature_id') else flagged_data.get("feature_id")
+            recommendation = flagged_data.recommendation if hasattr(flagged_data, 'recommendation') else flagged_data.get("recommendation")
+            conflict_score = flagged_data.conflict_score if hasattr(flagged_data, 'conflict_score') else flagged_data.get("conflict_score")
+
+            if recommendation == "no-action":
+                # Log only, continue
+                self.emit_progress(f"Feature {feature_id}: No action needed")
+
+            elif recommendation == "minor-adjustment":
+                # Auto-update spec
+                proposed_changes = flagged_data.proposed_changes if hasattr(flagged_data, 'proposed_changes') else flagged_data.get("proposed_changes")
+                self.emit_output(
+                    "impact",
+                    json.dumps({
+                        "type": "auto-adjustment",
+                        "featureId": feature_id,
+                        "conflictScore": conflict_score,
+                        "changes": proposed_changes
+                    })
+                )
+                self.impact_agent.apply_adjustment(flagged_data)
+
+            elif recommendation == "moderate-revision":
+                # Soft checkpoint: show preview, allow skip
+                conflicts = flagged_data.conflicts if hasattr(flagged_data, 'conflicts') else flagged_data.get("conflicts")
+                proposed_revision = flagged_data.proposed_revision if hasattr(flagged_data, 'proposed_revision') else flagged_data.get("proposed_revision")
+
+                self.emit_output(
+                    "impact",
+                    json.dumps({
+                        "type": "soft-respec",
+                        "featureId": feature_id,
+                        "conflictScore": conflict_score,
+                        "conflicts": conflicts,
+                        "proposedRevision": proposed_revision
+                    })
+                )
+                # TODO: Wait for user approval
+                self.impact_agent.apply_revision(flagged_data)
+
+            elif recommendation == "major-respec":
+                # Hard checkpoint: require approval
+                conflicts = flagged_data.conflicts if hasattr(flagged_data, 'conflicts') else flagged_data.get("conflicts")
+                respec_reason = flagged_data.respec_reason if hasattr(flagged_data, 'respec_reason') else flagged_data.get("respec_reason")
+
+                self.emit_output(
+                    "impact",
+                    json.dumps({
+                        "type": "hard-respec",
+                        "featureId": feature_id,
+                        "conflictScore": conflict_score,
+                        "conflicts": conflicts,
+                        "reason": respec_reason
+                    })
+                )
+                # TODO: Pause and wait for explicit approval
+                self.impact_agent.apply_respec(flagged_data)
 
     async def run(self):
         """Run the agent based on configured phase."""

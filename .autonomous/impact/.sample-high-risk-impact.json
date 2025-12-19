@@ -1,0 +1,81 @@
+{
+  "trigger": "high-risk-completion",
+  "triggerFeatureId": "feat-003",
+  "triggerFeatureName": "Implement OAuth authentication",
+  "analyzedFeatures": 8,
+  "flaggedFeatures": [
+    {
+      "featureId": "feat-007",
+      "featureName": "Add user profile page",
+      "conflictScore": 75,
+      "conflicts": [
+        {
+          "conflictType": "api-break",
+          "severity": 40,
+          "description": "API endpoint /api/login may have changed",
+          "affectedFiles": ["src/api/auth/routes.ts", "src/auth/oauth.ts"],
+          "completedFeatureId": "feat-003",
+          "evidence": {
+            "expectedEndpoint": "/api/login",
+            "completedFiles": ["src/api/auth/routes.ts", "src/auth/oauth.ts"]
+          }
+        },
+        {
+          "conflictType": "resource-collision",
+          "severity": 20,
+          "description": "2 files modified by both features",
+          "affectedFiles": ["src/services/user-service.ts", "src/types/user.ts"],
+          "completedFeatureId": "feat-003",
+          "evidence": {
+            "overlappingFiles": ["src/services/user-service.ts", "src/types/user.ts"]
+          }
+        },
+        {
+          "conflictType": "arch-drift",
+          "severity": 15,
+          "description": "Architecture mismatch in auth: oauth vs jwt",
+          "affectedFiles": ["src/auth/oauth.ts"],
+          "completedFeatureId": "feat-003",
+          "evidence": {
+            "patternType": "auth",
+            "completedPattern": "oauth",
+            "futurePattern": "jwt"
+          }
+        }
+      ],
+      "recommendation": "moderate-revision",
+      "proposedRevision": "- Verify API endpoint /api/login is still valid after feat-003\n- Resolve file collision in src/services/user-service.ts, src/types/user.ts\n- Adjust architecture to match oauth pattern instead of jwt",
+      "dependencyChain": ["feat-003", "feat-007"]
+    },
+    {
+      "featureId": "feat-009",
+      "featureName": "Password reset flow",
+      "conflictScore": 45,
+      "conflicts": [
+        {
+          "conflictType": "dependency-invalid",
+          "severity": 35,
+          "description": "Depends on failed feature feat-003",
+          "affectedFiles": ["src/auth/oauth.ts"],
+          "completedFeatureId": "feat-003",
+          "evidence": {
+            "dependencyStatus": "failed",
+            "dependencyId": "feat-003"
+          }
+        }
+      ],
+      "recommendation": "minor-adjustment",
+      "proposedChanges": {
+        "endpoints": [
+          {
+            "old": "/api/reset-password",
+            "action": "verify-or-update"
+          }
+        ]
+      },
+      "dependencyChain": ["feat-003", "feat-009"]
+    }
+  ],
+  "timestamp": 1734610000000,
+  "analysisTimeMs": 450
+}

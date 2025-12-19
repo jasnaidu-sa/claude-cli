@@ -1,0 +1,49 @@
+{
+  "flaggedFeatures": [
+    {
+      "featureId": "feat-007",
+      "status": "pending-revision",
+      "conflictScore": 75,
+      "recommendation": "moderate-revision",
+      "flaggedAt": 1734610000000,
+      "flaggedBy": "feat-003",
+      "resolvedAt": null
+    },
+    {
+      "featureId": "feat-009",
+      "status": "revised",
+      "conflictScore": 45,
+      "recommendation": "minor-adjustment",
+      "flaggedAt": 1734610500000,
+      "flaggedBy": "feat-003",
+      "resolvedAt": 1734610600000,
+      "resolution": "auto-adjusted"
+    },
+    {
+      "featureId": "feat-012",
+      "status": "revised",
+      "conflictScore": 35,
+      "recommendation": "minor-adjustment",
+      "flaggedAt": 1734611000000,
+      "flaggedBy": "category-auth",
+      "resolvedAt": 1734611100000,
+      "resolution": "auto-adjusted"
+    },
+    {
+      "featureId": "feat-015",
+      "status": "pending-revision",
+      "conflictScore": 85,
+      "recommendation": "major-respec",
+      "flaggedAt": 1734611500000,
+      "flaggedBy": "feat-014",
+      "resolvedAt": null
+    }
+  ],
+  "stats": {
+    "totalFlagged": 4,
+    "pendingRevision": 2,
+    "autoAdjusted": 2,
+    "manuallyRevised": 0,
+    "majorRespecs": 1
+  }
+}

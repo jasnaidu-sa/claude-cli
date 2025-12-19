@@ -195,18 +195,78 @@ export interface ElectronAPI {
 
   // Discovery Chat
   discovery: {
+    checkExistingSession: (projectPath: string) => Promise<{ success: boolean; exists?: boolean; session?: ExistingSessionInfo; error?: string }>
     createSession: (projectPath: string, isNewProject: boolean) => Promise<{ success: boolean; session?: DiscoverySession; error?: string }>
+    createFreshSession: (projectPath: string, isNewProject: boolean) => Promise<{ success: boolean; session?: DiscoverySession; error?: string }>
     sendMessage: (sessionId: string, content: string) => Promise<{ success: boolean; error?: string }>
     getMessages: (sessionId: string) => Promise<{ success: boolean; messages?: DiscoveryChatMessage[]; error?: string }>
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: DiscoverySession | null; error?: string }>
     cancelRequest: () => Promise<{ success: boolean; error?: string }>
     closeSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>
     updateAgentStatus: (sessionId: string, agentName: string, status: string, output?: string, error?: string) => Promise<{ success: boolean; error?: string }>
+    // Draft management
+    listDrafts: (projectPath: string) => Promise<{ success: boolean; drafts?: DraftMetadata[]; error?: string }>
+    loadDraft: (projectPath: string, draftId: string) => Promise<{ success: boolean; session?: DiscoverySession; error?: string }>
+    deleteDraft: (projectPath: string, draftId: string) => Promise<{ success: boolean; error?: string }>
+    // Event listeners
     onResponseChunk: (callback: (data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => void) => () => void
     onResponseComplete: (callback: (data: { sessionId: string; message: DiscoveryChatMessage }) => void) => () => void
     onAgentStatus: (callback: (data: { sessionId: string; agent: DiscoveryAgentStatus }) => void) => () => void
     onError: (callback: (data: { sessionId: string; error: string }) => void) => () => void
   }
+
+  // Preflight checks
+  preflight: {
+    checkApiKey: () => Promise<{ hasKey: boolean; authMethod?: string; keyPreview?: string | null; error?: string }>
+    checkClaudeCli: () => Promise<{ available: boolean; version?: string; error?: string }>
+    checkGitStatus: (projectPath: string) => Promise<{ isRepo: boolean; clean: boolean; uncommitted: number; files?: string[]; error?: string }>
+    checkPython: () => Promise<{ available: boolean; version?: string; command?: string; meetsMinimum?: boolean; error?: string }>
+  }
+
+  // Journey analysis (Phase 1 - codebase analysis for brownfield projects)
+  journey: {
+    startAnalysis: (projectPath: string) => Promise<{ success: boolean; taskId?: string; error?: string }>
+    cancelAnalysis: (projectPath: string) => Promise<{ success: boolean; error?: string }>
+    getStatus: (projectPath: string) => Promise<{ inProgress: boolean; status?: string }>
+    onComplete: (callback: (data: { projectPath: string; success: boolean; analysis?: JourneyAnalysisResult; error?: string }) => void) => () => void
+    onStatus: (callback: (data: { projectPath: string; status: string }) => void) => () => void
+  }
+
+  // Spec builder (Phase 3 - generate detailed specification)
+  specBuilder: {
+    buildSpec: (projectPath: string, conversationContext: string, journeyContext?: string) => Promise<{ success: boolean; taskId?: string; error?: string }>
+    cancel: (projectPath: string) => Promise<{ success: boolean; error?: string }>
+    getStatus: (projectPath: string) => Promise<{ inProgress: boolean; status?: string }>
+    onComplete: (callback: (data: { projectPath: string; success: boolean; spec?: GeneratedSpecResult; error?: string }) => void) => () => void
+    onStatus: (callback: (data: { projectPath: string; status: string }) => void) => () => void
+  }
+}
+
+// Journey Analysis types
+export interface JourneyAnalysisResult {
+  completed: boolean
+  userFlows: string[]
+  entryPoints: string[]
+  dataModels: string[]
+  techStack: string[]
+  patterns: string[]
+  summary: string
+}
+
+// Generated Spec types
+export interface GeneratedSpecResult {
+  markdown: string
+  appSpecTxt: string
+  sections: SpecSectionResult[]
+  featureCount: number
+  readyForExecution: boolean
+}
+
+export interface SpecSectionResult {
+  id: string
+  title: string
+  content: string
+  editable: boolean
 }
 
 // Discovery Chat types
@@ -231,6 +291,33 @@ export interface DiscoverySession {
   messages: DiscoveryChatMessage[]
   agentStatuses: DiscoveryAgentStatus[]
   createdAt: number
+}
+
+// Existing session info (for resume dialog)
+export interface ExistingSessionInfo {
+  id: string
+  projectPath: string
+  isNewProject: boolean
+  messageCount: number
+  userMessageCount: number
+  assistantMessageCount: number
+  createdAt: number
+  discoveryReady?: boolean
+}
+
+// Draft metadata for timeline view
+export interface DraftMetadata {
+  id: string
+  name: string
+  description: string
+  createdAt: number
+  updatedAt: number
+  messageCount: number
+  userMessageCount: number
+  assistantMessageCount: number
+  discoveryReady: boolean
+  isNewProject: boolean
+  preview: string
 }
 
 // Workflow options types (matching workflow-manager.ts)
@@ -449,8 +536,12 @@ const electronAPI: ElectronAPI = {
 
   // Discovery Chat
   discovery: {
+    checkExistingSession: (projectPath: string) =>
+      ipcRenderer.invoke('discovery:check-existing-session', projectPath),
     createSession: (projectPath: string, isNewProject: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_CREATE_SESSION, projectPath, isNewProject),
+    createFreshSession: (projectPath: string, isNewProject: boolean) =>
+      ipcRenderer.invoke('discovery:create-fresh-session', projectPath, isNewProject),
     sendMessage: (sessionId: string, content: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_SEND_MESSAGE, sessionId, content),
     getMessages: (sessionId: string) =>
@@ -463,6 +554,13 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_CLOSE_SESSION, sessionId),
     updateAgentStatus: (sessionId: string, agentName: string, status: string, output?: string, error?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.DISCOVERY_UPDATE_AGENT_STATUS, sessionId, agentName, status, output, error),
+    // Draft management
+    listDrafts: (projectPath: string) =>
+      ipcRenderer.invoke('discovery:list-drafts', projectPath),
+    loadDraft: (projectPath: string, draftId: string) =>
+      ipcRenderer.invoke('discovery:load-draft', projectPath, draftId),
+    deleteDraft: (projectPath: string, draftId: string) =>
+      ipcRenderer.invoke('discovery:delete-draft', projectPath, draftId),
     // Event listeners
     onResponseChunk: (callback: (data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => void) => {
       const handler = (_event: unknown, data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => callback(data)
@@ -483,6 +581,49 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, data: { sessionId: string; error: string }) => callback(data)
       ipcRenderer.on(IPC_CHANNELS.DISCOVERY_ERROR, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.DISCOVERY_ERROR, handler)
+    }
+  },
+
+  // Preflight checks
+  preflight: {
+    checkApiKey: () => ipcRenderer.invoke('preflight:check-api-key'),
+    checkClaudeCli: () => ipcRenderer.invoke('preflight:check-claude-cli'),
+    checkGitStatus: (projectPath: string) => ipcRenderer.invoke('preflight:check-git-status', projectPath),
+    checkPython: () => ipcRenderer.invoke('preflight:check-python')
+  },
+
+  // Journey analysis (Phase 1 - codebase analysis for brownfield projects)
+  journey: {
+    startAnalysis: (projectPath: string) => ipcRenderer.invoke('journey:start-analysis', projectPath),
+    cancelAnalysis: (projectPath: string) => ipcRenderer.invoke('journey:cancel', projectPath),
+    getStatus: (projectPath: string) => ipcRenderer.invoke('journey:get-status', projectPath),
+    onComplete: (callback: (data: { projectPath: string; success: boolean; analysis?: JourneyAnalysisResult; error?: string }) => void) => {
+      const handler = (_event: unknown, data: { projectPath: string; success: boolean; analysis?: JourneyAnalysisResult; error?: string }) => callback(data)
+      ipcRenderer.on('journey:complete', handler)
+      return () => ipcRenderer.removeListener('journey:complete', handler)
+    },
+    onStatus: (callback: (data: { projectPath: string; status: string }) => void) => {
+      const handler = (_event: unknown, data: { projectPath: string; status: string }) => callback(data)
+      ipcRenderer.on('journey:status', handler)
+      return () => ipcRenderer.removeListener('journey:status', handler)
+    }
+  },
+
+  // Spec builder (Phase 3 - generate detailed specification)
+  specBuilder: {
+    buildSpec: (projectPath: string, conversationContext: string, journeyContext?: string) =>
+      ipcRenderer.invoke('spec-builder:build', projectPath, conversationContext, journeyContext),
+    cancel: (projectPath: string) => ipcRenderer.invoke('spec-builder:cancel', projectPath),
+    getStatus: (projectPath: string) => ipcRenderer.invoke('spec-builder:get-status', projectPath),
+    onComplete: (callback: (data: { projectPath: string; success: boolean; spec?: GeneratedSpecResult; error?: string }) => void) => {
+      const handler = (_event: unknown, data: { projectPath: string; success: boolean; spec?: GeneratedSpecResult; error?: string }) => callback(data)
+      ipcRenderer.on('spec-builder:complete', handler)
+      return () => ipcRenderer.removeListener('spec-builder:complete', handler)
+    },
+    onStatus: (callback: (data: { projectPath: string; status: string }) => void) => {
+      const handler = (_event: unknown, data: { projectPath: string; status: string }) => callback(data)
+      ipcRenderer.on('spec-builder:status', handler)
+      return () => ipcRenderer.removeListener('spec-builder:status', handler)
     }
   }
 }

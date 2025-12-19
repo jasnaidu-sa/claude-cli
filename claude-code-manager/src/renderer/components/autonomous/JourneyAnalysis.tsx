@@ -160,7 +160,7 @@ export function JourneyAnalysis() {
         ) : analyzing ? (
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-2 py-8">
-              <Loader2 className="h-6 w-6 animate-spin text-amber-500" />
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
               <span>{statusText}</span>
             </div>
 
@@ -180,7 +180,7 @@ export function JourneyAnalysis() {
         ) : journeyAnalysis ? (
           <div className="space-y-4">
             <div className="bg-secondary/50 rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2 text-green-500">
+              <div className="flex items-center gap-2 text-emerald-500">
                 <CheckCircle className="h-5 w-5" />
                 <span className="font-medium">Analysis Complete</span>
               </div>
@@ -202,7 +202,7 @@ export function JourneyAnalysis() {
                   <p className="text-xs text-muted-foreground mb-1">Tech Stack:</p>
                   <div className="flex flex-wrap gap-1">
                     {journeyAnalysis.techStack.map((tech, i) => (
-                      <span key={i} className="text-xs bg-amber-500/10 text-amber-500 px-2 py-0.5 rounded">
+                      <span key={i} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">
                         {tech}
                       </span>
                     ))}
@@ -227,7 +227,7 @@ function AnalysisItem({ icon: Icon, label }: { icon: React.ElementType; label: s
     <div className="flex items-center gap-2 p-2 bg-secondary/30 rounded">
       <Icon className="h-4 w-4 text-muted-foreground" />
       <span className="text-sm flex-1">{label}</span>
-      <Loader2 className="h-3 w-3 animate-spin text-amber-500" />
+      <Loader2 className="h-3 w-3 animate-spin text-primary" />
     </div>
   )
 }

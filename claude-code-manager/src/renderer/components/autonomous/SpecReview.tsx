@@ -602,7 +602,7 @@ function AgentStatusDisplay({ agents }: AgentStatusDisplayProps) {
   const getStatusColor = (status: AgentStatus['status']): string => {
     switch (status) {
       case 'running':
-        return 'bg-blue-500/20 text-blue-500'
+        return 'bg-primary/20 text-primary'
       case 'complete':
         return 'bg-emerald-500/20 text-emerald-500'
       case 'error':
@@ -858,7 +858,33 @@ src/
 
       setGeneratedSpec(finalSpec)
 
-      // Close dialog and proceed
+      // Save spec files to disk for Python orchestrator
+      if (selectedProject?.path) {
+        const autonomousDir = `${selectedProject.path}/.autonomous`
+
+        // Save app_spec.md (markdown version)
+        const specMdResult = await window.electron.files.writeFile(
+          `${autonomousDir}/app_spec.md`,
+          displaySpec
+        )
+        if (!specMdResult.success) {
+          console.error('Failed to save app_spec.md:', specMdResult.error)
+        }
+
+        // Save app_spec.txt (plain text version for Python)
+        const specTxtResult = await window.electron.files.writeFile(
+          `${autonomousDir}/app_spec.txt`,
+          appSpecTxt
+        )
+        if (!specTxtResult.success) {
+          console.error('Failed to save app_spec.txt:', specTxtResult.error)
+        }
+
+        console.log('[SpecReview] Spec files saved to disk')
+      }
+
+      // Close dialog and proceed to execution phase
+      // The ExecutionDashboard will auto-start the Python orchestrator
       setShowConfirmDialog(false)
       goToNextPhase()
     } catch (error) {
@@ -1058,8 +1084,8 @@ src/
             </div>
 
             {/* Info Box */}
-            <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <p className="text-xs text-blue-400">
+            <div className="mt-4 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+              <p className="text-xs text-primary/80">
                 <strong>Note:</strong> Once approved, the spec will be converted to
                 app_spec.txt format and the autonomous coding process will begin.
               </p>

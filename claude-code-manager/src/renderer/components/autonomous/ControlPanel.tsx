@@ -230,7 +230,7 @@ export function ControlPanel({ workflow, onRevalidateSchema }: ControlPanelProps
             {workflow.schemaValidation ? (
               workflow.schemaValidation.valid ? (
                 <>
-                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
                   <span className="text-sm">Schema valid</span>
                 </>
               ) : (

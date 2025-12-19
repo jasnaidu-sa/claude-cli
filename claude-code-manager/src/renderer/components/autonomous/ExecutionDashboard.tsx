@@ -147,9 +147,9 @@ export function ExecutionDashboard() {
     }
   }, [progress])
 
-  // Auto-create workflow when component mounts with generatedSpec but no activeWorkflow
+  // Auto-create workflow and start execution when component mounts with generatedSpec but no activeWorkflow
   useEffect(() => {
-    const autoCreateWorkflow = async () => {
+    const autoCreateAndStartWorkflow = async () => {
       if (!selectedProject || !generatedSpec || activeWorkflowId || isCreatingWorkflow) {
         return
       }
@@ -167,6 +167,27 @@ export function ExecutionDashboard() {
 
         if (workflow) {
           setActiveWorkflow(workflow.id)
+
+          // Auto-start the orchestrator after workflow creation
+          // Reset timer on new start
+          startTimeRef.current = null
+          setElapsedTime(0)
+
+          // Delay slightly to allow state to settle
+          setTimeout(async () => {
+            try {
+              await startOrchestrator({
+                projectPath: selectedProject.path,
+                workflowId: workflow.id,
+                phase: 'implementation',
+                model: workflow.model
+              })
+              console.log('[ExecutionDashboard] Auto-started orchestrator for workflow:', workflow.id)
+            } catch (startErr) {
+              console.error('[ExecutionDashboard] Failed to auto-start orchestrator:', startErr)
+              setWorkflowError('Workflow created but failed to start execution. Click Start to try again.')
+            }
+          }, 500)
         } else {
           setWorkflowError('Failed to create workflow. Please try again.')
         }
@@ -178,8 +199,8 @@ export function ExecutionDashboard() {
       }
     }
 
-    autoCreateWorkflow()
-  }, [selectedProject, generatedSpec, activeWorkflowId, isCreatingWorkflow, createWorkflow, setActiveWorkflow])
+    autoCreateAndStartWorkflow()
+  }, [selectedProject, generatedSpec, activeWorkflowId, isCreatingWorkflow, createWorkflow, setActiveWorkflow, startOrchestrator])
 
   // Timer for elapsed time
   useEffect(() => {
@@ -354,7 +375,7 @@ export function ExecutionDashboard() {
             'h-3 w-3 rounded-full',
             activeSession?.status === 'running' && 'bg-emerald-500 animate-pulse',
             activeSession?.status === 'paused' && 'bg-yellow-500',
-            activeSession?.status === 'starting' && 'bg-blue-500 animate-pulse',
+            activeSession?.status === 'starting' && 'bg-primary animate-pulse',
             activeSession?.status === 'error' && 'bg-red-500',
             !activeSession && 'bg-secondary'
           )} />

@@ -231,9 +231,9 @@ export function ProjectPicker() {
 
           {/* Loading overlay for session check */}
           {isCheckingSession && (
-            <div className="flex items-center justify-center gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-              <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />
-              <span className="text-sm text-amber-500">
+            <div className="flex items-center justify-center gap-2 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+              <Loader2 className="h-4 w-4 text-primary animate-spin" />
+              <span className="text-sm text-primary">
                 Checking for existing session...
               </span>
             </div>
@@ -247,13 +247,13 @@ export function ProjectPicker() {
               disabled={isDisabled}
               className={cn(
                 'flex flex-col items-center p-8 rounded-lg border-2 border-dashed',
-                'hover:border-amber-500 hover:bg-amber-500/5 transition-colors',
-                'focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2',
+                'hover:border-primary hover:bg-primary/5 transition-colors',
+                'focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
                 isDisabled && 'opacity-50 cursor-not-allowed'
               )}
             >
-              <div className="h-16 w-16 rounded-full bg-emerald-500/10 flex items-center justify-center mb-4">
-                <FolderPlus className="h-8 w-8 text-emerald-500" />
+              <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                <FolderPlus className="h-8 w-8 text-primary" />
               </div>
               <h3 className="font-medium text-lg mb-1">New Project</h3>
               <p className="text-sm text-muted-foreground text-center">
@@ -267,13 +267,13 @@ export function ProjectPicker() {
               disabled={isDisabled}
               className={cn(
                 'flex flex-col items-center p-8 rounded-lg border-2 border-dashed',
-                'hover:border-amber-500 hover:bg-amber-500/5 transition-colors',
-                'focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2',
+                'hover:border-primary hover:bg-primary/5 transition-colors',
+                'focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
                 isDisabled && 'opacity-50 cursor-not-allowed'
               )}
             >
-              <div className="h-16 w-16 rounded-full bg-amber-500/10 flex items-center justify-center mb-4">
-                <FolderOpen className="h-8 w-8 text-amber-500" />
+              <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                <FolderOpen className="h-8 w-8 text-primary" />
               </div>
               <h3 className="font-medium text-lg mb-1">Existing Project</h3>
               <p className="text-sm text-muted-foreground text-center">
@@ -298,7 +298,7 @@ export function ProjectPicker() {
                     className={cn(
                       'w-full flex items-center justify-between p-3 rounded-lg',
                       'bg-secondary/50 hover:bg-secondary transition-colors',
-                      'focus:outline-none focus:ring-2 focus:ring-amber-500',
+                      'focus:outline-none focus:ring-2 focus:ring-primary',
                       isDisabled && 'opacity-50 cursor-not-allowed'
                     )}
                   >
@@ -335,8 +335,8 @@ export function ProjectPicker() {
           <div className="relative bg-card border border-border rounded-lg shadow-xl max-w-2xl w-full mx-4 p-6 animate-slide-up max-h-[80vh] flex flex-col">
             {/* Header */}
             <div className="flex items-start gap-4 mb-4">
-              <div className="h-10 w-10 rounded-full bg-amber-500/10 flex items-center justify-center flex-shrink-0">
-                <FileText className="h-5 w-5 text-amber-500" />
+              <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <FileText className="h-5 w-5 text-primary" />
               </div>
               <div className="flex-1">
                 <h3 className="text-lg font-semibold">Previous Drafts Found</h3>
@@ -354,9 +354,9 @@ export function ProjectPicker() {
                   onClick={() => handleSelectDraft(draft.id)}
                   className={cn(
                     'w-full text-left p-4 rounded-lg border transition-all',
-                    'hover:border-amber-500 hover:bg-amber-500/5',
-                    'focus:outline-none focus:ring-2 focus:ring-amber-500',
-                    index === 0 && 'border-amber-500/50 bg-amber-500/5'
+                    'hover:border-primary hover:bg-primary/5',
+                    'focus:outline-none focus:ring-2 focus:ring-primary',
+                    index === 0 && 'border-primary/50 bg-primary/5'
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
@@ -366,8 +366,8 @@ export function ProjectPicker() {
                       <div className="flex flex-col items-center pt-1">
                         <div className={cn(
                           'h-3 w-3 rounded-full',
-                          draft.discoveryReady ? 'bg-emerald-500' : 'bg-amber-500',
-                          index === 0 && 'ring-2 ring-amber-500/30'
+                          draft.discoveryReady ? 'bg-emerald-500' : 'bg-primary',
+                          index === 0 && 'ring-2 ring-primary/30'
                         )} />
                         {index < draftsDialog.drafts.length - 1 && (
                           <div className="w-0.5 h-8 bg-border mt-1" />
@@ -379,7 +379,7 @@ export function ProjectPicker() {
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-medium text-sm truncate">{draft.name}</span>
                           {index === 0 && (
-                            <span className="text-xs bg-amber-500/20 text-amber-500 px-1.5 py-0.5 rounded">
+                            <span className="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded">
                               Current
                             </span>
                           )}
@@ -437,7 +437,7 @@ export function ProjectPicker() {
                 Start Fresh
               </Button>
               <Button
-                className="flex-1 bg-amber-500 hover:bg-amber-600 text-white"
+                className="flex-1 bg-primary hover:bg-primary/90 text-white"
                 onClick={() => handleSelectDraft(draftsDialog.drafts[0]?.id || 'current')}
               >
                 <Play className="h-4 w-4 mr-2" />

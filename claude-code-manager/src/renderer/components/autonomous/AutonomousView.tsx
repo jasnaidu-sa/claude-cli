@@ -166,7 +166,7 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
               <FolderOpen className="h-3 w-3" />
               <span>{selectedProject.name}</span>
               {selectedProject.isNew && (
-                <span className="text-emerald-500">(New)</span>
+                <span className="text-primary">(New)</span>
               )}
             </div>
           )}

@@ -30,7 +30,7 @@ export function CategoryProgress({ categories }: CategoryProgressProps) {
             <th className="text-left py-2 px-3 font-medium">Category</th>
             <th className="text-center py-2 px-3 font-medium w-16">
               <span className="sr-only">Passing</span>
-              <CheckCircle className="h-3.5 w-3.5 text-green-500 mx-auto" />
+              <CheckCircle className="h-3.5 w-3.5 text-emerald-500 mx-auto" />
             </th>
             <th className="text-center py-2 px-3 font-medium w-16">
               <span className="sr-only">Failing</span>
@@ -56,14 +56,14 @@ export function CategoryProgress({ categories }: CategoryProgressProps) {
                 <div className="flex items-center gap-2">
                   <Circle className={cn(
                     'h-2 w-2 fill-current',
-                    category.percentage === 100 ? 'text-green-500' :
-                    category.percentage > 0 ? 'text-blue-500' :
+                    category.percentage === 100 ? 'text-emerald-500' :
+                    category.percentage > 0 ? 'text-primary' :
                     'text-muted-foreground'
                   )} />
                   <span className="truncate">{category.name}</span>
                 </div>
               </td>
-              <td className="py-2 px-3 text-center text-green-500 font-medium">
+              <td className="py-2 px-3 text-center text-emerald-500 font-medium">
                 {category.passing}
               </td>
               <td className="py-2 px-3 text-center text-red-500 font-medium">
@@ -78,7 +78,7 @@ export function CategoryProgress({ categories }: CategoryProgressProps) {
                     <div
                       className={cn(
                         'h-full transition-all',
-                        category.percentage === 100 ? 'bg-green-500' : 'bg-primary'
+                        category.percentage === 100 ? 'bg-emerald-500' : 'bg-primary'
                       )}
                       style={{ width: `${category.percentage}%` }}
                     />

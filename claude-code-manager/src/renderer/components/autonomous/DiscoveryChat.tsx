@@ -338,7 +338,7 @@ export function DiscoveryChat() {
   const getAgentStatusColor = (status: DiscoveryAgentStatus['status']): string => {
     switch (status) {
       case 'running':
-        return 'bg-blue-500/20 text-blue-500'
+        return 'bg-primary/20 text-primary'
       case 'complete':
         return 'bg-emerald-500/20 text-emerald-500'
       case 'error':
@@ -395,7 +395,7 @@ export function DiscoveryChat() {
                 className={cn(
                   'max-w-[80%] rounded-lg px-4 py-2',
                   message.role === 'user'
-                    ? 'bg-primary text-primary-foreground'
+                    ? 'bg-primary text-white'
                     : message.role === 'system'
                     ? 'bg-secondary/50 text-muted-foreground text-sm italic'
                     : 'bg-secondary'
@@ -513,11 +513,11 @@ export function DiscoveryChat() {
         <div className="mb-4">
           <h3 className="font-medium text-sm mb-2 flex items-center gap-2">
             {isProcessing ? (
-              <Loader2 className="h-4 w-4 text-amber-500 animate-spin" />
+              <Loader2 className="h-4 w-4 text-primary animate-spin" />
             ) : (
               <Cpu className="h-4 w-4 text-muted-foreground" />
             )}
-            <span className={isProcessing ? 'text-amber-500' : ''}>
+            <span className={isProcessing ? 'text-primary' : ''}>
               {isProcessing ? 'Claude is working...' : 'Claude Activity'}
             </span>
           </h3>
@@ -529,11 +529,11 @@ export function DiscoveryChat() {
                     key={`${event.timestamp}-${idx}`}
                     className={cn(
                       'break-words',
-                      event.type === 'system' && 'text-cyan-400',
-                      event.type === 'tool_start' && 'text-blue-400',
+                      event.type === 'system' && 'text-primary',
+                      event.type === 'tool_start' && 'text-orange-400',
                       event.type === 'tool_complete' && 'text-emerald-400',
                       event.type === 'tool_result' && 'text-muted-foreground',
-                      event.type === 'thinking' && 'text-purple-400',
+                      event.type === 'thinking' && 'text-primary/80',
                       event.type === 'stderr' && 'text-yellow-500'
                     )}
                   >
@@ -555,7 +555,7 @@ export function DiscoveryChat() {
               {activeTools.filter(t => t.status === 'running').map(tool => (
                 <span
                   key={tool.name}
-                  className="inline-flex items-center gap-1 text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded"
+                  className="inline-flex items-center gap-1 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded"
                 >
                   <Loader2 className="h-2 w-2 animate-spin" />
                   {tool.name}

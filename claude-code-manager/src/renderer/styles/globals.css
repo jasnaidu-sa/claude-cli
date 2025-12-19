@@ -4,44 +4,62 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    /* Claude light mode - warm cream/beige palette */
+    --background: 45 30% 96%;       /* Warm cream like #eeece2 */
+    --foreground: 40 20% 20%;       /* Warm dark brown like #3d3929 */
+    --card: 45 25% 98%;             /* Slightly lighter cream */
+    --card-foreground: 40 20% 15%;
+
+    /* Terra cotta primary */
+    --primary: 14 64% 60%;          /* #da7756 */
+    --primary-foreground: 0 0% 100%;
+
+    /* Warm neutrals */
+    --secondary: 40 15% 92%;
+    --secondary-foreground: 40 20% 25%;
+    --muted: 40 15% 92%;
+    --muted-foreground: 40 10% 45%;
+    --accent: 40 15% 92%;
+    --accent-foreground: 40 20% 20%;
+
+    /* Destructive stays red */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Warm borders */
+    --border: 40 15% 85%;
+    --input: 40 15% 85%;
+    --ring: 14 64% 60%;
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
-    --card: 222 47% 8%;
-    --card-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 50.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    /* Claude dark mode - warm neutral grays (NOT blue!) */
+    --background: 30 5% 10%;        /* Warm dark gray */
+    --foreground: 35 15% 90%;       /* Warm off-white */
+    --card: 30 5% 12%;              /* Slightly lighter card */
+    --card-foreground: 35 15% 95%;
+
+    /* Terra cotta primary */
+    --primary: 14 64% 60%;          /* #da7756 */
+    --primary-foreground: 0 0% 100%;
+
+    /* Warm neutral secondaries */
+    --secondary: 30 5% 18%;
+    --secondary-foreground: 35 15% 90%;
+    --muted: 30 5% 15%;
+    --muted-foreground: 35 10% 60%;
+    --accent: 30 5% 18%;
+    --accent-foreground: 35 15% 90%;
+
+    /* Destructive */
+    --destructive: 0 63% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Warm borders */
+    --border: 30 5% 20%;
+    --input: 30 5% 20%;
+    --ring: 14 64% 60%;
   }
 }
 
@@ -133,7 +151,7 @@
 }
 
 .status-editing {
-  @apply bg-blue-500 animate-pulse;
+  @apply bg-amber-500 animate-pulse;
 }
 
 .status-error {

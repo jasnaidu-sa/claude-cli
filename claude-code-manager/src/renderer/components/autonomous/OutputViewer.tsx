@@ -41,7 +41,7 @@ function getOutputColor(type: OrchestratorOutput['type']): string {
     case 'stderr':
       return 'text-red-400'
     case 'system':
-      return 'text-blue-400'
+      return 'text-amber-400'
     case 'progress':
       return 'text-green-400'
     default:

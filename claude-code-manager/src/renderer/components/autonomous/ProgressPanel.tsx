@@ -96,7 +96,7 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
             <div
               className={cn(
                 'h-full transition-all duration-500 ease-out',
-                percentage === 100 ? 'bg-green-500' : 'bg-primary'
+                percentage === 100 ? 'bg-emerald-500' : 'bg-primary'
               )}
               style={{ width: `${percentage}%` }}
             />
@@ -104,10 +104,10 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
 
           {/* Stats */}
           <div className="grid grid-cols-3 gap-3">
-            <div className="flex items-center gap-2 p-2 bg-green-500/10 rounded-md">
-              <CheckCircle className="h-4 w-4 text-green-500" />
+            <div className="flex items-center gap-2 p-2 bg-emerald-500/10 rounded-md">
+              <CheckCircle className="h-4 w-4 text-emerald-500" />
               <div>
-                <div className="text-lg font-semibold text-green-500">{passing}</div>
+                <div className="text-lg font-semibold text-emerald-500">{passing}</div>
                 <div className="text-xs text-muted-foreground">Passing</div>
               </div>
             </div>

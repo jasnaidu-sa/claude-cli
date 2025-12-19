@@ -38,13 +38,13 @@ function getStatusIcon(status: WorkflowStatus) {
     case 'validating':
       return <RefreshCw className="h-4 w-4 text-yellow-500 animate-spin" />
     case 'generating':
-      return <RefreshCw className="h-4 w-4 text-blue-500 animate-spin" />
+      return <RefreshCw className="h-4 w-4 text-primary animate-spin" />
     case 'implementing':
-      return <Circle className="h-4 w-4 text-green-500 fill-green-500 animate-pulse" />
+      return <Circle className="h-4 w-4 text-emerald-500 fill-emerald-500 animate-pulse" />
     case 'paused':
       return <Pause className="h-4 w-4 text-yellow-500" />
     case 'completed':
-      return <CheckCircle className="h-4 w-4 text-green-500" />
+      return <CheckCircle className="h-4 w-4 text-emerald-500" />
     case 'error':
       return <AlertCircle className="h-4 w-4 text-red-500" />
     default:
@@ -145,7 +145,7 @@ export function WorkflowCard({
             <div
               className={cn(
                 'h-full transition-all duration-500',
-                percentage === 100 ? 'bg-green-500' : 'bg-primary'
+                percentage === 100 ? 'bg-emerald-500' : 'bg-primary'
               )}
               style={{ width: `${percentage}%` }}
             />

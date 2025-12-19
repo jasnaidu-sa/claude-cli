@@ -3,7 +3,9 @@
     "autonomous-orchestrator/context_agent.py",
     "autonomous-orchestrator/harness_agent.py",
     "autonomous-orchestrator/agent.py",
-    "autonomous-orchestrator/test_context_integration.py"
+    "autonomous-orchestrator/test_context_integration.py",
+    "autonomous-orchestrator/checkpoint_agent.py",
+    "autonomous-orchestrator/test_checkpoint_agent.py"
   ],
   "schemaUpdated": [
     "claude-code-manager/src/main/services/discovery-chat-service.ts",
@@ -25,7 +27,13 @@
     "claude-code-manager/src/renderer/components/autonomous/JourneyAnalysis.tsx",
     "claude-code-manager/src/renderer/components/autonomous/PreflightCheck.tsx",
     "claude-code-manager/src/renderer/components/autonomous/SpecGenerating.tsx",
-    "claude-code-manager/src/renderer/components/autonomous/SpecReview.tsx"
+    "claude-code-manager/src/renderer/components/autonomous/SpecReview.tsx",
+    "autonomous-orchestrator/harness_agent.py",
+    "autonomous-orchestrator/context_agent.py",
+    "autonomous-orchestrator/agent.py",
+    "claude-code-manager/src/main/ipc/context-handlers.ts",
+    "claude-code-manager/src/main/services/context-agent-runner.ts",
+    "claude-code-manager/src/shared/context-types.ts"
   ],
   "lastPromptTime": 0
 }

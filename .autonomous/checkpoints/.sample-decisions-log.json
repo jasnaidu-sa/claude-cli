@@ -1,0 +1,50 @@
+{
+  "decisions": [
+    {
+      "featureId": "feat-001",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1734604700000,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-002",
+      "decision": "auto-proceed",
+      "riskScore": 20,
+      "timestamp": 1734604750000,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-003",
+      "decision": "soft-checkpoint",
+      "riskScore": 65,
+      "timestamp": 1734604800000,
+      "approved": true,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-004",
+      "decision": "hard-checkpoint",
+      "riskScore": 85,
+      "timestamp": 1734604900000,
+      "approved": true,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-005",
+      "decision": "soft-checkpoint",
+      "riskScore": 45,
+      "timestamp": 1734605000000,
+      "approved": null,
+      "skipped": true
+    }
+  ],
+  "stats": {
+    "totalDecisions": 5,
+    "autoProceed": 2,
+    "softCheckpoints": 2,
+    "hardCheckpoints": 1
+  }
+}

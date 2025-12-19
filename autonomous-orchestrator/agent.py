@@ -17,6 +17,7 @@ from config import AgentConfig
 from client import get_client
 from security import BashSecurityFilter, sanitize_output
 from context_agent import ContextAgent
+from checkpoint_agent import CheckpointAgent
 
 
 @dataclass
@@ -50,8 +51,9 @@ class AutonomousAgent:
         self.output_dir = config.get_output_dir()
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize Context Agent for harness framework
+        # Initialize harness agents
         self.context_agent = ContextAgent(config.get_project_root())
+        self.checkpoint_agent = CheckpointAgent(config.get_project_root())
         self.completed_features: List[str] = []
         self.features_since_last_summary = 0
 
@@ -228,6 +230,18 @@ categorized and ready for implementation."""
             self.state.current_test = current_feature.get("name", "Unknown")
             self.emit_progress(f"Implementing: {self.state.current_test}")
 
+            # CHECKPOINT: Assess risk before execution
+            checkpoint_decision = self.checkpoint_agent.assess_risk(current_feature)
+
+            # Handle checkpoint (pause, preview, or proceed)
+            should_proceed = self.handle_checkpoint(checkpoint_decision, current_feature)
+
+            if not should_proceed:
+                # User skipped this feature
+                current_feature["status"] = "skipped"
+                self.save_feature_list(features)
+                continue
+
             # Update feature status with start time
             current_feature["status"] = "in_progress"
             current_feature["id"] = feature_id  # Ensure ID is set
@@ -385,6 +399,61 @@ Report your progress."""
 
         except Exception as e:
             self.emit_output("stderr", f"Context summarization error: {e}")
+
+    def handle_checkpoint(self, decision, feature: Dict[str, Any]) -> bool:
+        """
+        Handle checkpoint decision.
+
+        Args:
+            decision: CheckpointDecision from checkpoint agent
+            feature: Feature dict
+
+        Returns:
+            True to proceed, False to skip feature
+        """
+        if decision.decision == "auto-proceed":
+            # Low risk, proceed automatically
+            return True
+
+        elif decision.decision == "soft-checkpoint":
+            # Medium risk, show preview with skip option
+            self.emit_output(
+                "checkpoint",
+                json.dumps({
+                    "type": "soft",
+                    "featureId": feature.get("id"),
+                    "featureName": feature.get("name"),
+                    "riskScore": decision.risk_score,
+                    "reason": decision.reason,
+                    "riskFactors": decision.risk_factors.__dict__
+                })
+            )
+
+            # For now, auto-approve soft checkpoints
+            # TODO: Wait for user input via stdin or IPC
+            self.checkpoint_agent.mark_approved(feature.get("id"))
+            return True
+
+        elif decision.decision == "hard-checkpoint":
+            # High risk, require explicit approval
+            self.emit_output(
+                "checkpoint",
+                json.dumps({
+                    "type": "hard",
+                    "featureId": feature.get("id"),
+                    "featureName": feature.get("name"),
+                    "riskScore": decision.risk_score,
+                    "reason": decision.reason,
+                    "riskFactors": decision.risk_factors.__dict__
+                })
+            )
+
+            # For now, auto-approve hard checkpoints
+            # TODO: Pause and wait for explicit user approval
+            self.checkpoint_agent.mark_approved(feature.get("id"))
+            return True
+
+        return True
 
     async def run(self):
         """Run the agent based on configured phase."""

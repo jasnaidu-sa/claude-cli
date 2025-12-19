@@ -1,44 +1,38 @@
 # JourneyAnalysis.tsx
 
 ## Purpose
-Phase 1 component for automatic user journey analysis on brownfield projects. Analyzes existing codebase to understand patterns, entry points, data models, and user flows before discovery chat.
+React component for Phase 1 of the autonomous coding workflow. Displays automatic codebase analysis progress and results for existing (brownfield) projects.
 
-## Interactions
+## Key Features
+- Auto-starts analysis when component mounts
+- Shows loading state with analysis categories
+- Displays parsed analysis results (tech stack, patterns, flows)
+- Skip and retry functionality
+- Auto-advances to next phase on completion
 
-### Store Integration
+## State
+- `analyzing`: Whether analysis is in progress
+- `error`: Error message if analysis failed
+- `statusText`: Current status from agent
+
+## IPC Events
+- Calls `window.electron.journey.startAnalysis(projectPath)`
+- Listens for `journey:complete` and `journey:status` events
+- Can call `cancelAnalysis` to abort
+
+## Store Integration
 - Uses `useAutonomousStore` for:
-  - `selectedProject` - Current project being analyzed
-  - `journeyAnalysis` - Analysis results
-  - `setJourneyAnalysis` - Update analysis results
-  - `goToNextPhase` - Navigate to next phase
-  - `updateAgentStatus` - Track agent progress
+  - `selectedProject`: Current project being analyzed
+  - `journeyAnalysis`: Analysis results
+  - `setJourneyAnalysis`: Update results
+  - `goToNextPhase`: Advance workflow
+  - `updateAgentStatus`: Track agent status
 
-## Data Flow
-1. Component mounts and triggers runAnalysis()
-2. Simulates analysis (will connect to research agent)
-3. Produces JourneyAnalysis object with findings
-4. Auto-advances to discovery_chat after 1.5 seconds
-
-## JourneyAnalysis Interface
-```typescript
-interface JourneyAnalysis {
-  completed: boolean
-  userFlows: string[]      // Discovered user flows
-  entryPoints: string[]    // Main entry points
-  dataModels: string[]     // Data models found
-  techStack: string[]      // Technologies detected
-  patterns: string[]       // Architectural patterns
-  summary: string          // Human-readable summary
-}
-```
-
-## UI Elements
-- Analysis progress indicators (4 areas: Users, Entry Points, Data Models, Patterns)
-- Completion summary card with stats
-- Continue button
-
-## Phase Skipping
-This phase is automatically skipped for greenfield (new) projects since there's no existing code to analyze.
+## UI States
+1. Loading: Shows spinner with analysis categories
+2. Error: Shows error with retry/skip options
+3. Complete: Shows analysis summary with continue button
 
 ## Change History
-- 2025-12-18: Created as part of Option C architecture
+- 2024-12-19: Enhanced UI with tech stack display and status updates
+- 2024-12-18: Initial implementation

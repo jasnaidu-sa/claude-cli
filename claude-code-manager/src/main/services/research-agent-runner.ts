@@ -44,18 +44,20 @@ const AUTONOMOUS_MCP_CONFIG = {
  * Creates .mcp.json in project root with ONLY the servers needed
  * This overrides user-level MCP config to avoid tool name conflicts
  */
-async function ensureProjectMcpConfig(projectPath: string): Promise<void> {
+async function ensureProjectMcpConfig(projectPath: string): Promise<string> {
   const mcpConfigPath = path.join(projectPath, '.mcp.json')
+  console.log(`[ensureProjectMcpConfig] Checking MCP config at: ${mcpConfigPath}`)
 
   try {
     const existingContent = await fs.readFile(mcpConfigPath, 'utf-8')
     const existing = JSON.parse(existingContent)
+    console.log(`[ensureProjectMcpConfig] Found existing config:`, Object.keys(existing.mcpServers || {}))
 
-    const hasSupabase = existing.mcpServers?.supabase
     const hasPlaywright = existing.mcpServers?.playwright
 
-    if (hasSupabase && hasPlaywright) {
-      return // Already configured
+    if (hasPlaywright) {
+      console.log(`[ensureProjectMcpConfig] Config already has required servers`)
+      return mcpConfigPath // Already configured
     }
 
     const merged = {
@@ -65,8 +67,12 @@ async function ensureProjectMcpConfig(projectPath: string): Promise<void> {
       }
     }
     await fs.writeFile(mcpConfigPath, JSON.stringify(merged, null, 2))
-  } catch {
+    console.log(`[ensureProjectMcpConfig] Merged and wrote config`)
+    return mcpConfigPath
+  } catch (err) {
+    console.log(`[ensureProjectMcpConfig] No existing config, creating new one`)
     await fs.writeFile(mcpConfigPath, JSON.stringify(AUTONOMOUS_MCP_CONFIG, null, 2))
+    return mcpConfigPath
   }
 }
 
@@ -159,7 +165,7 @@ function createSafeEnv(): NodeJS.ProcessEnv {
 }
 
 // Research agent types
-export type ResearchAgentType = 'process' | 'codebase' | 'spec-builder'
+export type ResearchAgentType = 'process' | 'codebase' | 'spec-builder' | 'user-journey'
 
 // Agent status
 export type AgentStatus = 'idle' | 'running' | 'complete' | 'error'
@@ -188,6 +194,28 @@ export interface AgentTask {
 // Philosophy: ALL intelligence in planning phase. Execution agents just follow the spec.
 // The spec must be so detailed that no decision-making is required during implementation.
 const AGENT_PROMPTS: Record<ResearchAgentType, string> = {
+  'user-journey': `You are a codebase analyzer for an existing project. Your job is to QUICKLY understand the project structure and user flows.
+
+IMPORTANT: This is a FAST analysis (under 60 seconds). Focus on HIGH-LEVEL understanding, not exhaustive detail.
+
+Analyze and output JSON with these fields:
+{
+  "userFlows": ["List 3-5 main user flows/features in the app"],
+  "entryPoints": ["List main entry point files (index.ts, main.ts, App.tsx, etc)"],
+  "dataModels": ["List main data models/types used"],
+  "techStack": ["List technologies: framework, language, database, etc"],
+  "patterns": ["List 2-3 key code patterns used (e.g., Zustand store, REST API, etc)"],
+  "summary": "2-3 sentence summary of what this project does"
+}
+
+Focus on:
+1. Read package.json or similar to understand tech stack
+2. Scan main directories (src/, app/, lib/) for structure
+3. Look for router files to understand user flows
+4. Identify main data models from types/schemas
+
+Output ONLY valid JSON, no markdown or explanation.`,
+
   process: `You are a HEAVY SPEC requirements analyst. Your job is to extract EXHAUSTIVE requirements.
 
 IMPORTANT: The execution phase will use "dumb worker" agents that cannot make decisions.
@@ -402,20 +430,36 @@ export class ResearchAgentRunner extends EventEmitter {
       // SECURITY: Create minimal safe environment (no credentials)
       const safeEnv = createSafeEnv()
 
-      // Ensure project has clean MCP config with only required servers (supabase, playwright)
-      await ensureProjectMcpConfig(projectPath)
-
-      // Build path to project MCP config
-      const projectMcpConfig = path.join(projectPath, '.mcp.json')
+      // For user-journey agent, create a minimal MCP config file
+      // For other agents, ensure project has required servers
+      let mcpConfigPath: string
+      if (type === 'user-journey') {
+        // User-journey only needs file system access, no MCP servers
+        // Create a temporary minimal config file to avoid shell escaping issues
+        const minimalConfig = { mcpServers: {} }
+        const tempConfigPath = path.join(projectPath, '.mcp-minimal.json')
+        await fs.writeFile(tempConfigPath, JSON.stringify(minimalConfig, null, 2))
+        mcpConfigPath = tempConfigPath
+        console.log(`[ResearchAgent] Created minimal MCP config at: ${mcpConfigPath}`)
+      } else {
+        // Other agents may need playwright for web research
+        await ensureProjectMcpConfig(projectPath)
+        mcpConfigPath = path.join(projectPath, '.mcp.json')
+        console.log(`[ResearchAgent] Using project MCP config: ${mcpConfigPath}`)
+      }
 
       // Spawn Claude CLI
-      // Using --strict-mcp-config to ONLY use project's .mcp.json, ignoring user's MCP servers
+      // Using --strict-mcp-config to ONLY use the specified MCP config, ignoring user's MCP servers
       // This fixes "tools: Tool names must be unique" error from tool conflicts
       // SECURITY: Input passed via stdin to prevent command injection
       const { command, shellOption } = getSpawnConfig(claudePath)
+      console.log(`[ResearchAgent] Spawning ${type} agent for ${projectPath}`)
+      console.log(`[ResearchAgent] Command: ${command} --print --mcp-config=${mcpConfigPath}`)
+      console.log(`[ResearchAgent] Shell option: ${shellOption}, CWD: ${projectPath}`)
+      console.log(`[ResearchAgent] Prompt being sent:`, prompt.substring(0, 200), '...')
       const proc = spawn(command, [
         '--print',
-        `--mcp-config=${projectMcpConfig}`,
+        `--mcp-config=${mcpConfigPath}`,
         '--strict-mcp-config',
         '-'
       ], {
@@ -432,8 +476,14 @@ export class ResearchAgentRunner extends EventEmitter {
 
       // Write prompt to stdin
       if (proc.stdin) {
+        proc.stdin.on('error', (err) => {
+          console.error(`[ResearchAgent:${type}] stdin error:`, err)
+        })
         proc.stdin.write(prompt)
         proc.stdin.end()
+        console.log(`[ResearchAgent:${type}] Prompt written to stdin, length:`, prompt.length)
+      } else {
+        console.error(`[ResearchAgent:${type}] No stdin available on process`)
       }
 
       let output = ''
@@ -448,8 +498,13 @@ export class ResearchAgentRunner extends EventEmitter {
         console.error(`[ResearchAgent:${type}] stderr:`, data.toString())
       })
 
+      // Debug: Log when process spawns
+      console.log(`[ResearchAgent:${type}] Process spawned with PID:`, proc.pid)
+
       // Handle completion
       proc.on('close', (code) => {
+        console.log(`[ResearchAgent:${type}] Process closed with code:`, code)
+        console.log(`[ResearchAgent:${type}] Output length:`, output.length)
         const currentTask = this.tasks.get(taskId)
         if (currentTask?.task.result) {
           const sanitizedOutput = sanitizeOutput(output.trim())
@@ -463,6 +518,7 @@ export class ResearchAgentRunner extends EventEmitter {
           }
           currentTask.task.result.completedAt = Date.now()
 
+          console.log(`[ResearchAgent:${type}] Emitting status: ${currentTask.task.result.status}`)
           this.emit('status', {
             sessionId,
             agentName: type,
@@ -470,12 +526,14 @@ export class ResearchAgentRunner extends EventEmitter {
             output: currentTask.task.result.output,
             error: currentTask.task.result.error
           })
+          console.log(`[ResearchAgent:${type}] Emitting complete event for taskId: ${taskId}`)
           this.emit('complete', { taskId, result: currentTask.task.result })
         }
       })
 
       // Handle error
       proc.on('error', (error) => {
+        console.error(`[ResearchAgent:${type}] Process error:`, error)
         const currentTask = this.tasks.get(taskId)
         if (currentTask?.task.result) {
           currentTask.task.result.status = 'error'
@@ -574,6 +632,13 @@ export class ResearchAgentRunner extends EventEmitter {
     const systemPrompt = AGENT_PROMPTS[type]
 
     switch (type) {
+      case 'user-journey':
+        return `${systemPrompt}
+
+Project to analyze: ${projectPath}
+
+Quickly analyze this project and output JSON with user flows, entry points, data models, tech stack, patterns, and a brief summary.`
+
       case 'process':
         return `${systemPrompt}
 

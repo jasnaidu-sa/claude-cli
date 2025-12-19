@@ -34,5 +34,11 @@ Phase 2 component for the discovery conversation. Users describe what they want 
 - Minimum 4 user messages before proceeding
 - Auto-summarization for context management
 
+## Theme Integration
+- Message backgrounds use theme colors
+- Status badges use `primary` color
+- Activity panel uses theme variables
+
 ## Change History
+- 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)
 - 2025-12-18: Part of Option C architecture - conversation only mode

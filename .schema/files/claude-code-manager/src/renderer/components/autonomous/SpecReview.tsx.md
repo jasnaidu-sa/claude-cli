@@ -43,5 +43,11 @@ Phase 4 component for reviewing and approving the generated specification before
 - `featureCount` - Number of features
 - `readyForExecution` - Validation passed
 
+## Theme Integration
+- Running status spinner uses `primary` color
+- Info boxes use theme variables
+- Validation indicators use semantic colors
+
 ## Change History
+- 2025-12-19: Updated status colors to use theme variables
 - 2025-12-18: Added featureCount, readyForExecution to GeneratedSpec objects

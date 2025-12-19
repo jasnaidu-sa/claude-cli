@@ -1,0 +1,54 @@
+[
+  {
+    "id": "dec-001",
+    "featureId": "feat-002",
+    "decision": "Using Prisma ORM for database access",
+    "rationale": "Type-safe queries, excellent TypeScript integration, handles migrations",
+    "impact": [
+      "All database queries use Prisma Client",
+      "Schema changes require Prisma migrations",
+      "Can't use raw SQL easily (must use $queryRaw)"
+    ],
+    "timestamp": 1734600000000,
+    "category": "architecture"
+  },
+  {
+    "id": "dec-003",
+    "featureId": "feat-005",
+    "decision": "Storing JWT tokens in httpOnly cookies",
+    "rationale": "Prevents XSS attacks, more secure than localStorage",
+    "impact": [
+      "Frontend can't read tokens directly",
+      "Need CSRF protection",
+      "Cookie domain must match API domain"
+    ],
+    "timestamp": 1734601200000,
+    "category": "security"
+  },
+  {
+    "id": "dec-007",
+    "featureId": "feat-011",
+    "decision": "Using optimistic UI updates for profile changes",
+    "rationale": "Better UX, feels instant to user",
+    "impact": [
+      "Must handle rollback on API errors",
+      "Need loading states for actual save",
+      "Zustand store manages optimistic state"
+    ],
+    "timestamp": 1734602400000,
+    "category": "ux"
+  },
+  {
+    "id": "dec-012",
+    "featureId": "feat-021",
+    "decision": "Rate limiting per authenticated user, not per IP",
+    "rationale": "Prevents abuse from shared IPs (corporate networks, VPNs)",
+    "impact": [
+      "Rate limiter reads user ID from JWT",
+      "Anonymous users still rate-limited by IP",
+      "Need separate limits for auth vs unauth"
+    ],
+    "timestamp": 1734604000000,
+    "category": "security"
+  }
+]

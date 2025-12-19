@@ -35,7 +35,12 @@ Main view component for autonomous coding mode with phase-based routing. Orchest
 - Reset button (when not on first phase)
 - Close button
 
+## Theme Integration
+- Progress bar uses `primary` color
+- "(New)" badge uses `primary` instead of amber-500
+
 ## Change History
+- 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)
 - 2025-12-18: Added new phases (preflight, journey_analysis, spec_generating)
 - 2025-12-18: Updated PHASE_INFO with all 8 phases
 - 2025-12-18: Added imports for new phase components

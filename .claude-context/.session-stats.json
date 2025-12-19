@@ -1,0 +1,171 @@
+{
+  "totalEdits": 53,
+  "lastEdit": "2025-12-19T12:47:14.602Z",
+  "files": {
+    ".schema/files/claude-code-manager/src/main/services/discovery-chat-service.ts.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:18:05.669Z",
+      "lastEdit": "2025-12-19T07:18:05.669Z"
+    },
+    ".schema/files/claude-code-manager/src/main/ipc/discovery-handlers.ts.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:18:31.511Z",
+      "lastEdit": "2025-12-19T07:18:31.511Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/ProjectPicker.tsx.md": {
+      "edits": 2,
+      "firstEdit": "2025-12-19T07:19:04.579Z",
+      "lastEdit": "2025-12-19T11:23:35.357Z"
+    },
+    ".schema/files/claude-code-manager/src/preload/index.ts.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:19:48.810Z",
+      "lastEdit": "2025-12-19T07:19:48.810Z"
+    },
+    ".claude-context/WORKING.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:45:54.512Z",
+      "lastEdit": "2025-12-19T07:45:54.512Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/CategoryProgress.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:18:28.665Z",
+      "lastEdit": "2025-12-19T11:18:28.665Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/CompletionSummary.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:18:40.019Z",
+      "lastEdit": "2025-12-19T11:18:40.019Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/ControlPanel.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:18:50.195Z",
+      "lastEdit": "2025-12-19T11:18:50.195Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/ExecutionDashboard.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:19:00.759Z",
+      "lastEdit": "2025-12-19T11:19:00.759Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/OutputViewer.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:19:08.976Z",
+      "lastEdit": "2025-12-19T11:19:08.976Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/ProgressPanel.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:19:16.804Z",
+      "lastEdit": "2025-12-19T11:19:16.804Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/WorkflowCard.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:19:24.517Z",
+      "lastEdit": "2025-12-19T11:19:24.517Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/styles/globals.css.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:19:36.007Z",
+      "lastEdit": "2025-12-19T11:19:36.007Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/index.html.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:20:01.472Z",
+      "lastEdit": "2025-12-19T11:20:01.472Z"
+    },
+    ".schema/files/claude-code-manager/tailwind.config.js.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:20:16.506Z",
+      "lastEdit": "2025-12-19T11:20:16.506Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:23:03.528Z",
+      "lastEdit": "2025-12-19T11:23:03.528Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/DiscoveryChat.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:23:13.089Z",
+      "lastEdit": "2025-12-19T11:23:13.089Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/JourneyAnalysis.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:23:20.367Z",
+      "lastEdit": "2025-12-19T11:23:20.367Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/PreflightCheck.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:23:27.571Z",
+      "lastEdit": "2025-12-19T11:23:27.571Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/SpecGenerating.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:23:45.349Z",
+      "lastEdit": "2025-12-19T11:23:45.349Z"
+    },
+    ".schema/files/claude-code-manager/src/renderer/components/autonomous/SpecReview.tsx.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T11:23:56.491Z",
+      "lastEdit": "2025-12-19T11:23:56.491Z"
+    },
+    "PROJECT_TODO.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:16:06.036Z",
+      "lastEdit": "2025-12-19T12:16:06.036Z"
+    },
+    ".autonomous/context/README.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:20:57.381Z",
+      "lastEdit": "2025-12-19T12:20:57.381Z"
+    },
+    ".autonomous/context/.sample-running-summary.json": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:21:36.866Z",
+      "lastEdit": "2025-12-19T12:21:36.866Z"
+    },
+    ".autonomous/context/.sample-key-decisions.json": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:21:41.170Z",
+      "lastEdit": "2025-12-19T12:21:41.170Z"
+    },
+    ".autonomous/context/.sample-failure-memory.json": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:21:45.122Z",
+      "lastEdit": "2025-12-19T12:21:45.122Z"
+    },
+    ".autonomous/context/.sample-active-constraints.json": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:21:49.196Z",
+      "lastEdit": "2025-12-19T12:21:49.196Z"
+    },
+    "autonomous-orchestrator/context_agent.py": {
+      "edits": 2,
+      "firstEdit": "2025-12-19T12:22:56.460Z",
+      "lastEdit": "2025-12-19T12:37:27.386Z"
+    },
+    ".claude/skills/agent-harness/skill.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:35:12.667Z",
+      "lastEdit": "2025-12-19T12:35:12.667Z"
+    },
+    "autonomous-orchestrator/harness_agent.py": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:36:23.192Z",
+      "lastEdit": "2025-12-19T12:36:23.192Z"
+    },
+    "autonomous-orchestrator/agent.py": {
+      "edits": 6,
+      "firstEdit": "2025-12-19T12:40:51.247Z",
+      "lastEdit": "2025-12-19T12:42:02.284Z"
+    },
+    ".claude-context/CONTEXT_AGENT_INTEGRATION.md": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:42:50.573Z",
+      "lastEdit": "2025-12-19T12:42:50.573Z"
+    },
+    "autonomous-orchestrator/test_context_integration.py": {
+      "edits": 14,
+      "firstEdit": "2025-12-19T12:43:37.201Z",
+      "lastEdit": "2025-12-19T12:47:14.602Z"
+    }
+  }
+}

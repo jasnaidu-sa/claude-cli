@@ -41,5 +41,11 @@ interface GeneratedSpec {
 ## Future Integration
 Will implement 10 sequential LLM calls per section for detailed spec generation (Heavy Spec philosophy).
 
+## Theme Integration
+- Loading spinner uses `primary` color
+- Status indicators use theme variables
+- Success state uses `emerald-500`
+
 ## Change History
+- 2025-12-19: Updated loading spinner to use primary color
 - 2025-12-18: Created as part of Option C architecture

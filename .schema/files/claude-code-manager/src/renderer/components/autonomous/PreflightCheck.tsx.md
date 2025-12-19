@@ -33,5 +33,11 @@ Phase 0b component that validates the environment before proceeding with discove
 - `checking: boolean` - Currently running checks
 - `preflightStatus: PreflightStatus | null` - Check results
 
+## Theme Integration
+- Status icons use semantic colors (emerald for success, yellow for warnings)
+- Check items use theme card colors
+- Loading spinner uses `primary` color
+
 ## Change History
+- 2025-12-19: Updated loading spinner to use primary color
 - 2025-12-18: Created as part of Option C architecture

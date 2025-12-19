@@ -1,0 +1,151 @@
+{
+  "totalEdits": 124,
+  "lastEdit": "2025-12-19T12:30:20.538Z",
+  "files": {
+    "src/main/ipc/preflight-handlers.ts": {
+      "edits": 9,
+      "firstEdit": "2025-12-18T20:02:41.903Z",
+      "lastEdit": "2025-12-18T20:50:06.028Z"
+    },
+    "test_debug_findcli_001.js": {
+      "edits": 1,
+      "firstEdit": "2025-12-18T20:19:52.947Z",
+      "lastEdit": "2025-12-18T20:19:52.947Z"
+    },
+    "test_debug_electron_env_002.js": {
+      "edits": 1,
+      "firstEdit": "2025-12-18T20:20:27.924Z",
+      "lastEdit": "2025-12-18T20:20:27.924Z"
+    },
+    "test_debug_direct_ipc_003.js": {
+      "edits": 1,
+      "firstEdit": "2025-12-18T20:24:05.052Z",
+      "lastEdit": "2025-12-18T20:24:05.052Z"
+    },
+    "src/renderer/components/autonomous/PreflightCheck.tsx": {
+      "edits": 3,
+      "firstEdit": "2025-12-18T20:35:45.455Z",
+      "lastEdit": "2025-12-19T10:53:32.744Z"
+    },
+    "src/main/ipc/discovery-handlers.ts": {
+      "edits": 8,
+      "firstEdit": "2025-12-18T21:06:16.847Z",
+      "lastEdit": "2025-12-19T07:08:36.894Z"
+    },
+    "src/preload/index.ts": {
+      "edits": 9,
+      "firstEdit": "2025-12-18T21:07:18.711Z",
+      "lastEdit": "2025-12-19T12:30:20.538Z"
+    },
+    "src/renderer/components/autonomous/ProjectPicker.tsx": {
+      "edits": 18,
+      "firstEdit": "2025-12-18T21:08:23.105Z",
+      "lastEdit": "2025-12-19T10:37:15.180Z"
+    },
+    "src/main/ipc/journey-handlers.ts": {
+      "edits": 2,
+      "firstEdit": "2025-12-19T06:11:03.343Z",
+      "lastEdit": "2025-12-19T06:11:18.131Z"
+    },
+    "src/main/services/research-agent-runner.ts": {
+      "edits": 13,
+      "firstEdit": "2025-12-19T06:11:48.757Z",
+      "lastEdit": "2025-12-19T06:48:39.097Z"
+    },
+    "src/main/services/discovery-chat-service.ts": {
+      "edits": 3,
+      "firstEdit": "2025-12-19T07:06:20.307Z",
+      "lastEdit": "2025-12-19T07:07:34.406Z"
+    },
+    "src/renderer/styles/globals.css": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:54:59.881Z",
+      "lastEdit": "2025-12-19T07:54:59.881Z"
+    },
+    "tailwind.config.js": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:55:04.784Z",
+      "lastEdit": "2025-12-19T07:55:04.784Z"
+    },
+    "src/renderer/index.html": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T07:55:09.181Z",
+      "lastEdit": "2025-12-19T07:55:09.181Z"
+    },
+    "src/renderer/components/autonomous/DiscoveryChat.tsx": {
+      "edits": 9,
+      "firstEdit": "2025-12-19T10:38:35.203Z",
+      "lastEdit": "2025-12-19T10:40:38.678Z"
+    },
+    "src/renderer/components/autonomous/AutonomousView.tsx": {
+      "edits": 2,
+      "firstEdit": "2025-12-19T10:40:59.412Z",
+      "lastEdit": "2025-12-19T10:41:04.950Z"
+    },
+    "src/renderer/components/autonomous/ExecutionDashboard.tsx": {
+      "edits": 4,
+      "firstEdit": "2025-12-19T10:41:48.857Z",
+      "lastEdit": "2025-12-19T10:42:48.527Z"
+    },
+    "src/renderer/components/autonomous/SpecGenerating.tsx": {
+      "edits": 3,
+      "firstEdit": "2025-12-19T10:43:27.589Z",
+      "lastEdit": "2025-12-19T10:54:46.031Z"
+    },
+    "src/renderer/components/autonomous/JourneyAnalysis.tsx": {
+      "edits": 4,
+      "firstEdit": "2025-12-19T10:44:31.208Z",
+      "lastEdit": "2025-12-19T10:53:04.943Z"
+    },
+    "src/renderer/components/autonomous/ProgressPanel.tsx": {
+      "edits": 3,
+      "firstEdit": "2025-12-19T10:45:45.382Z",
+      "lastEdit": "2025-12-19T10:53:43.379Z"
+    },
+    "src/renderer/components/autonomous/ControlPanel.tsx": {
+      "edits": 3,
+      "firstEdit": "2025-12-19T10:46:28.641Z",
+      "lastEdit": "2025-12-19T10:52:53.559Z"
+    },
+    "src/renderer/components/autonomous/CompletionSummary.tsx": {
+      "edits": 9,
+      "firstEdit": "2025-12-19T10:47:39.982Z",
+      "lastEdit": "2025-12-19T10:49:02.165Z"
+    },
+    "src/renderer/components/autonomous/CategoryProgress.tsx": {
+      "edits": 4,
+      "firstEdit": "2025-12-19T10:49:28.244Z",
+      "lastEdit": "2025-12-19T10:54:09.818Z"
+    },
+    "src/renderer/components/autonomous/SpecReview.tsx": {
+      "edits": 3,
+      "firstEdit": "2025-12-19T10:51:24.491Z",
+      "lastEdit": "2025-12-19T10:51:33.213Z"
+    },
+    "src/renderer/components/autonomous/WorkflowCard.tsx": {
+      "edits": 5,
+      "firstEdit": "2025-12-19T10:51:38.437Z",
+      "lastEdit": "2025-12-19T10:54:36.065Z"
+    },
+    "src/renderer/components/autonomous/WorkflowCreate.tsx": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T10:51:54.763Z",
+      "lastEdit": "2025-12-19T10:51:54.763Z"
+    },
+    "src/shared/context-types.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:20:32.303Z",
+      "lastEdit": "2025-12-19T12:20:32.303Z"
+    },
+    "src/main/services/context-agent-runner.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:26:48.417Z",
+      "lastEdit": "2025-12-19T12:26:48.417Z"
+    },
+    "src/main/ipc/context-handlers.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-19T12:27:37.179Z",
+      "lastEdit": "2025-12-19T12:27:37.179Z"
+    }
+  }
+}

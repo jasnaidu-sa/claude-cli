@@ -33,6 +33,12 @@ React component for Phase 1 of the autonomous coding workflow. Displays automati
 2. Error: Shows error with retry/skip options
 3. Complete: Shows analysis summary with continue button
 
+## Theme Integration
+- Loading spinners use `primary` color
+- Tech stack badges use `primary` styling
+- Status indicators use theme variables
+
 ## Change History
-- 2024-12-19: Enhanced UI with tech stack display and status updates
-- 2024-12-18: Initial implementation
+- 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)
+- 2025-12-19: Enhanced UI with tech stack display and status updates
+- 2025-12-18: Initial implementation

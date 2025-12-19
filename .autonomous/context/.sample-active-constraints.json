@@ -1,0 +1,54 @@
+[
+  {
+    "id": "con-001",
+    "description": "Must support Node.js 18+",
+    "reason": "Production environment runs Node 18 LTS",
+    "affectedAreas": [
+      "package.json engines field",
+      "CI/CD pipeline Node version",
+      "Can use native fetch API"
+    ],
+    "addedAt": 1734600000000,
+    "expiresAt": null,
+    "type": "technical"
+  },
+  {
+    "id": "con-002",
+    "description": "API responses must be under 5MB",
+    "reason": "Frontend timeout at 5MB, backend limit at 10MB",
+    "affectedAreas": [
+      "Pagination required for large datasets",
+      "File uploads need separate endpoint",
+      "Image responses must be optimized"
+    ],
+    "addedAt": 1734600000000,
+    "expiresAt": null,
+    "type": "technical"
+  },
+  {
+    "id": "con-003",
+    "description": "No breaking API changes until v2.0",
+    "reason": "Mobile app doesn't support versioned APIs yet",
+    "affectedAreas": [
+      "Can add new fields, not remove existing",
+      "Can add new endpoints, not change existing",
+      "Deprecate instead of remove"
+    ],
+    "addedAt": 1734601000000,
+    "expiresAt": 1737100000000,
+    "type": "compatibility"
+  },
+  {
+    "id": "con-004",
+    "description": "All user data must be GDPR compliant",
+    "reason": "EU users, legal requirement",
+    "affectedAreas": [
+      "Data deletion within 30 days of request",
+      "Export user data on request",
+      "Explicit consent for analytics"
+    ],
+    "addedAt": 1734600000000,
+    "expiresAt": null,
+    "type": "security"
+  }
+]

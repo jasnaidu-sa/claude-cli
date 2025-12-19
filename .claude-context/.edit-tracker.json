@@ -1,0 +1,31 @@
+{
+  "editedFiles": [
+    "autonomous-orchestrator/context_agent.py",
+    "autonomous-orchestrator/harness_agent.py",
+    "autonomous-orchestrator/agent.py",
+    "autonomous-orchestrator/test_context_integration.py"
+  ],
+  "schemaUpdated": [
+    "claude-code-manager/src/main/services/discovery-chat-service.ts",
+    "claude-code-manager/src/main/ipc/discovery-handlers.ts",
+    "claude-code-manager/src/renderer/components/autonomous/ProjectPicker.tsx",
+    "claude-code-manager/src/preload/index.ts",
+    "claude-code-manager/src/renderer/components/autonomous/CategoryProgress.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/CompletionSummary.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/ControlPanel.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/ExecutionDashboard.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/OutputViewer.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/ProgressPanel.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/WorkflowCard.tsx",
+    "claude-code-manager/src/renderer/styles/globals.css",
+    "claude-code-manager/src/renderer/index.html",
+    "claude-code-manager/tailwind.config.js",
+    "claude-code-manager/src/renderer/components/autonomous/AutonomousView.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/DiscoveryChat.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/JourneyAnalysis.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/PreflightCheck.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/SpecGenerating.tsx",
+    "claude-code-manager/src/renderer/components/autonomous/SpecReview.tsx"
+  ],
+  "lastPromptTime": 0
+}

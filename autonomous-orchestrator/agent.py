@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from config import AgentConfig
 from client import get_client
 from security import BashSecurityFilter, sanitize_output
+from context_agent import ContextAgent
 
 
 @dataclass
@@ -48,6 +49,11 @@ class AutonomousAgent:
         self.state = AgentState()
         self.output_dir = config.get_output_dir()
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Initialize Context Agent for harness framework
+        self.context_agent = ContextAgent(config.get_project_root())
+        self.completed_features: List[str] = []
+        self.features_since_last_summary = 0
 
     def emit_output(self, output_type: str, data: str):
         """Emit output to stdout for the Electron app to capture."""
@@ -218,17 +224,20 @@ categorized and ready for implementation."""
                 break
 
             current_feature = pending[0]
+            feature_id = current_feature.get("id", f"feature-{self.state.iteration}")
             self.state.current_test = current_feature.get("name", "Unknown")
             self.emit_progress(f"Implementing: {self.state.current_test}")
 
-            # Update feature status
+            # Update feature status with start time
             current_feature["status"] = "in_progress"
+            current_feature["id"] = feature_id  # Ensure ID is set
+            current_feature["startedAt"] = int(time.time() * 1000)
             self.save_feature_list(features)
 
-            # Ask Claude to implement
-            message = f"""Implement this feature:
+            # Build base message
+            base_message = f"""Implement this feature:
 
-Feature ID: {current_feature.get('id')}
+Feature ID: {feature_id}
 Name: {current_feature.get('name')}
 Category: {current_feature.get('category')}
 
@@ -243,6 +252,9 @@ Please:
 
 Report your progress."""
 
+            # Inject context from Context Agent
+            message = self.inject_context(base_message, feature_id)
+
             try:
                 response = await self.client.send_message(message, prompt)
                 self.emit_output("stdout", response)
@@ -255,8 +267,19 @@ Report your progress."""
                     current_feature["status"] = "failed"
                     self.state.tests_failing += 1
 
+                # Write feature log for Context Agent
+                self.write_feature_log(current_feature)
+
+                # Track completed features for summarization
+                self.completed_features.append(feature_id)
+                self.features_since_last_summary += 1
+
                 self.save_feature_list(features)
                 self.emit_progress(f"Completed: {self.state.current_test}")
+
+                # Trigger context summarization every 5 features
+                if self.features_since_last_summary >= 5:
+                    self.trigger_context_summarization()
 
             except Exception as e:
                 self.emit_output("stderr", f"Error: {e}")
@@ -270,6 +293,10 @@ Report your progress."""
             # Brief pause between iterations
             await asyncio.sleep(0.5)
 
+        # Final context summarization for remaining features
+        if self.completed_features:
+            self.trigger_context_summarization()
+
         self.emit_progress("Implementation phase complete")
 
     def save_feature_list(self, features: Dict[str, Any]):
@@ -278,6 +305,86 @@ Report your progress."""
         features["updatedAt"] = time.time()
         features["currentTest"] = self.state.current_test
         feature_list_path.write_text(json.dumps(features, indent=2))
+
+    def write_feature_log(self, feature: Dict[str, Any]):
+        """Write feature completion log for Context Agent."""
+        logs_dir = self.config.get_project_root() / ".autonomous" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        feature_id = feature.get("id", "unknown")
+        log_file = logs_dir / f"{feature_id}.json"
+
+        log_data = {
+            "id": feature_id,
+            "name": feature.get("name", "Unknown"),
+            "category": feature.get("category", "uncategorized"),
+            "status": feature.get("status", "unknown"),
+            "startedAt": feature.get("startedAt", time.time() * 1000),
+            "completedAt": int(time.time() * 1000),
+            "iteration": self.state.iteration
+        }
+
+        log_file.write_text(json.dumps(log_data, indent=2))
+
+    def inject_context(self, base_message: str, feature_id: str) -> str:
+        """Inject compressed context into prompt."""
+        try:
+            context_injection = self.context_agent.get_injection(feature_id)
+
+            if context_injection["tokenCount"] == 0:
+                return base_message
+
+            context_section = "\n\n## Project Context\n\n"
+            context_section += f"**Summary:**\n{context_injection['summary']}\n\n"
+
+            if context_injection["decisions"]:
+                context_section += "**Key Decisions:**\n"
+                for decision in context_injection["decisions"][:3]:
+                    context_section += f"- {decision['decision']} (Feature {decision['featureId']})\n"
+                context_section += "\n"
+
+            if context_injection["failures"]:
+                context_section += "**Recent Failures to Avoid:**\n"
+                for failure in context_injection["failures"][:2]:
+                    context_section += f"- {failure['description']}: {failure['prevention']}\n"
+                context_section += "\n"
+
+            if context_injection["constraints"]:
+                context_section += "**Active Constraints:**\n"
+                for constraint in context_injection["constraints"]:
+                    context_section += f"- {constraint['description']}\n"
+                context_section += "\n"
+
+            return base_message + context_section
+
+        except Exception as e:
+            self.emit_output("stderr", f"Context injection failed: {e}")
+            return base_message
+
+    def trigger_context_summarization(self):
+        """Trigger context summarization after batch of features."""
+        if not self.completed_features:
+            return
+
+        try:
+            self.emit_progress("Summarizing context...")
+            result = self.context_agent.summarize(
+                self.completed_features,
+                trigger="feature_count"
+            )
+
+            if result["success"]:
+                self.emit_progress(
+                    f"Context updated: {result['newDecisions']} decisions, "
+                    f"{result['newFailures']} failures tracked"
+                )
+                self.completed_features = []
+                self.features_since_last_summary = 0
+            else:
+                self.emit_output("stderr", f"Context summarization failed: {result.get('error')}")
+
+        except Exception as e:
+            self.emit_output("stderr", f"Context summarization error: {e}")
 
     async def run(self):
         """Run the agent based on configured phase."""

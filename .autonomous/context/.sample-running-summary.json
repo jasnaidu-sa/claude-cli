@@ -1,0 +1,8 @@
+{
+  "content": "# Project Summary (Features 1-23)\n\n## Architecture Overview\n- Using Next.js 14 with App Router\n- PostgreSQL database with Prisma ORM\n- JWT authentication with refresh tokens\n- Tailwind CSS for styling\n\n## Completed Categories\n\n### Authentication (Features 1-8)\n- User registration with email verification\n- Login with JWT tokens (access + refresh)\n- Password reset flow\n- OAuth integration (Google, GitHub)\n- Session management\n- Key Decision: Using httpOnly cookies for tokens (dec-003)\n\n### User Profile (Features 9-15)\n- Profile CRUD operations\n- Avatar upload to S3\n- Profile visibility settings\n- User preferences\n- Activity feed\n- Key Decision: Using optimistic UI updates (dec-007)\n\n### API Foundation (Features 16-23)\n- RESTful API structure\n- Input validation with Zod\n- Error handling middleware\n- Rate limiting\n- API documentation with OpenAPI\n- CORS configuration\n- Key Decision: Rate limits per user, not IP (dec-012)\n\n## Current State\n- All tests passing (127/127)\n- No blocking issues\n- Ready for next category: Dashboard",
+  "tokenCount": 1847,
+  "updatedAt": 1734604800000,
+  "trigger": "category_complete",
+  "featuresSinceLastUpdate": 8,
+  "totalFeaturesCompleted": 23
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "id": "fail-001",
+    "featureId": "feat-004",
+    "description": "Email verification tokens expiring too quickly",
+    "rootCause": "Token TTL set to 5 minutes, users couldn't verify in time",
+    "resolution": "Increased TTL to 24 hours, added resend functionality",
+    "prevention": "For user-facing tokens, use longer TTLs (hours not minutes)",
+    "timestamp": 1734600600000,
+    "severity": "medium"
+  },
+  {
+    "id": "fail-002",
+    "featureId": "feat-013",
+    "description": "S3 upload failed with CORS error",
+    "rootCause": "S3 bucket CORS policy didn't allow PUT from frontend domain",
+    "resolution": "Updated S3 CORS configuration to allow frontend origin",
+    "prevention": "Always configure CORS for S3 buckets before implementing upload features",
+    "timestamp": 1734602800000,
+    "severity": "high"
+  },
+  {
+    "id": "fail-003",
+    "featureId": "feat-018",
+    "description": "API validation errors not properly formatted",
+    "rootCause": "Zod error format different from existing error structure",
+    "resolution": "Created error transformer to normalize Zod errors",
+    "prevention": "Define standard error format early, transform all errors to match",
+    "timestamp": 1734603600000,
+    "severity": "low"
+  }
+]

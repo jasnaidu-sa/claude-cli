@@ -7,6 +7,7 @@ import { ConfigStore } from './services/config-store'
 import { BrowserBridge } from './services/browser-bridge'
 import { DevServerManager } from './services/dev-server'
 import { DiscoveryChatService } from './services/discovery-chat-service'
+import { ResearchAgentRunner } from './services/research-agent-runner'
 
 // Global references
 let mainWindow: BrowserWindow | null = null
@@ -15,6 +16,7 @@ export let configStore: ConfigStore
 export let browserBridge: BrowserBridge
 export let devServerManager: DevServerManager
 export let discoveryChatService: DiscoveryChatService
+export let researchAgentRunner: ResearchAgentRunner
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -66,6 +68,7 @@ app.whenReady().then(() => {
   browserBridge = new BrowserBridge()
   devServerManager = new DevServerManager()
   discoveryChatService = new DiscoveryChatService(configStore)
+  researchAgentRunner = new ResearchAgentRunner(configStore)
 
   // Register IPC handlers
   registerIpcHandlers()

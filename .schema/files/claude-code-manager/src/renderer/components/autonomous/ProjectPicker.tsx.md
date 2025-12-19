@@ -67,6 +67,13 @@ interface SelectedProject {
 - If isNew=true, journey_analysis phase is skipped
 - If isNew=false, journey_analysis runs to analyze existing code
 
+## Theme Integration
+- Folder icons use `primary` color instead of amber-500
+- Draft timeline uses `primary` for active markers
+- Hover states use theme accent colors
+- Ready indicator uses `emerald-500` for success
+
 ## Change History
+- 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)
 - 2025-12-19: Added multi-draft timeline UI with resume/delete/start-fresh actions
 - 2025-12-18: Part of Option C architecture implementation

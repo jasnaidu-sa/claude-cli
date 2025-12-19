@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
 import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
+import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection } from '../shared/context-types'
 
 // Venv types (matching venv-manager.ts)
 export interface VenvStatus {
@@ -239,6 +240,18 @@ export interface ElectronAPI {
     getStatus: (projectPath: string) => Promise<{ inProgress: boolean; status?: string }>
     onComplete: (callback: (data: { projectPath: string; success: boolean; spec?: GeneratedSpecResult; error?: string }) => void) => () => void
     onStatus: (callback: (data: { projectPath: string; status: string }) => void) => () => void
+  }
+
+  // Context Agent (Phase 1 - maintain compressed context)
+  context: {
+    summarize: (request: ContextSummarizationRequest) => Promise<{ success: boolean; taskId?: string; error?: string }>
+    load: (projectPath: string) => Promise<{ success: boolean; data?: ContextData; error?: string }>
+    getInjection: (projectPath: string, featureId: string) => Promise<{ success: boolean; injection?: ContextInjection; error?: string }>
+    cancel: (taskId: string) => Promise<{ success: boolean }>
+    getTask: (taskId: string) => Promise<{ success: boolean; task?: ContextAgentTask; error?: string }>
+    onProgress: (callback: (data: { taskId: string; progress: ContextProgress }) => void) => () => void
+    onComplete: (callback: (data: { taskId: string; result: ContextSummarizationResult }) => void) => () => void
+    onError: (callback: (data: { taskId: string; error: string }) => void) => () => void
   }
 }
 
@@ -624,6 +637,35 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, data: { projectPath: string; status: string }) => callback(data)
       ipcRenderer.on('spec-builder:status', handler)
       return () => ipcRenderer.removeListener('spec-builder:status', handler)
+    }
+  },
+
+  // Context Agent (Phase 1 - maintain compressed context)
+  context: {
+    summarize: (request: ContextSummarizationRequest) =>
+      ipcRenderer.invoke('context:summarize', request),
+    load: (projectPath: string) =>
+      ipcRenderer.invoke('context:load', projectPath),
+    getInjection: (projectPath: string, featureId: string) =>
+      ipcRenderer.invoke('context:get-injection', projectPath, featureId),
+    cancel: (taskId: string) =>
+      ipcRenderer.invoke('context:cancel', taskId),
+    getTask: (taskId: string) =>
+      ipcRenderer.invoke('context:get-task', taskId),
+    onProgress: (callback: (data: { taskId: string; progress: ContextProgress }) => void) => {
+      const handler = (_event: unknown, data: { taskId: string; progress: ContextProgress }) => callback(data)
+      ipcRenderer.on('context:progress', handler)
+      return () => ipcRenderer.removeListener('context:progress', handler)
+    },
+    onComplete: (callback: (data: { taskId: string; result: ContextSummarizationResult }) => void) => {
+      const handler = (_event: unknown, data: { taskId: string; result: ContextSummarizationResult }) => callback(data)
+      ipcRenderer.on('context:complete', handler)
+      return () => ipcRenderer.removeListener('context:complete', handler)
+    },
+    onError: (callback: (data: { taskId: string; error: string }) => void) => {
+      const handler = (_event: unknown, data: { taskId: string; error: string }) => callback(data)
+      ipcRenderer.on('context:error', handler)
+      return () => ipcRenderer.removeListener('context:error', handler)
     }
   }
 }

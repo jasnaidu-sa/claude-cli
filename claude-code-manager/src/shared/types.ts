@@ -169,6 +169,102 @@ export interface SchemaDiscrepancy {
   severity: 'warning' | 'error'
 }
 
+
+// Checkpoint types (Harness Framework - Reliability Solution)
+export type CheckpointType =
+  | 'category_complete'    // After completing all tests in a category
+  | 'failure_threshold'    // When N consecutive failures occur
+  | 'risk_boundary'        // Before risky operations (DB migrations, etc.)
+  | 'feature_complete'     // After completing a major feature
+  | 'manual'               // User-requested checkpoint
+
+export type CheckpointStatus = 'pending' | 'approved' | 'rejected' | 'rolled_back' | 'skipped'
+
+export interface Checkpoint {
+  id: string
+  workflowId: string
+  sessionId: string
+  type: CheckpointType
+  status: CheckpointStatus
+  createdAt: number
+  resolvedAt?: number
+  resolvedBy?: 'user' | 'auto'
+
+  // Context at checkpoint creation
+  context: CheckpointContext
+
+  // User feedback if rejected
+  feedback?: string
+
+  // Rollback info if rolled back
+  rollbackTarget?: string  // Git commit SHA or checkpoint ID to rollback to
+}
+
+export interface CheckpointContext {
+  // Progress state
+  testsTotal: number
+  testsPassing: number
+  testsFailing: number
+  currentCategory?: string
+  completedCategories: string[]
+
+  // What triggered this checkpoint
+  triggerReason: string
+
+  // Recent activity
+  recentTests: RecentTestResult[]
+
+  // Git state for rollback
+  gitCommit: string
+  gitBranch: string
+  modifiedFiles: string[]
+
+  // Summary of changes since last checkpoint
+  changesSummary: string
+}
+
+export interface RecentTestResult {
+  name: string
+  status: 'passed' | 'failed' | 'skipped'
+  duration?: number
+  error?: string
+}
+
+export interface CheckpointConfig {
+  // Enable/disable checkpoint types
+  enableCategoryCheckpoints: boolean
+  enableFailureCheckpoints: boolean
+  enableRiskCheckpoints: boolean
+
+  // Thresholds
+  failureThreshold: number           // Number of consecutive failures before checkpoint
+  categoryCompletionThreshold: number // Min % completion to trigger category checkpoint
+
+  // Risk keywords that trigger checkpoints
+  riskKeywords: string[]             // e.g., ['migration', 'delete', 'drop', 'alter']
+
+  // Auto-approve settings
+  autoApproveIfAllPassing: boolean   // Auto-approve if no failing tests
+  autoApproveCategories: string[]    // Categories that can be auto-approved
+
+  // Rollback settings
+  enableAutoRollback: boolean        // Auto-rollback on checkpoint rejection
+  keepRollbackHistory: number        // Number of rollback points to keep
+}
+
+export const DEFAULT_CHECKPOINT_CONFIG: CheckpointConfig = {
+  enableCategoryCheckpoints: true,
+  enableFailureCheckpoints: true,
+  enableRiskCheckpoints: true,
+  failureThreshold: 3,
+  categoryCompletionThreshold: 100,
+  riskKeywords: ['migration', 'delete', 'drop', 'alter', 'truncate', 'schema'],
+  autoApproveIfAllPassing: false,
+  autoApproveCategories: [],
+  enableAutoRollback: true,
+  keepRollbackHistory: 10
+}
+
 // Progress Watcher types
 export interface FeatureListEntry {
   id: string
@@ -354,7 +450,19 @@ export const IPC_CHANNELS = {
   DISCOVERY_RESPONSE_CHUNK: 'discovery:response-chunk',
   DISCOVERY_RESPONSE_COMPLETE: 'discovery:response-complete',
   DISCOVERY_AGENT_STATUS: 'discovery:agent-status',
-  DISCOVERY_ERROR: 'discovery:error'
+  DISCOVERY_ERROR: 'discovery:error',
+
+  // Checkpoint Management (Harness Framework)
+  CHECKPOINT_CREATE: 'checkpoint:create',
+  CHECKPOINT_APPROVE: 'checkpoint:approve',
+  CHECKPOINT_REJECT: 'checkpoint:reject',
+  CHECKPOINT_ROLLBACK: 'checkpoint:rollback',
+  CHECKPOINT_SKIP: 'checkpoint:skip',
+  CHECKPOINT_GET: 'checkpoint:get',
+  CHECKPOINT_LIST: 'checkpoint:list',
+  CHECKPOINT_UPDATE: 'checkpoint:update',
+  CHECKPOINT_CONFIG_GET: 'checkpoint:config-get',
+  CHECKPOINT_CONFIG_SET: 'checkpoint:config-set',
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]

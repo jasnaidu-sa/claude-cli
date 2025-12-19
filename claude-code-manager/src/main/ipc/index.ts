@@ -1,7 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { readFile, writeFile } from 'fs/promises'
 import { IPC_CHANNELS } from '@shared/types'
-import { sessionManager, configStore, getMainWindow, discoveryChatService } from '../index'
+import { sessionManager, configStore, getMainWindow, discoveryChatService, researchAgentRunner } from '../index'
 import { fileWatcher } from '../services/file-watcher'
 import { registerGitHandlers } from './git-handlers'
 import { registerVenvHandlers } from './venv-handlers'
@@ -10,6 +10,9 @@ import { registerWorkflowHandlers } from './workflow-handlers'
 import { registerProgressHandlers } from './progress-handlers'
 import { registerSchemaHandlers } from './schema-handlers'
 import { setupDiscoveryHandlers } from './discovery-handlers'
+import { registerPreflightHandlers } from './preflight-handlers'
+import { setupJourneyHandlers } from './journey-handlers'
+import { setupSpecBuilderHandlers } from './spec-builder-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -47,6 +50,15 @@ export function registerIpcHandlers(): void {
 
   // Discovery chat handlers
   setupDiscoveryHandlers(discoveryChatService)
+
+  // Preflight check handlers
+  registerPreflightHandlers()
+
+  // Journey analysis handlers
+  setupJourneyHandlers(researchAgentRunner)
+
+  // Spec builder handlers
+  setupSpecBuilderHandlers(researchAgentRunner)
 }
 
 function registerSessionHandlers(): void {

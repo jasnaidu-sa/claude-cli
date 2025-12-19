@@ -263,8 +263,8 @@ export class VenvManager extends EventEmitter {
         }
       }
 
-      // Get installed packages
-      const { stdout: pipList } = await execFileAsync(this.getPipPath(), ['list', '--format=freeze'])
+      // Get installed packages using python -m pip (more reliable on Windows)
+      const { stdout: pipList } = await execFileAsync(pythonPath, ['-m', 'pip', 'list', '--format=freeze'])
       const installedPackages = pipList.trim().split('\n')
         .filter(line => line.length > 0)
         .map(line => line.split('==')[0].toLowerCase())
@@ -396,9 +396,16 @@ export class VenvManager extends EventEmitter {
       this.emitProgress('creating', 'Creating virtual environment...', 30)
       await this.createVenvWithTimeout(systemPython)
 
-      // Upgrade pip
+      // Upgrade pip using python -m pip (required on Windows)
       this.emitProgress('installing', 'Upgrading pip...', 50)
-      await this.runPip(['install', '--upgrade', 'pip'])
+      try {
+        await execFileAsync(this.getPythonPath(), ['-m', 'pip', 'install', '--upgrade', 'pip'], {
+          timeout: PIP_TIMEOUT
+        })
+      } catch {
+        // Pip upgrade is non-critical, continue even if it fails
+        console.log('[VenvManager] Pip upgrade failed, continuing...')
+      }
 
       // Install required packages
       this.emitProgress('installing', 'Installing required packages...', 60)
@@ -484,13 +491,13 @@ export class VenvManager extends EventEmitter {
   }
 
   /**
-   * Run pip command in the venv
+   * Run pip command in the venv using python -m pip (more reliable on Windows)
    */
   private async runPip(args: string[]): Promise<string> {
-    const pipPath = this.getPipPath()
+    const pythonPath = this.getPythonPath()
 
     try {
-      const { stdout, stderr } = await execFileAsync(pipPath, args, {
+      const { stdout, stderr } = await execFileAsync(pythonPath, ['-m', 'pip', ...args], {
         timeout: PIP_TIMEOUT // P2 fix: increased from 2 min to 5 min
       })
 

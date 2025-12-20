@@ -175,3 +175,120 @@ describe('Counter UI Rendering and Inline Styles (feat-004)', () => {
     expect(counterDisplay?.textContent).toBe('0');
   });
 });
+
+describe('Comprehensive Counter Test Suite (feat-006)', () => {
+  describe('Initial State', () => {
+    it('should display 0 when component first renders', () => {
+      const { container } = render(<Counter />);
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+      expect(counterDisplay?.textContent).toBe('0');
+    });
+
+    it('should render all three buttons (+, −, Reset)', () => {
+      const { container } = render(<Counter />);
+      const buttons = container.querySelectorAll('button');
+
+      expect(buttons.length).toBe(3);
+      expect(buttons[0].textContent).toBe('-');
+      expect(buttons[1].textContent).toBe('+');
+      expect(buttons[2].textContent).toBe('Reset');
+    });
+  });
+
+  describe('Increment', () => {
+    it('should increase count from 0 to 1 when + clicked', () => {
+      const { container } = render(<Counter />);
+      const incrementBtn = container.querySelectorAll('button')[1];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      expect(counterDisplay?.textContent).toBe('0');
+      fireEvent.click(incrementBtn);
+      expect(counterDisplay?.textContent).toBe('1');
+    });
+
+    it('should continue incrementing on multiple clicks (0→1→2)', () => {
+      const { container } = render(<Counter />);
+      const incrementBtn = container.querySelectorAll('button')[1];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      expect(counterDisplay?.textContent).toBe('0');
+      fireEvent.click(incrementBtn);
+      expect(counterDisplay?.textContent).toBe('1');
+      fireEvent.click(incrementBtn);
+      expect(counterDisplay?.textContent).toBe('2');
+    });
+  });
+
+  describe('Decrement', () => {
+    it('should decrease count from 0 to -1 when − clicked', () => {
+      const { container } = render(<Counter />);
+      const decrementBtn = container.querySelectorAll('button')[0];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      expect(counterDisplay?.textContent).toBe('0');
+      fireEvent.click(decrementBtn);
+      expect(counterDisplay?.textContent).toBe('-1');
+    });
+
+    it('should support negative values (0→-1→-2)', () => {
+      const { container } = render(<Counter />);
+      const decrementBtn = container.querySelectorAll('button')[0];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      expect(counterDisplay?.textContent).toBe('0');
+      fireEvent.click(decrementBtn);
+      expect(counterDisplay?.textContent).toBe('-1');
+      fireEvent.click(decrementBtn);
+      expect(counterDisplay?.textContent).toBe('-2');
+    });
+  });
+
+  describe('Reset', () => {
+    it('should return to 0 from positive value', () => {
+      const { container } = render(<Counter />);
+      const buttons = container.querySelectorAll('button');
+      const decrementBtn = buttons[0];
+      const incrementBtn = buttons[1];
+      const resetBtn = buttons[2];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      // Increment to positive value
+      fireEvent.click(incrementBtn);
+      fireEvent.click(incrementBtn);
+      fireEvent.click(incrementBtn);
+      expect(counterDisplay?.textContent).toBe('3');
+
+      // Reset to 0
+      fireEvent.click(resetBtn);
+      expect(counterDisplay?.textContent).toBe('0');
+    });
+
+    it('should return to 0 from negative value', () => {
+      const { container } = render(<Counter />);
+      const buttons = container.querySelectorAll('button');
+      const decrementBtn = buttons[0];
+      const resetBtn = buttons[2];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      // Decrement to negative value
+      fireEvent.click(decrementBtn);
+      fireEvent.click(decrementBtn);
+      fireEvent.click(decrementBtn);
+      expect(counterDisplay?.textContent).toBe('-3');
+
+      // Reset to 0
+      fireEvent.click(resetBtn);
+      expect(counterDisplay?.textContent).toBe('0');
+    });
+
+    it('should keep counter at 0 when already at 0', () => {
+      const { container } = render(<Counter />);
+      const resetBtn = container.querySelectorAll('button')[2];
+      const counterDisplay = container.querySelector('div[style*="font-size"]');
+
+      expect(counterDisplay?.textContent).toBe('0');
+      fireEvent.click(resetBtn);
+      expect(counterDisplay?.textContent).toBe('0');
+    });
+  });
+});

@@ -412,6 +412,7 @@ export const IPC_CHANNELS = {
   ORCHESTRATOR_OUTPUT: 'orchestrator:output',
   ORCHESTRATOR_PROGRESS: 'orchestrator:progress',
   ORCHESTRATOR_SESSION: 'orchestrator:session',
+  ORCHESTRATOR_STREAM_CHUNK: 'orchestrator:stream-chunk',
 
   // Workflow Management
   WORKFLOW_CREATE: 'workflow:create',
@@ -444,6 +445,8 @@ export const IPC_CHANNELS = {
   DISCOVERY_CANCEL_REQUEST: 'discovery:cancel-request',
   DISCOVERY_CLOSE_SESSION: 'discovery:close-session',
   DISCOVERY_UPDATE_AGENT_STATUS: 'discovery:update-agent-status',
+  DISCOVERY_ANALYZE_COMPLEXITY: 'discovery:analyze-complexity',
+  DISCOVERY_VALIDATE_SPEC: 'discovery:validate-spec',
   // Discovery Chat Events
   DISCOVERY_MESSAGE: 'discovery:message',
   DISCOVERY_RESPONSE: 'discovery:response',
@@ -451,6 +454,8 @@ export const IPC_CHANNELS = {
   DISCOVERY_RESPONSE_COMPLETE: 'discovery:response-complete',
   DISCOVERY_AGENT_STATUS: 'discovery:agent-status',
   DISCOVERY_ERROR: 'discovery:error',
+  DISCOVERY_COMPLEXITY_RESULT: 'discovery:complexity-result',
+  DISCOVERY_READINESS_RESULT: 'discovery:readiness-result',
 
   // Checkpoint Management (Harness Framework)
   CHECKPOINT_CREATE: 'checkpoint:create',
@@ -466,3 +471,126 @@ export const IPC_CHANNELS = {
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]
+
+// ============================================================================
+// BMAD-Inspired Enhancements: Complexity, Readiness, and Step Conditions
+// ============================================================================
+
+// Task Complexity Analysis (BMAD Scale Adaptive System)
+export type TaskComplexity = 'quick' | 'standard' | 'enterprise'
+
+export interface ComplexityFactor {
+  name: string
+  weight: number
+  detected: boolean
+  details?: string
+}
+
+export interface ComplexityAnalysis {
+  score: number                    // 0-100
+  level: TaskComplexity
+  factors: ComplexityFactor[]
+  suggestedMode: 'quick-spec' | 'smart-spec' | 'enterprise-spec'
+  confidence: number               // 0-1
+  analyzedAt: number
+}
+
+// Implementation Readiness Gate (BMAD Implementation Readiness Check)
+export interface ReadinessCheckItem {
+  name: string
+  description: string
+  status: 'passed' | 'failed' | 'warning' | 'skipped'
+  details?: string
+  required: boolean
+}
+
+export interface ReadinessCheck {
+  passed: boolean
+  checks: ReadinessCheckItem[]
+  blockers: string[]
+  warnings: string[]
+  score: number  // 0-100
+  checkedAt: number
+}
+
+// Step-Level Pre/Post Conditions (BMAD Step-File Architecture)
+export type ConditionType = 'test_status' | 'file_exists' | 'file_contains' | 'command_succeeds' | 'schema_fresh' | 'custom'
+
+export interface ConditionCheck {
+  type: ConditionType
+  // For test_status
+  category?: string
+  minPassing?: number
+  maxFailing?: number
+  // For file_exists / file_contains
+  filePath?: string
+  contains?: string
+  // For command_succeeds
+  command?: string
+  expectedExitCode?: number
+  // For custom
+  customExpression?: string
+}
+
+export interface Condition {
+  id: string
+  type: ConditionType
+  description: string
+  check: ConditionCheck
+  required: boolean
+}
+
+export interface ConditionResult {
+  condition: Condition
+  passed: boolean
+  error?: string
+  checkedAt: number
+}
+
+export interface StepConditions {
+  preconditions: Condition[]
+  postconditions: Condition[]
+}
+
+// Enhanced Checkpoint with Step Conditions
+export interface EnhancedCheckpoint extends Checkpoint {
+  stepConditions?: StepConditions
+  preconditionResults?: ConditionResult[]
+  postconditionResults?: ConditionResult[]
+}
+
+// Complexity factor definitions for analysis
+export const COMPLEXITY_FACTORS_CONFIG = [
+  // High complexity indicators (weight: 15-25)
+  { name: 'database_migration', weight: 25, keywords: ['migration', 'schema change', 'alter table', 'new table', 'add column'] },
+  { name: 'authentication', weight: 20, keywords: ['auth', 'login', 'oauth', 'jwt', 'session', 'password', 'signup'] },
+  { name: 'api_design', weight: 15, keywords: ['api', 'endpoint', 'rest', 'graphql', 'webhook'] },
+  { name: 'multi_service', weight: 20, keywords: ['microservice', 'integration', 'external api', 'third party'] },
+  { name: 'realtime', weight: 18, keywords: ['websocket', 'realtime', 'streaming', 'pubsub', 'subscription'] },
+
+  // Medium complexity indicators (weight: 8-12)
+  { name: 'state_management', weight: 10, keywords: ['state', 'store', 'redux', 'zustand', 'context'] },
+  { name: 'data_model', weight: 12, keywords: ['model', 'entity', 'relationship', 'foreign key', 'schema'] },
+  { name: 'testing_heavy', weight: 8, keywords: ['e2e', 'integration test', 'test coverage', 'playwright'] },
+  { name: 'file_upload', weight: 10, keywords: ['upload', 'file', 'image', 'attachment', 's3', 'blob'] },
+  { name: 'caching', weight: 8, keywords: ['cache', 'redis', 'memoize', 'invalidate'] },
+
+  // Lower complexity indicators (weight: 3-7)
+  { name: 'ui_component', weight: 5, keywords: ['component', 'button', 'form', 'modal', 'dialog'] },
+  { name: 'styling', weight: 3, keywords: ['css', 'tailwind', 'style', 'theme', 'dark mode'] },
+  { name: 'validation', weight: 5, keywords: ['validate', 'zod', 'yup', 'schema validation'] },
+] as const
+
+// Readiness check definitions
+export const READINESS_CHECKS_CONFIG = [
+  // Required checks (blockers if failed)
+  { name: 'spec_structure', description: 'Spec has required sections (Overview, Requirements, Implementation)', required: true },
+  { name: 'no_ambiguous_requirements', description: 'No TODO or TBD markers in spec', required: true },
+  { name: 'test_categories_defined', description: 'Test categories or acceptance criteria are specified', required: true },
+
+  // Recommended checks (warnings if failed)
+  { name: 'file_paths_realistic', description: 'All file paths look realistic (no placeholders)', required: false },
+  { name: 'schema_fresh', description: '.schema/ documentation is current (< 24 hours old)', required: false },
+  { name: 'error_handling_defined', description: 'Error cases and edge cases are specified', required: false },
+  { name: 'similar_patterns_referenced', description: 'References existing code patterns for consistency', required: false },
+] as const

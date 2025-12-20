@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
 import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection } from '../shared/context-types'
 
@@ -209,11 +209,17 @@ export interface ElectronAPI {
     listDrafts: (projectPath: string) => Promise<{ success: boolean; drafts?: DraftMetadata[]; error?: string }>
     loadDraft: (projectPath: string, draftId: string) => Promise<{ success: boolean; session?: DiscoverySession; error?: string }>
     deleteDraft: (projectPath: string, draftId: string) => Promise<{ success: boolean; error?: string }>
+    // Quick spec generation
+    generateQuickSpec: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    // BMAD-Inspired: Complexity analysis and spec validation
+    analyzeComplexity: (sessionId: string) => Promise<{ success: boolean; analysis?: ComplexityAnalysis; error?: string }>
+    validateSpec: (projectPath: string, specContent?: string) => Promise<{ success: boolean; readinessCheck?: ReadinessCheck; error?: string }>
     // Event listeners
     onResponseChunk: (callback: (data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => void) => () => void
     onResponseComplete: (callback: (data: { sessionId: string; message: DiscoveryChatMessage }) => void) => () => void
     onAgentStatus: (callback: (data: { sessionId: string; agent: DiscoveryAgentStatus }) => void) => () => void
     onError: (callback: (data: { sessionId: string; error: string }) => void) => () => void
+    onSpecReady: (callback: (data: { sessionId: string; spec: string }) => void) => () => void
   }
 
   // Preflight checks
@@ -574,6 +580,14 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('discovery:load-draft', projectPath, draftId),
     deleteDraft: (projectPath: string, draftId: string) =>
       ipcRenderer.invoke('discovery:delete-draft', projectPath, draftId),
+    // STEP 4: Quick Spec generation
+    generateQuickSpec: (sessionId: string) =>
+      ipcRenderer.invoke('discovery:generate-quick-spec', sessionId),
+    // BMAD-Inspired: Complexity analysis and spec validation
+    analyzeComplexity: (sessionId: string) =>
+      ipcRenderer.invoke('discovery:analyze-complexity', sessionId),
+    validateSpec: (projectPath: string, specContent?: string) =>
+      ipcRenderer.invoke('discovery:validate-spec', projectPath, specContent),
     // Event listeners
     onResponseChunk: (callback: (data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => void) => {
       const handler = (_event: unknown, data: { sessionId: string; messageId: string; chunk: string; timestamp: number }) => callback(data)
@@ -594,6 +608,11 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: unknown, data: { sessionId: string; error: string }) => callback(data)
       ipcRenderer.on(IPC_CHANNELS.DISCOVERY_ERROR, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.DISCOVERY_ERROR, handler)
+    },
+    onSpecReady: (callback: (data: { sessionId: string; spec: string }) => void) => {
+      const handler = (_event: unknown, data: { sessionId: string; spec: string }) => callback(data)
+      ipcRenderer.on('discovery:spec-ready', handler)
+      return () => ipcRenderer.removeListener('discovery:spec-ready', handler)
     }
   },
 

@@ -1,0 +1,165 @@
+APP SPECIFICATION
+================
+Project: test-project
+Generated: 2025-12-20T16:07:40.951Z
+
+=====================
+PROJECT SPECIFICATION
+=====================
+
+> Generated: 2025-12-20T16:07:36.529Z
+> Project: C:\Claude_Projects\Claude-cli\test-project
+
+---
+
+========================================
+FEATURE SPECIFICATION: COUNTER COMPONENT
+========================================
+
+OVERVIEW
+--------
+
+A minimal, self-contained React counter component built with TypeScript and hooks. The component displays a numeric counter value with three buttons to increment, decrement, and reset the value. The counter supports negative numbers and requires no external dependencies.
+
+REQUIREMENTS
+------------
+
+Functional Requirements:
+- Display a counter value prominently in the center of the component
+- Increment button (+): Adds 1 to the current count
+- Decrement button (−): Subtracts 1 from the current count
+- Reset button (Reset): Sets the count back to 0
+- Counter must support negative values (no minimum bound)
+- Counter always starts at 0 (no configurable initial value)
+
+Technical Constraints:
+- TypeScript with React functional component
+- Use useState hook for state management
+- No external dependencies
+- No props required
+- Inline styles only (no CSS files or modules)
+- Named export from barrel file
+
+ARCHITECTURE
+------------
+
+File Structure:
+src/
+├── Counter.tsx        # Main component implementation
+├── Counter.test.tsx   # Unit tests using React Testing Library
+└── index.ts           # Export barrel with named export
+
+Component Design:
+- Single functional component Counter
+- Internal state: count: number initialized to 0
+- Three event handlers for button clicks
+- Inline styles for layout and visual presentation
+
+IMPLEMENTATION STEPS
+--------------------
+
+1. Create src/Counter.tsx:
+
+import React, { useState } from 'react';
+
+export const Counter: React.FC = () => {
+  const [count, setCount] = useState(0);
+
+  const increment = () => setCount(prev => prev + 1);
+  const decrement = () => setCount(prev => prev - 1);
+  const reset = () => setCount(0);
+
+  return (
+    <div style={{ textAlign: 'center', padding: '20px' }}>
+      <div style={{ fontSize: '48px', fontWeight: 'bold', marginBottom: '20px' }}>
+        {count}
+      </div>
+      <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+        <button onClick={decrement}>−</button>
+        <button onClick={increment}>+</button>
+        <button onClick={reset}>Reset</button>
+      </div>
+    </div>
+  );
+};
+
+2. Create src/Counter.test.tsx:
+
+import React from 'react';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { Counter } from './Counter';
+
+describe('Counter', () => {
+  it('renders with initial value of 0', () => {
+    render(<Counter />);
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+
+  it('increments the count when + button is clicked', () => {
+    render(<Counter />);
+    fireEvent.click(screen.getByText('+'));
+    expect(screen.getByText('1')).toBeInTheDocument();
+  });
+
+  it('decrements the count when − button is clicked', () => {
+    render(<Counter />);
+    fireEvent.click(screen.getByText('−'));
+    expect(screen.getByText('-1')).toBeInTheDocument();
+  });
+
+  it('supports negative values', () => {
+    render(<Counter />);
+    fireEvent.click(screen.getByText('−'));
+    fireEvent.click(screen.getByText('−'));
+    fireEvent.click(screen.getByText('−'));
+    expect(screen.getByText('-3')).toBeInTheDocument();
+  });
+
+  it('resets the count to 0 from a positive value', () => {
+    render(<Counter />);
+    fireEvent.click(screen.getByText('+'));
+    fireEvent.click(screen.getByText('+'));
+    fireEvent.click(screen.getByText('Reset'));
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+
+  it('resets the count to 0 from a negative value', () => {
+    render(<Counter />);
+    fireEvent.click(screen.getByText('−'));
+    fireEvent.click(screen.getByText('−'));
+    fireEvent.click(screen.getByText('Reset'));
+    expect(screen.getByText('0')).toBeInTheDocument();
+  });
+});
+
+3. Create src/index.ts:
+
+export { Counter } from './Counter';
+
+TESTING
+-------
+
+Manual Verification:
+1. Render the Counter component in the application
+2. Verify the initial display shows 0
+3. Click + multiple times and verify count increases
+4. Click − multiple times and verify count decreases (including into negatives)
+5. Click Reset and verify count returns to 0
+
+Automated Tests:
+Run the test suite:
+npm test
+==
+OR
+==
+yarn test
+
+Expected test coverage:
+- Initial render displays 0
+- Increment button functionality
+- Decrement button functionality
+- Negative number support
+- Reset from positive value
+- Reset from negative value
+
+All 6 tests should pass, providing complete coverage of the component's behavior.

@@ -1,10 +1,12 @@
 # Autonomous Coding Agent Dependencies
 
-# Claude Agent SDK (when available)
-# claude-code-sdk>=0.1.0
+# Claude Agent SDK - Required for real-time streaming
+# Using claude-agent-sdk (official Anthropic SDK for agents)
+claude-agent-sdk>=0.1.16
 
 # Core dependencies
 python-dotenv>=1.0.0
+anthropic>=0.40.0
 
 # Async support
 asyncio-throttle>=1.0.0

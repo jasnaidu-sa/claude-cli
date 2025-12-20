@@ -5,7 +5,15 @@
     "autonomous-orchestrator/agent.py",
     "autonomous-orchestrator/test_context_integration.py",
     "autonomous-orchestrator/checkpoint_agent.py",
-    "autonomous-orchestrator/test_checkpoint_agent.py"
+    "autonomous-orchestrator/test_checkpoint_agent.py",
+    "autonomous-orchestrator/impact_agent.py",
+    "autonomous-orchestrator/test_impact_agent.py",
+    "autonomous-orchestrator/discovery_agent.py",
+    "autonomous-orchestrator/discovery_agent_streaming.py",
+    "autonomous-orchestrator/discovery_sdk.py",
+    "autonomous-orchestrator/client.py",
+    "autonomous-orchestrator/test_streaming.py",
+    "autonomous-orchestrator/config.py"
   ],
   "schemaUpdated": [
     "claude-code-manager/src/main/services/discovery-chat-service.ts",

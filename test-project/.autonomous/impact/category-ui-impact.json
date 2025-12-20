@@ -1,0 +1,9 @@
+{
+  "trigger": "category-completion",
+  "triggerFeatureId": null,
+  "triggerCategory": "ui",
+  "analyzedFeatures": 3,
+  "flaggedFeatures": [],
+  "timestamp": 1766261918898,
+  "analysisTimeMs": 0
+}

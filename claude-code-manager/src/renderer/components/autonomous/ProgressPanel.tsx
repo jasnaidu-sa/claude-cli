@@ -2,20 +2,22 @@
  * ProgressPanel Component
  *
  * Displays overall workflow progress with a progress bar,
- * current test indicator, and category breakdown.
+ * current test indicator, category breakdown, and Kanban board.
  */
 
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   CheckCircle,
   XCircle,
   Clock,
   Activity,
   RefreshCw,
-  BarChart3
+  BarChart3,
+  LayoutGrid
 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { CategoryProgress } from './CategoryProgress'
+import { KanbanBoard, type Feature } from './KanbanBoard'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
 import { cn } from '@renderer/lib/utils'
 import type { WorkflowConfig } from '@shared/types'
@@ -32,6 +34,9 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
     isLoading
   } = useAutonomousStore()
 
+  const [features, setFeatures] = useState<Feature[]>([])
+  const [viewMode, setViewMode] = useState<'stats' | 'kanban'>('stats')
+
   const progress = progressByWorkflow[workflow.id]
 
   // Start watching progress when component mounts
@@ -43,6 +48,34 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
       unwatchProgress(workflow.id)
     }
   }, [workflow.id, workflow.projectPath, workflow.worktreePath, watchProgress, unwatchProgress])
+
+  // Load feature_list.json
+  useEffect(() => {
+    const loadFeatures = async () => {
+      const projectPath = workflow.worktreePath || workflow.projectPath
+      const featureListPath = `${projectPath}/.autonomous/feature_list.json`
+
+      try {
+        const result = await window.electron.files.readFile(featureListPath)
+        if (result.success && result.content) {
+          const parsed = JSON.parse(result.content)
+          if (parsed.features && Array.isArray(parsed.features)) {
+            setFeatures(parsed.features)
+          }
+        }
+      } catch (err) {
+        // No feature_list.json yet
+        setFeatures([])
+      }
+    }
+
+    loadFeatures()
+
+    // Reload features when progress updates (features might have status changes)
+    if (progress) {
+      loadFeatures()
+    }
+  }, [workflow.projectPath, workflow.worktreePath, progress])
 
   // Calculate stats
   const total = progress?.total || workflow.progress?.testsTotal || 0
@@ -63,27 +96,70 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
       {/* Header */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="font-semibold text-sm">Progress</h2>
+          {viewMode === 'stats' ? (
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <LayoutGrid className="h-4 w-4 text-muted-foreground" />
+          )}
+          <h2 className="font-semibold text-sm">
+            {viewMode === 'stats' ? 'Progress' : 'Kanban Board'}
+          </h2>
           {isLoading && (
             <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />
           )}
+          {features.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              ({features.length} features)
+            </span>
+          )}
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={handleRefresh}
-          disabled={isLoading}
-          className="h-7 w-7"
-        >
-          <RefreshCw className={cn('h-3 w-3', isLoading && 'animate-spin')} />
-        </Button>
+        <div className="flex items-center gap-1">
+          {/* View Mode Toggle */}
+          {features.length > 0 && (
+            <>
+              <Button
+                variant={viewMode === 'stats' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('stats')}
+                className="h-7 px-2"
+              >
+                <BarChart3 className="h-3 w-3 mr-1" />
+                Stats
+              </Button>
+              <Button
+                variant={viewMode === 'kanban' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('kanban')}
+                className="h-7 px-2"
+              >
+                <LayoutGrid className="h-3 w-3 mr-1" />
+                Kanban
+              </Button>
+              <div className="w-px h-4 bg-border mx-1" />
+            </>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="h-7 w-7"
+          >
+            <RefreshCw className={cn('h-3 w-3', isLoading && 'animate-spin')} />
+          </Button>
+        </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-4 space-y-6">
-        {/* Overall Progress */}
-        <div className="space-y-3">
+      <div className="flex-1 overflow-hidden">
+        {viewMode === 'kanban' && features.length > 0 ? (
+          <div className="h-full p-4">
+            <KanbanBoard features={features} className="h-full" />
+          </div>
+        ) : (
+          <div className="h-full overflow-auto p-4 space-y-6">
+            {/* Overall Progress */}
+            <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium">Overall Progress</span>
             <span className="text-2xl font-bold">
@@ -180,6 +256,8 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
                 <span className="font-mono">{workflow.model}</span>
               </div>
             </div>
+          </div>
+        )}
           </div>
         )}
       </div>

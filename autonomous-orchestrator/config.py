@@ -28,6 +28,7 @@ class AgentConfig:
     # Claude API settings
     model: str = "claude-sonnet-4-20250514"
     api_key: Optional[str] = None
+    oauth_token: Optional[str] = None  # CLAUDE_CODE_OAUTH_TOKEN support
     max_tokens: int = 16384
 
     # Project settings
@@ -58,8 +59,9 @@ class AgentConfig:
         """Load configuration from environment variables."""
         config = cls()
 
-        # API key from environment
+        # API key from environment (supports both API key and OAuth token)
         config.api_key = os.getenv("ANTHROPIC_API_KEY")
+        config.oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
 
         # Model override
         if model := os.getenv("CLAUDE_MODEL"):
@@ -132,15 +134,21 @@ class AgentConfig:
             spec_path = self.get_project_root() / spec_path
 
         if spec_path.exists():
-            return spec_path.read_text()
+            return spec_path.read_text(encoding='utf-8')
         return None
 
     def validate(self) -> List[str]:
         """Validate configuration and return list of errors."""
         errors = []
 
-        if not self.api_key:
-            errors.append("ANTHROPIC_API_KEY is required")
+        # Support both API key and OAuth token (claude-agent-sdk handles both)
+        api_key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
+        oauth_token = self.oauth_token or os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+        if not api_key and not oauth_token:
+            errors.append(
+                "No Claude auth configured. Set either ANTHROPIC_API_KEY or "
+                "CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`)"
+            )
 
         if not Path(self.project_path).exists():
             errors.append(f"Project path does not exist: {self.project_path}")
@@ -149,6 +157,12 @@ class AgentConfig:
             errors.append(f"Invalid phase: {self.phase}")
 
         return errors
+
+    def has_auth(self) -> bool:
+        """Check if any authentication method is configured."""
+        api_key = self.api_key or os.getenv("ANTHROPIC_API_KEY")
+        oauth_token = self.oauth_token or os.getenv("CLAUDE_CODE_OAUTH_TOKEN")
+        return bool(api_key or oauth_token)
 
 
 def load_config(

@@ -3,9 +3,10 @@
  *
  * Scrolling log display for orchestrator output.
  * Supports timestamps, expand/collapse, and clear functionality.
+ * Integrates EventLog for real-time streaming display.
  */
 
-import React, { useRef, useEffect, useState } from 'react'
+import React, { useRef, useEffect, useState, useMemo } from 'react'
 import {
   Terminal,
   ChevronDown,
@@ -19,6 +20,7 @@ import { Button } from '../ui/button'
 import { cn } from '@renderer/lib/utils'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
 import type { OrchestratorOutput } from '@shared/types'
+import { EventLog, type StreamEvent } from './EventLog'
 
 interface OutputViewerProps {
   sessionId: string
@@ -54,15 +56,50 @@ export function OutputViewer({ sessionId, maxLines = 500 }: OutputViewerProps) {
   const [isExpanded, setIsExpanded] = useState(true)
   const [autoScroll, setAutoScroll] = useState(true)
   const [filter, setFilter] = useState<OrchestratorOutput['type'] | 'all'>('all')
+  const [viewMode, setViewMode] = useState<'stream' | 'raw'>('stream')
 
   const { sessionOutput, clearSessionOutput } = useAutonomousStore()
 
   const outputs = sessionOutput[sessionId] || []
 
+  // Separate stream events from other output
+  const { streamEvents, otherOutputs } = useMemo(() => {
+    const stream: StreamEvent[] = []
+    const other: OrchestratorOutput[] = []
+
+    outputs.forEach(output => {
+      // Parse JSON stream_chunk events
+      if (output.type === 'stdout') {
+        try {
+          const parsed = JSON.parse(output.data)
+          if (parsed.type === 'stream_chunk' || parsed.type === 'heartbeat' || parsed.type === 'progress' || parsed.type === 'status' || parsed.type === 'error') {
+            stream.push({
+              type: parsed.type,
+              chunk_type: parsed.chunk_type,
+              data: parsed.data,
+              timestamp: parsed.timestamp || output.timestamp,
+              phase: parsed.phase,
+              iteration: parsed.iteration
+            })
+          } else {
+            other.push(output)
+          }
+        } catch {
+          // Not JSON, treat as regular output
+          other.push(output)
+        }
+      } else {
+        other.push(output)
+      }
+    })
+
+    return { streamEvents: stream, otherOutputs: other }
+  }, [outputs])
+
   // Filter outputs
   const filteredOutputs = filter === 'all'
-    ? outputs
-    : outputs.filter(o => o.type === filter)
+    ? otherOutputs
+    : otherOutputs.filter(o => o.type === filter)
 
   // Limit to maxLines
   const displayOutputs = filteredOutputs.slice(-maxLines)
@@ -123,22 +160,45 @@ export function OutputViewer({ sessionId, maxLines = 500 }: OutputViewerProps) {
           <span className="text-xs text-muted-foreground">
             ({outputs.length} lines)
           </span>
+          {streamEvents.length > 0 && (
+            <span className="text-xs text-blue-400">
+              ({streamEvents.length} stream events)
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
-          {/* Filter */}
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as any)}
-            className="h-7 px-2 text-xs bg-secondary border border-border rounded"
-          >
-            <option value="all">All</option>
-            <option value="stdout">stdout</option>
-            <option value="stderr">stderr</option>
-            <option value="system">system</option>
-            <option value="progress">progress</option>
-          </select>
+          {/* View Mode Toggle */}
+          {streamEvents.length > 0 && (
+            <>
+              <select
+                value={viewMode}
+                onChange={(e) => setViewMode(e.target.value as 'stream' | 'raw')}
+                className="h-7 px-2 text-xs bg-secondary border border-border rounded"
+              >
+                <option value="stream">Stream View</option>
+                <option value="raw">Raw View</option>
+              </select>
+              <div className="w-px h-4 bg-border mx-1" />
+            </>
+          )}
 
-          <div className="w-px h-4 bg-border mx-1" />
+          {/* Filter (only for raw view) */}
+          {viewMode === 'raw' && (
+            <>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value as any)}
+                className="h-7 px-2 text-xs bg-secondary border border-border rounded"
+              >
+                <option value="all">All</option>
+                <option value="stdout">stdout</option>
+                <option value="stderr">stderr</option>
+                <option value="system">system</option>
+                <option value="progress">progress</option>
+              </select>
+              <div className="w-px h-4 bg-border mx-1" />
+            </>
+          )}
 
           {/* Auto-scroll toggle */}
           <Button
@@ -187,33 +247,39 @@ export function OutputViewer({ sessionId, maxLines = 500 }: OutputViewerProps) {
 
       {/* Output Content */}
       {isExpanded && (
-        <div
-          ref={containerRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-auto bg-black/50 font-mono text-xs p-2"
-        >
-          {displayOutputs.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground">
-              No output yet. Start the workflow to see logs.
-            </div>
-          ) : (
-            <div className="space-y-0.5">
-              {displayOutputs.map((output, index) => (
-                <div
-                  key={`${output.timestamp}-${index}`}
-                  className={cn('flex', getOutputColor(output.type))}
-                >
-                  <span className="text-muted-foreground shrink-0 select-none mr-2">
-                    [{formatTimestamp(output.timestamp)}]
-                  </span>
-                  <span className="text-muted-foreground shrink-0 select-none mr-2 w-16">
-                    [{output.type.toUpperCase().padEnd(8)}]
-                  </span>
-                  <span className="whitespace-pre-wrap break-all">{output.data}</span>
+        <div className="flex-1 overflow-auto bg-black/50">
+          {viewMode === 'stream' && streamEvents.length > 0 ? (
+            <EventLog events={streamEvents} maxEvents={maxLines} />
+          ) : viewMode === 'raw' || streamEvents.length === 0 ? (
+            <div
+              ref={containerRef}
+              onScroll={handleScroll}
+              className="h-full font-mono text-xs p-2"
+            >
+              {displayOutputs.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  No output yet. Start the workflow to see logs.
                 </div>
-              ))}
+              ) : (
+                <div className="space-y-0.5">
+                  {displayOutputs.map((output, index) => (
+                    <div
+                      key={`${output.timestamp}-${index}`}
+                      className={cn('flex', getOutputColor(output.type))}
+                    >
+                      <span className="text-muted-foreground shrink-0 select-none mr-2">
+                        [{formatTimestamp(output.timestamp)}]
+                      </span>
+                      <span className="text-muted-foreground shrink-0 select-none mr-2 w-16">
+                        [{output.type.toUpperCase().padEnd(8)}]
+                      </span>
+                      <span className="whitespace-pre-wrap break-all">{output.data}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          ) : null}
         </div>
       )}
 

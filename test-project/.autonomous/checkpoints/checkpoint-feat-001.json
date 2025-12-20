@@ -1,0 +1,17 @@
+{
+  "feature_id": "feat-001",
+  "decision": "auto-proceed",
+  "risk_score": 0,
+  "risk_factors": {
+    "file_count_score": 0,
+    "file_type_score": 0,
+    "recent_failures_score": 0,
+    "blast_radius_score": 0,
+    "total_score": 0
+  },
+  "reason": "Low risk",
+  "timestamp": 1766260725460,
+  "approved": null,
+  "approved_at": null,
+  "skipped": null
+}

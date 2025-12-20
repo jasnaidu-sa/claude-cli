@@ -2,10 +2,15 @@
  * Discovery Chat IPC Handlers
  *
  * Handles IPC communication between renderer and the discovery chat service.
+ * Includes BMAD-inspired complexity analysis and spec validation handlers.
  */
 
 import { ipcMain } from 'electron'
+import * as fs from 'fs/promises'
+import * as path from 'path'
 import { DiscoveryChatService, DISCOVERY_CHAT_CHANNELS, loadSessionFromDisk, listDrafts, loadDraft, deleteDraft, type DraftMetadata } from '../services/discovery-chat-service'
+import { ComplexityAnalyzer } from '../services/complexity-analyzer'
+import { SpecValidator } from '../services/spec-validator'
 
 // IPC channel names - use service channels plus handler-specific ones
 export const DISCOVERY_IPC_CHANNELS = {
@@ -21,9 +26,18 @@ export const DISCOVERY_IPC_CHANNELS = {
   LIST_DRAFTS: 'discovery:list-drafts',
   LOAD_DRAFT: 'discovery:load-draft',
   DELETE_DRAFT: 'discovery:delete-draft',
+  // STEP 4: Quick Spec generation
+  GENERATE_QUICK_SPEC: 'discovery:generate-quick-spec',
+  // BMAD-Inspired: Complexity analysis and spec validation
+  ANALYZE_COMPLEXITY: 'discovery:analyze-complexity',
+  VALIDATE_SPEC: 'discovery:validate-spec',
   // Events and shared channels from service (includes CREATE_SESSION, CREATE_FRESH_SESSION)
   ...DISCOVERY_CHAT_CHANNELS
 } as const
+
+// Service instances
+const complexityAnalyzer = new ComplexityAnalyzer()
+const specValidator = new SpecValidator()
 
 let discoveryChatService: DiscoveryChatService | null = null
 
@@ -165,6 +179,19 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
     }
   })
 
+  // STEP 4: Generate Quick Spec (fast, conversation-only)
+  ipcMain.handle(DISCOVERY_IPC_CHANNELS.GENERATE_QUICK_SPEC, async (_event, sessionId: string) => {
+    try {
+      console.log('[DiscoveryHandler] Generating quick spec for session:', sessionId)
+      await discoveryChatService!.generateQuickSpec(sessionId)
+      return { success: true }
+    } catch (error) {
+      console.error('[DiscoveryHandler] Error generating quick spec:', error)
+      const message = error instanceof Error ? error.message : 'Failed to generate quick spec'
+      return { success: false, error: message }
+    }
+  })
+
   // List all drafts for a project
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.LIST_DRAFTS, async (_event, projectPath: string) => {
     try {
@@ -204,6 +231,70 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
     } catch (error) {
       console.error('[DiscoveryHandler] Error deleting draft:', error)
       const message = error instanceof Error ? error.message : 'Failed to delete draft'
+      return { success: false, error: message }
+    }
+  })
+
+  // BMAD-Inspired: Analyze conversation complexity to suggest spec mode
+  ipcMain.handle(DISCOVERY_IPC_CHANNELS.ANALYZE_COMPLEXITY, async (_event, sessionId: string) => {
+    try {
+      console.log('[DiscoveryHandler] Analyzing complexity for session:', sessionId)
+
+      const session = discoveryChatService!.getSession(sessionId)
+      if (!session) {
+        return { success: false, error: 'Session not found' }
+      }
+
+      const messages = session.messages.map(m => ({
+        role: m.role,
+        content: m.content
+      }))
+
+      const analysis = complexityAnalyzer.analyze(messages)
+      console.log('[DiscoveryHandler] Complexity analysis:', {
+        score: analysis.score,
+        level: analysis.level,
+        factors: analysis.factors.length,
+        suggestedMode: analysis.suggestedMode
+      })
+
+      return { success: true, analysis }
+    } catch (error) {
+      console.error('[DiscoveryHandler] Error analyzing complexity:', error)
+      const message = error instanceof Error ? error.message : 'Failed to analyze complexity'
+      return { success: false, error: message }
+    }
+  })
+
+  // BMAD-Inspired: Validate spec readiness before execution
+  ipcMain.handle(DISCOVERY_IPC_CHANNELS.VALIDATE_SPEC, async (_event, projectPath: string, specContent?: string) => {
+    try {
+      console.log('[DiscoveryHandler] Validating spec readiness for:', projectPath)
+
+      // If specContent not provided, try to load from .autonomous/spec.md
+      let content = specContent
+      if (!content) {
+        const specPath = path.join(projectPath, '.autonomous', 'spec.md')
+        try {
+          content = await fs.readFile(specPath, 'utf-8')
+          console.log('[DiscoveryHandler] Loaded spec from:', specPath)
+        } catch {
+          return { success: false, error: 'No spec content provided and no spec.md found' }
+        }
+      }
+
+      const readinessCheck = await specValidator.validateReadiness(projectPath, content)
+      console.log('[DiscoveryHandler] Spec readiness:', {
+        passed: readinessCheck.passed,
+        score: readinessCheck.score,
+        blockers: readinessCheck.blockers.length,
+        warnings: readinessCheck.warnings.length
+      })
+
+      return { success: true, readinessCheck }
+    } catch (error) {
+      console.error('[DiscoveryHandler] Error validating spec:', error)
+      const message = error instanceof Error ? error.message : 'Failed to validate spec'
       return { success: false, error: message }
     }
   })

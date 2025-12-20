@@ -1,0 +1,106 @@
+{
+  "decisions": [
+    {
+      "featureId": "feat-001",
+      "decision": "auto-proceed",
+      "riskScore": 0,
+      "timestamp": 1766260725460,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-002",
+      "decision": "auto-proceed",
+      "riskScore": 5,
+      "timestamp": 1766260725505,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-003",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766261021465,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-002",
+      "decision": "auto-proceed",
+      "riskScore": 5,
+      "timestamp": 1766261121044,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-003",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766261385093,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-004",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766261416779,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-005",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766261656475,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-004",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766261676259,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-005",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766261919445,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-006",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766262016781,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-006",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766262105128,
+      "approved": null,
+      "skipped": null
+    },
+    {
+      "featureId": "feat-007",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766262181614,
+      "approved": null,
+      "skipped": null
+    }
+  ],
+  "stats": {
+    "totalDecisions": 12,
+    "autoProceed": 12,
+    "softCheckpoints": 0,
+    "hardCheckpoints": 0
+  }
+}

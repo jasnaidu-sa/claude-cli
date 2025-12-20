@@ -1,0 +1,137 @@
+APP SPECIFICATION
+================
+Project: test-project
+Generated: 2025-12-20T17:24:23.873Z
+
+=====================
+PROJECT SPECIFICATION
+=====================
+
+> Generated: 2025-12-20T17:24:07.153Z
+> Project: C:\Claude_Projects\Claude-cli\test-project
+
+---
+
+========================================
+FEATURE SPECIFICATION: COUNTER COMPONENT
+========================================
+
+OVERVIEW
+--------
+
+A minimal, self-contained React counter component that allows users to increment, decrement, and reset a numeric value. The component is built with TypeScript and React hooks, supports negative values, and includes comprehensive unit tests.
+
+REQUIREMENTS
+------------
+
+Functional Requirements:
+- Display a numeric counter value starting at 0
+- Increment button adds 1 to the current value
+- Decrement button subtracts 1 from the current value
+- Reset button returns the counter to 0
+- Counter can display negative values
+- No props required - component is fully self-contained
+
+Technical Constraints:
+- TypeScript with React hooks (useState)
+- No external dependencies beyond React
+- Inline styles for all UI styling
+- Button labels: +, -, Reset
+- Counter value displayed prominently in center
+- Buttons positioned below the counter value
+- Jest and React Testing Library for unit tests (already configured)
+
+UI Layout:
+    [Counter Value]
+  
+  [ - ]  [ + ]  [ Reset ]
+
+ARCHITECTURE
+------------
+
+File Structure:
+src/
+├── Counter.tsx          # Main component implementation
+├── Counter.test.tsx     # Unit tests with React Testing Library
+└── index.ts             # Named export barrel
+
+Component Design:
+- Component Type: Functional component using React hooks
+- State Management: Single useState hook for counter value
+- Export Pattern: Named export (export function Counter)
+- Styling Approach: Inline styles using style objects
+
+Integration Points:
+- Exported via src/index.ts as named export for consumption by other parts of the application
+- No dependencies on other components or services
+- Fully standalone and reusable
+
+IMPLEMENTATION STEPS
+--------------------
+
+1. Create Counter Component (src/Counter.tsx):
+- Define functional component Counter with TypeScript
+- Initialize state: const [count, setCount] = useState(0)
+- Implement three handler functions:
+  - handleIncrement: () => setCount(count + 1)
+  - handleDecrement: () => setCount(count - 1)
+  - handleReset: () => setCount(0)
+- Create inline styles object for:
+  - Container (flexbox, center alignment)
+  - Counter display (large font, prominent styling)
+  - Button container (flexbox, horizontal layout)
+  - Button styles (padding, margin, cursor)
+- Render structure:
+  - Outer container div
+  - Counter value display
+  - Button container with three buttons (-, +, Reset)
+
+2. Create Unit Tests (src/Counter.test.tsx):
+- Import @testing-library/react utilities (render, screen, fireEvent)
+- Import Counter component
+- Implement test cases:
+  1. Initial Render Test: Verify counter displays "0" on mount
+  2. Increment Test: Click + button, assert value increases to "1", click again, assert "2"
+  3. Decrement Test: Click - button from 0, assert "-1", click again, assert "-2"
+  4. Reset Test: Increment to positive value, click Reset, assert "0"; decrement to negative value, click Reset, assert "0"
+- Use screen.getByRole('button') and screen.getByText() for element queries
+- Use fireEvent.click() for button interactions
+
+3. Create Export Barrel (src/index.ts):
+- Single line: export { Counter } from './Counter'
+- Provides clean import path for consuming code
+
+4. Type Definitions:
+- Component return type: JSX.Element (or inferred)
+- State type: number (inferred from useState(0))
+- Event handlers: () => void
+- Style objects: React.CSSProperties
+
+TESTING
+-------
+
+Manual Testing Checklist:
+1. Component renders without errors
+2. Initial counter value displays as "0"
+3. Clicking "+" increments: 0 → 1 → 2 → 3...
+4. Clicking "-" decrements: 0 → -1 → -2 → -3...
+5. "Reset" button returns counter to 0 from any value (positive, negative, or zero)
+6. Buttons are interactive with proper cursor styling
+
+Automated Testing:
+Run unit tests with Jest:
+npm test Counter.test.tsx
+
+Expected Test Coverage:
+- ✓ Renders with initial count of 0
+- ✓ Increments count when + button is clicked
+- ✓ Decrements count when - button is clicked (including negative values)
+- ✓ Resets count to 0 from positive value
+- ✓ Resets count to 0 from negative value
+
+Acceptance Criteria:
+- All unit tests pass
+- Component builds without TypeScript errors
+- Component can be imported via import { Counter } from './components' (or appropriate path)
+- UI is functional and displays counter value clearly
+- All three buttons work as specified

@@ -1,0 +1,129 @@
+APP SPECIFICATION
+================
+Project: test-project
+Generated: 2025-12-20T17:05:43.888Z
+
+=====================
+PROJECT SPECIFICATION
+=====================
+
+> Generated: 2025-12-20T17:05:40.977Z
+> Project: C:\Claude_Projects\Claude-cli\test-project
+
+---
+
+========================================
+FEATURE SPECIFICATION: COUNTER COMPONENT
+========================================
+
+OVERVIEW
+--------
+
+Build a minimal, self-contained React counter component with increment, decrement, and reset functionality. The component uses TypeScript, React hooks (useState), and inline styles with no external dependencies.
+
+REQUIREMENTS
+------------
+
+Functional Requirements:
+- Display a counter value prominently in the center
+- Three buttons below the counter: − (decrement), + (increment), Reset
+- Increment button adds 1 to the counter
+- Decrement button subtracts 1 from the counter
+- Reset button sets the counter back to 0
+- Counter can go negative (no minimum value constraint)
+- Counter always starts at 0 (no configurable initial value)
+
+Technical Constraints:
+- TypeScript with React functional component
+- Use useState hook for state management
+- No external dependencies
+- No props required - fully self-contained
+- Inline styles only (no CSS files or CSS modules)
+- Jest and React Testing Library already configured in project
+
+ARCHITECTURE
+------------
+
+File Structure:
+src/
+├── Counter.tsx        # Main component implementation
+├── Counter.test.tsx   # Unit tests with React Testing Library
+└── index.ts           # Named export barrel
+
+Component Design:
+- State: Single useState<number> hook initialized to 0
+- Handlers: Three functions - increment, decrement, reset
+- Layout: Vertical layout with count display on top, buttons in a row below
+- Export: Named export Counter from barrel file
+
+IMPLEMENTATION STEPS
+--------------------
+
+1. Create src/Counter.tsx
+   - Define functional component Counter
+   - Initialize state: const [count, setCount] = useState(0)
+   - Create handler functions:
+     - increment: setCount(c => c + 1)
+     - decrement: setCount(c => c - 1)
+     - reset: setCount(0)
+   - Render count display with prominent styling (large font, centered)
+   - Render three buttons with −, +, Reset labels
+   - Apply inline styles for layout and basic visual presentation
+
+2. Create src/Counter.test.tsx
+   - Import render, screen, fireEvent from @testing-library/react
+   - Import Counter component
+   - Write test cases:
+     - "renders with initial count of 0"
+     - "increments count when + button is clicked"
+     - "decrements count when − button is clicked"
+     - "allows count to go negative"
+     - "resets count to 0 from any value"
+
+3. Create src/index.ts
+   - Add named export: export { Counter } from './Counter'
+
+TESTING
+-------
+
+Unit Tests (React Testing Library):
+
+| Test Case | Action | Expected Result |
+|-----------|--------|-----------------|
+| Initial render | Render component | Display shows "0" |
+| Increment | Click + button | Count increases by 1 |
+| Decrement | Click − button | Count decreases by 1 |
+| Negative values | Click − from 0 | Count shows "-1" |
+| Reset | Click Reset after changes | Count returns to 0 |
+
+Manual Verification:
+1. Run npm test to execute unit tests
+2. Render component in browser/Storybook
+3. Verify buttons respond to clicks
+4. Verify negative numbers display correctly
+5. Verify reset works from any value (positive or negative)
+
+CODE EXAMPLES
+-------------
+
+Counter.tsx Structure:
+import { useState } from 'react';
+
+export function Counter() {
+  const [count, setCount] = useState(0);
+  
+  // handlers: increment, decrement, reset
+  // return JSX with inline styles
+}
+
+Test Structure:
+import { render, screen, fireEvent } from '@testing-library/react';
+import { Counter } from './Counter';
+
+describe('Counter', () => {
+  it('renders with initial count of 0', () => { /* ... */ });
+  it('increments count when + button is clicked', () => { /* ... */ });
+  it('decrements count when - button is clicked', () => { /* ... */ });
+  it('allows count to go negative', () => { /* ... */ });
+  it('resets count to 0 from any value', () => { /* ... */ });
+});

@@ -12,11 +12,12 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Bot, User, Loader2, Cpu, FileText, XCircle, AlertCircle, StopCircle } from 'lucide-react'
+import { Send, Bot, User, Loader2, Cpu, FileText, XCircle, AlertCircle, StopCircle, Gauge, TrendingUp, Zap, Building2 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
 import { cn } from '@renderer/lib/utils'
 import type { DiscoveryChatMessage, DiscoveryAgentStatus, DiscoverySession } from '../../../preload/index'
+import type { ComplexityAnalysis } from '../../../shared/types'
 
 // Minimum number of user messages before showing "Generate Spec" button
 const MIN_MESSAGES_FOR_SPEC = 2
@@ -29,6 +30,7 @@ export function DiscoveryChat() {
     updateAgentStatus,
     clearAgentStatuses,
     goToNextPhase,
+    setPhase,
     selectedProject
   } = useAutonomousStore()
 
@@ -41,6 +43,9 @@ export function DiscoveryChat() {
   // Track tool activity for "thinking" display
   const [activeTools, setActiveTools] = useState<Array<{ name: string; status: 'running' | 'complete'; timestamp: number }>>([])
   const [thinkingEvents, setThinkingEvents] = useState<Array<{ type: string; content: string; timestamp: number }>>([])
+  // BMAD-Inspired: Complexity analysis for adaptive spec mode
+  const [complexityAnalysis, setComplexityAnalysis] = useState<ComplexityAnalysis | null>(null)
+  const [isAnalyzingComplexity, setIsAnalyzingComplexity] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const cleanupRef = useRef<(() => void)[]>([])
   const hasInitializedRef = useRef(false)
@@ -48,6 +53,30 @@ export function DiscoveryChat() {
 
   // Count user messages for "Generate Spec" button visibility
   const userMessageCount = chatMessages.filter(m => m.role === 'user').length
+
+  // BMAD-Inspired: Analyze complexity when conversation progresses
+  const analyzeComplexity = useCallback(async () => {
+    if (!sessionId || isAnalyzingComplexity) return
+
+    setIsAnalyzingComplexity(true)
+    try {
+      const result = await window.electron.discovery.analyzeComplexity(sessionId)
+      if (result.success && result.analysis) {
+        setComplexityAnalysis(result.analysis)
+      }
+    } catch (err) {
+      console.error('Failed to analyze complexity:', err)
+    } finally {
+      setIsAnalyzingComplexity(false)
+    }
+  }, [sessionId, isAnalyzingComplexity])
+
+  // Trigger complexity analysis after user sends messages
+  useEffect(() => {
+    if (userMessageCount >= MIN_MESSAGES_FOR_SPEC && sessionId && !isProcessing && !complexityAnalysis) {
+      analyzeComplexity()
+    }
+  }, [userMessageCount, sessionId, isProcessing, complexityAnalysis, analyzeComplexity])
 
   // Auto-scroll to bottom when messages change or streaming content updates
   useEffect(() => {
@@ -69,11 +98,16 @@ export function DiscoveryChat() {
       setActiveTools([])
       setThinkingEvents([])
       setError(null)
+      // CRITICAL: Clear old agent statuses from previous sessions
+      clearAgentStatuses()
     }
 
     const initSession = async () => {
       try {
         setError(null)
+        // Clear any old agent statuses before creating new session
+        clearAgentStatuses()
+
         const result = await window.electron.discovery.createSession(
           selectedProject.path,
           selectedProject.isNew
@@ -211,12 +245,23 @@ export function DiscoveryChat() {
 
         case 'system':
           // System initialization event - show progress
+          // STEP 1: System messages now accumulate into streaming content for visibility
+          if (data.chunk) {
+            setStreamingContent(prev => prev + data.chunk)
+          }
           if (toolName) {
             setThinkingEvents(prev => [...prev, {
               type: 'system',
               content: `⚙️ ${toolName}`,
               timestamp: Date.now()
             }])
+          }
+          break
+
+        case 'content':
+          // Streaming content from spec generation or other operations
+          if (data.chunk) {
+            setStreamingContent(prev => prev + data.chunk)
           }
           break
 
@@ -274,12 +319,28 @@ export function DiscoveryChat() {
     })
     cleanupRef.current.push(unsubError)
 
+    // Spec ready handler - spec generation completed successfully
+    const unsubSpecReady = window.electron.discovery.onSpecReady((data) => {
+      if (data.sessionId !== sessionId) return
+
+      console.log('[DiscoveryChat] Spec ready, transitioning to spec review')
+      setIsProcessing(false)
+      setStreamingContent('')
+      setStreamingMessageId(null)
+      setActiveTools([])
+      setThinkingEvents([])
+      // Quick Spec skips spec_generating phase - go directly to spec_review
+      // Using setPhase to skip intermediate phases that would trigger additional agents
+      setPhase('spec_review')
+    })
+    cleanupRef.current.push(unsubSpecReady)
+
     // Cleanup function
     return () => {
       cleanupRef.current.forEach(unsub => unsub())
       cleanupRef.current = []
     }
-  }, [sessionId, addChatMessage, updateAgentStatus])
+  }, [sessionId, addChatMessage, updateAgentStatus, goToNextPhase, setPhase])
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isProcessing || !sessionId) return
@@ -314,6 +375,28 @@ export function DiscoveryChat() {
       handleSend()
     }
   }, [handleSend])
+
+  // STEP 4: Quick Spec handler
+  const handleQuickSpec = useCallback(async () => {
+    if (!sessionId || isProcessing) return
+
+    setIsProcessing(true)
+    setError(null)
+
+    try {
+      const result = await window.electron.discovery.generateQuickSpec(sessionId)
+
+      if (!result.success) {
+        setError(result.error || 'Failed to generate quick spec')
+        setIsProcessing(false)
+      }
+      // Spec generation events will come through streaming
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate quick spec'
+      setError(message)
+      setIsProcessing(false)
+    }
+  }, [sessionId, isProcessing])
 
   const handleCancel = useCallback(async () => {
     try {
@@ -490,18 +573,46 @@ export function DiscoveryChat() {
             </div>
           </div>
 
-          {/* Generate Spec button - shown after sufficient conversation */}
-          <div className="mt-4 flex justify-end gap-2">
+          {/* Generate Spec buttons - shown after sufficient conversation */}
+          <div className="mt-4 flex justify-between items-center gap-2">
+            <p className="text-xs text-muted-foreground">
+              {userMessageCount < MIN_MESSAGES_FOR_SPEC
+                ? 'Continue the conversation to generate a specification.'
+                : complexityAnalysis
+                  ? `Recommended: ${complexityAnalysis.suggestedMode.replace('-', ' ')}`
+                  : 'Ready to generate spec'}
+            </p>
             {userMessageCount >= MIN_MESSAGES_FOR_SPEC && !isProcessing && (
-              <Button onClick={handleProceedToSpec} variant="default" className="gap-2">
-                <FileText className="h-4 w-4" />
-                Generate Spec
-              </Button>
-            )}
-            {userMessageCount < MIN_MESSAGES_FOR_SPEC && (
-              <p className="text-xs text-muted-foreground">
-                Continue the conversation to generate a specification.
-              </p>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleQuickSpec}
+                  variant={complexityAnalysis?.suggestedMode === 'quick-spec' ? 'default' : 'outline'}
+                  className="gap-2"
+                >
+                  <Zap className="h-4 w-4" />
+                  Quick Spec (30s)
+                  {complexityAnalysis?.suggestedMode === 'quick-spec' && (
+                    <span className="ml-1 text-xs opacity-75">★</span>
+                  )}
+                </Button>
+                <Button
+                  onClick={handleProceedToSpec}
+                  variant={complexityAnalysis?.suggestedMode === 'smart-spec' ? 'default' : 'outline'}
+                  className="gap-2"
+                >
+                  <FileText className="h-4 w-4" />
+                  Smart Spec (5-10min)
+                  {complexityAnalysis?.suggestedMode === 'smart-spec' && (
+                    <span className="ml-1 text-xs opacity-75">★</span>
+                  )}
+                </Button>
+                {complexityAnalysis?.suggestedMode === 'enterprise-spec' && (
+                  <Button onClick={handleProceedToSpec} variant="default" className="gap-2">
+                    <Building2 className="h-4 w-4" />
+                    Enterprise Spec ★
+                  </Button>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -564,6 +675,93 @@ export function DiscoveryChat() {
             </div>
           )}
         </div>
+
+        {/* BMAD-Inspired: Complexity Analysis Indicator */}
+        {(complexityAnalysis || isAnalyzingComplexity) && (
+          <div className="mb-4 p-3 bg-secondary/30 rounded-lg border border-border">
+            <h3 className="font-medium text-sm mb-2 flex items-center gap-2">
+              <Gauge className="h-4 w-4" />
+              Complexity Analysis
+            </h3>
+            {isAnalyzingComplexity ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Analyzing conversation...
+              </div>
+            ) : complexityAnalysis && (
+              <div className="space-y-2">
+                {/* Complexity Level Badge */}
+                <div className="flex items-center gap-2">
+                  {complexityAnalysis.level === 'quick' && (
+                    <span className="inline-flex items-center gap-1 text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded">
+                      <Zap className="h-3 w-3" />
+                      Quick Task
+                    </span>
+                  )}
+                  {complexityAnalysis.level === 'standard' && (
+                    <span className="inline-flex items-center gap-1 text-xs bg-primary/20 text-primary px-2 py-1 rounded">
+                      <TrendingUp className="h-3 w-3" />
+                      Standard Feature
+                    </span>
+                  )}
+                  {complexityAnalysis.level === 'enterprise' && (
+                    <span className="inline-flex items-center gap-1 text-xs bg-orange-500/20 text-orange-400 px-2 py-1 rounded">
+                      <Building2 className="h-3 w-3" />
+                      Enterprise Project
+                    </span>
+                  )}
+                </div>
+
+                {/* Complexity Score Bar */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Complexity Score</span>
+                    <span>{complexityAnalysis.score}/100</span>
+                  </div>
+                  <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-all duration-300',
+                        complexityAnalysis.score < 30 && 'bg-emerald-500',
+                        complexityAnalysis.score >= 30 && complexityAnalysis.score < 60 && 'bg-primary',
+                        complexityAnalysis.score >= 60 && 'bg-orange-500'
+                      )}
+                      style={{ width: `${complexityAnalysis.score}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Key Factors */}
+                {complexityAnalysis.factors.length > 0 && (
+                  <div className="pt-1">
+                    <p className="text-xs text-muted-foreground mb-1">Detected Factors:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {complexityAnalysis.factors.filter(f => f.detected).slice(0, 4).map((factor, idx) => (
+                        <span
+                          key={idx}
+                          className="text-xs bg-secondary px-1.5 py-0.5 rounded"
+                          title={factor.details || factor.name}
+                        >
+                          {factor.name}
+                        </span>
+                      ))}
+                      {complexityAnalysis.factors.filter(f => f.detected).length > 4 && (
+                        <span className="text-xs text-muted-foreground">
+                          +{complexityAnalysis.factors.filter(f => f.detected).length - 4} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Suggested Mode */}
+                <p className="text-xs text-muted-foreground pt-1">
+                  Suggested: <span className="text-foreground font-medium">{complexityAnalysis.suggestedMode.replace('-', ' ')}</span>
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Research Agents Section */}
         <h3 className="font-medium text-sm mb-3 flex items-center gap-2">

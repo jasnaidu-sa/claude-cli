@@ -25,7 +25,9 @@ import {
   ArrowLeft,
   CheckCircle,
   Circle,
-  Loader2
+  Loader2,
+  Cpu,
+  Code
 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { ProgressPanel } from './ProgressPanel'
@@ -36,6 +38,9 @@ import { cn } from '@renderer/lib/utils'
 
 /** Implementation phases for the stepper UI */
 type ImplementationPhase = 'initialization' | 'implementation' | 'verification'
+
+/** Orchestrator phases (Python agent phases) */
+type OrchestratorPhase = 'generation' | 'implementation'
 
 interface PhaseInfo {
   id: ImplementationPhase
@@ -92,6 +97,21 @@ function estimateRemainingTime(
   return formatElapsedTime(estimatedMs)
 }
 
+/**
+ * Check if feature_list.json exists for a project
+ * Returns true if the file exists, false otherwise
+ */
+async function checkFeatureListExists(projectPath: string): Promise<boolean> {
+  try {
+    // Use IPC to check if the file exists
+    const featureListPath = `${projectPath}/.autonomous/feature_list.json`
+    const result = await window.electron.fs.exists(featureListPath)
+    return result
+  } catch {
+    return false
+  }
+}
+
 export function ExecutionDashboard() {
   const {
     selectedProject,
@@ -116,9 +136,11 @@ export function ExecutionDashboard() {
   const [bottomPanelHeight, setBottomPanelHeight] = useState(250)
   const [isSpecExpanded, setIsSpecExpanded] = useState(false)
   const [isCreatingWorkflow, setIsCreatingWorkflow] = useState(false)
+  const [isStartingOrchestrator, setIsStartingOrchestrator] = useState(false)
   const [workflowError, setWorkflowError] = useState<string | null>(null)
   const [elapsedTime, setElapsedTime] = useState(0)
   const [currentPhase, setCurrentPhase] = useState<ImplementationPhase>('initialization')
+  const [hasAutoStartedImplementation, setHasAutoStartedImplementation] = useState(false)
 
   // Refs for timer
   const startTimeRef = useRef<number | null>(null)
@@ -150,7 +172,8 @@ export function ExecutionDashboard() {
   // Auto-create workflow and start execution when component mounts with generatedSpec but no activeWorkflow
   useEffect(() => {
     const autoCreateAndStartWorkflow = async () => {
-      if (!selectedProject || !generatedSpec || activeWorkflowId || isCreatingWorkflow) {
+      // Guard against double-execution
+      if (!selectedProject || !generatedSpec || activeWorkflowId || isCreatingWorkflow || isStartingOrchestrator) {
         return
       }
 
@@ -172,20 +195,28 @@ export function ExecutionDashboard() {
           // Reset timer on new start
           startTimeRef.current = null
           setElapsedTime(0)
+          setIsStartingOrchestrator(true)
 
           // Delay slightly to allow state to settle
+          // Start with generation phase to create feature_list.json
+          // User can review features before starting implementation
           setTimeout(async () => {
             try {
+              const specFile = '.autonomous/spec.md'
+
               await startOrchestrator({
                 projectPath: selectedProject.path,
                 workflowId: workflow.id,
-                phase: 'implementation',
-                model: workflow.model
+                phase: 'generation',
+                model: workflow.model,
+                specFile
               })
-              console.log('[ExecutionDashboard] Auto-started orchestrator for workflow:', workflow.id)
+              console.log('[ExecutionDashboard] Auto-started generation phase for workflow:', workflow.id)
             } catch (startErr) {
               console.error('[ExecutionDashboard] Failed to auto-start orchestrator:', startErr)
               setWorkflowError('Workflow created but failed to start execution. Click Start to try again.')
+            } finally {
+              setIsStartingOrchestrator(false)
             }
           }, 500)
         } else {
@@ -200,7 +231,7 @@ export function ExecutionDashboard() {
     }
 
     autoCreateAndStartWorkflow()
-  }, [selectedProject, generatedSpec, activeWorkflowId, isCreatingWorkflow, createWorkflow, setActiveWorkflow, startOrchestrator])
+  }, [selectedProject, generatedSpec, activeWorkflowId, isCreatingWorkflow, isStartingOrchestrator, createWorkflow, setActiveWorkflow, startOrchestrator])
 
   // Timer for elapsed time
   useEffect(() => {
@@ -242,23 +273,93 @@ export function ExecutionDashboard() {
     }
   }, [progress, goToNextPhase])
 
+  // Auto-continue from generation to implementation phase
+  useEffect(() => {
+    const autoContinueToImplementation = async () => {
+      // Only auto-continue if:
+      // 1. We have an active workflow and selected project
+      // 2. Generation phase just completed (session is completed and phase is generation)
+      // 3. We haven't already auto-started implementation
+      // 4. We're not currently starting another orchestrator
+      if (!activeWorkflow || !selectedProject || hasAutoStartedImplementation || isStartingOrchestrator) {
+        return
+      }
+
+      // Check if we just completed generation phase
+      const lastSession = workflowSessions[workflowSessions.length - 1]
+      if (lastSession?.phase === 'generation' && lastSession?.status === 'completed') {
+        console.log('[ExecutionDashboard] Generation complete, auto-starting implementation phase...')
+
+        setHasAutoStartedImplementation(true)
+        setIsStartingOrchestrator(true)
+
+        // Small delay to show transition notification
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        try {
+          await startOrchestrator({
+            projectPath: selectedProject.path,
+            workflowId: activeWorkflow.id,
+            phase: 'implementation',
+            model: activeWorkflow.model
+          })
+          console.log('[ExecutionDashboard] Implementation phase started successfully')
+        } catch (err) {
+          console.error('[ExecutionDashboard] Failed to auto-start implementation:', err)
+          setWorkflowError('Failed to start implementation phase. Click Start to try again.')
+        } finally {
+          setIsStartingOrchestrator(false)
+        }
+      }
+    }
+
+    autoContinueToImplementation()
+  }, [activeWorkflow, selectedProject, workflowSessions, hasAutoStartedImplementation, isStartingOrchestrator, startOrchestrator])
+
   const handleBottomPanelResize = useCallback((delta: number) => {
     setBottomPanelHeight(prev => Math.max(100, Math.min(500, prev - delta)))
   }, [])
 
   const handleStart = async () => {
-    if (!activeWorkflow || !selectedProject) return
+    if (!activeWorkflow || !selectedProject || isStartingOrchestrator) return
 
     // Reset timer on new start
     startTimeRef.current = null
     setElapsedTime(0)
+    setIsStartingOrchestrator(true)
 
-    await startOrchestrator({
-      projectPath: selectedProject.path,
-      workflowId: activeWorkflow.id,
-      phase: 'implementation',
-      model: activeWorkflow.model
-    })
+    try {
+      // Smart phase selection with human-in-the-loop checkpoints:
+      // - If feature_list.json doesn't exist: Start with 'generation' phase
+      // - If feature_list.json exists: Start with 'implementation' phase
+      // Each phase runs independently to allow checkpoint review between phases
+      const featureListPath = `${selectedProject.path}/.autonomous/feature_list.json`
+      let phase: 'generation' | 'implementation' = 'generation'
+
+      try {
+        const result = await window.electron.files.readFile(featureListPath)
+        if (result.success && result.content) {
+          phase = 'implementation'
+          console.log('[ExecutionDashboard] feature_list.json exists, starting implementation phase')
+        } else {
+          console.log('[ExecutionDashboard] feature_list.json not found, starting generation phase')
+        }
+      } catch {
+        console.log('[ExecutionDashboard] Could not check feature_list.json, defaulting to generation phase')
+      }
+
+      const specFile = phase === 'generation' ? '.autonomous/spec.md' : undefined
+
+      await startOrchestrator({
+        projectPath: selectedProject.path,
+        workflowId: activeWorkflow.id,
+        phase,
+        model: activeWorkflow.model,
+        specFile
+      })
+    } finally {
+      setIsStartingOrchestrator(false)
+    }
   }
 
   const handlePause = async () => {
@@ -282,11 +383,29 @@ export function ExecutionDashboard() {
       startTimeRef.current = null
       setElapsedTime(0)
 
+      // Smart phase selection for retry
+      const featureListPath = `${selectedProject.path}/.autonomous/feature_list.json`
+      let phase: 'generation' | 'implementation' = 'generation'
+
+      try {
+        const result = await window.electron.files.readFile(featureListPath)
+        if (result.success && result.content) {
+          phase = 'implementation'
+        }
+      } catch {
+        // Default to generation
+      }
+
+      const specFile = phase === 'generation' ? '.autonomous/spec.md' : undefined
+
+      console.log(`[ExecutionDashboard] Retry: Starting ${phase} phase`)
+
       await startOrchestrator({
         projectPath: selectedProject.path,
         workflowId: activeWorkflow.id,
-        phase: 'implementation',
-        model: activeWorkflow.model
+        phase,
+        model: activeWorkflow.model,
+        specFile
       })
     }
   }
@@ -387,6 +506,28 @@ export function ExecutionDashboard() {
             {!activeSession && 'Ready to Start'}
           </span>
 
+          {/* Agent Type Badge */}
+          {activeSession && (
+            <div className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border',
+              activeSession.phase === 'generation'
+                ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                : 'bg-purple-500/10 border-purple-500/20 text-purple-400'
+            )}>
+              {activeSession.phase === 'generation' ? (
+                <>
+                  <Cpu className="h-3 w-3" />
+                  <span>GENERATION</span>
+                </>
+              ) : (
+                <>
+                  <Code className="h-3 w-3" />
+                  <span>IMPLEMENTATION</span>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Progress summary */}
           {progress && (
             <span className="text-sm text-muted-foreground">
@@ -410,9 +551,22 @@ export function ExecutionDashboard() {
           )}
 
           {!activeSession ? (
-            <Button size="sm" onClick={handleStart} disabled={isLoading || !activeWorkflow}>
-              <Play className="h-4 w-4 mr-1" />
-              Start
+            <Button
+              size="sm"
+              onClick={handleStart}
+              disabled={isLoading || !activeWorkflow || isStartingOrchestrator || isCreatingWorkflow}
+            >
+              {isStartingOrchestrator || isCreatingWorkflow ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  Starting...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-1" />
+                  Start
+                </>
+              )}
             </Button>
           ) : activeSession.status === 'running' ? (
             <>
@@ -427,9 +581,18 @@ export function ExecutionDashboard() {
             </>
           ) : activeSession.status === 'paused' ? (
             <>
-              <Button size="sm" onClick={handleStart}>
-                <Play className="h-4 w-4 mr-1" />
-                Resume
+              <Button size="sm" onClick={handleStart} disabled={isStartingOrchestrator}>
+                {isStartingOrchestrator ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    Resuming...
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-4 w-4 mr-1" />
+                    Resume
+                  </>
+                )}
               </Button>
               <Button variant="destructive" size="sm" onClick={handleStop}>
                 <Square className="h-4 w-4 mr-1" />
@@ -465,61 +628,42 @@ export function ExecutionDashboard() {
         </div>
       )}
 
-      {/* Phase Progress Stepper */}
-      <div className="px-4 py-3 border-b border-border shrink-0">
-        <div className="flex items-center justify-between">
-          {IMPLEMENTATION_PHASES.map((phase, index) => {
-            const isActive = phase.id === currentPhase
-            const isComplete = IMPLEMENTATION_PHASES.findIndex(p => p.id === currentPhase) > index
-            const isLast = index === IMPLEMENTATION_PHASES.length - 1
-
-            return (
-              <React.Fragment key={phase.id}>
-                <div className="flex items-center gap-2">
-                  {/* Step indicator */}
-                  <div className={cn(
-                    'h-8 w-8 rounded-full flex items-center justify-center border-2 transition-colors',
-                    isComplete && 'bg-emerald-500 border-emerald-500',
-                    isActive && 'border-primary bg-primary/10',
-                    !isComplete && !isActive && 'border-muted-foreground/30'
-                  )}>
-                    {isComplete ? (
-                      <CheckCircle className="h-5 w-5 text-white" />
-                    ) : isActive ? (
-                      <Loader2 className="h-4 w-4 text-primary animate-spin" />
-                    ) : (
-                      <Circle className="h-4 w-4 text-muted-foreground/30" />
-                    )}
-                  </div>
-
-                  {/* Step label */}
-                  <div>
-                    <p className={cn(
-                      'text-sm font-medium',
-                      isActive && 'text-primary',
-                      isComplete && 'text-emerald-500',
-                      !isComplete && !isActive && 'text-muted-foreground'
-                    )}>
-                      {phase.label}
-                    </p>
-                    <p className="text-xs text-muted-foreground hidden sm:block">
-                      {phase.description}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Connector line */}
-                {!isLast && (
-                  <div className={cn(
-                    'flex-1 h-0.5 mx-3',
-                    isComplete ? 'bg-emerald-500' : 'bg-muted-foreground/20'
-                  )} />
-                )}
-              </React.Fragment>
-            )
-          })}
+      {/* Phase Transition Notification */}
+      {activeSession?.phase === 'generation' && activeSession?.status === 'completed' && !hasAutoStartedImplementation && (
+        <div className="px-4 py-3 bg-blue-500/10 border-b border-blue-500/20">
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
+            <span className="text-sm text-blue-400 font-medium">
+              Feature generation complete. Starting implementation phase...
+            </span>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Simple Progress Bar */}
+      {progress && progress.total > 0 && (
+        <div className="px-4 py-3 border-b border-border shrink-0">
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm font-medium">
+              Progress: {progress.passing} / {progress.total} tests
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {progress.percentage}%
+            </div>
+          </div>
+          <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+            <div
+              className={cn(
+                'h-full transition-all duration-500',
+                progress.percentage === 100
+                  ? 'bg-green-500'
+                  : 'bg-primary'
+              )}
+              style={{ width: `${progress.percentage}%` }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Collapsible Spec Summary Panel */}
       {specSummary && (

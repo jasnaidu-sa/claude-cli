@@ -1,0 +1,126 @@
+APP SPECIFICATION
+================
+Project: test-project
+Generated: 2025-12-20T16:53:58.778Z
+
+=====================
+PROJECT SPECIFICATION
+=====================
+
+> Generated: 2025-12-20T16:53:22.800Z
+> Project: C:\Claude_Projects\Claude-cli\test-project
+
+---
+
+========================================
+FEATURE SPECIFICATION: COUNTER COMPONENT
+========================================
+
+OVERVIEW
+--------
+
+A minimal React counter component built with TypeScript and React hooks. The component displays a numeric counter with increment, decrement, and reset functionality. The counter starts at 0 and can go negative.
+
+REQUIREMENTS
+------------
+
+Functional Requirements:
+- Display a counter value prominently in the center
+- Increment button (+) adds 1 to the counter
+- Decrement button (−) subtracts 1 from the counter
+- Reset button returns the counter to 0
+- Counter can go negative (no minimum value constraint)
+- Counter always starts at 0
+
+Technical Constraints:
+- TypeScript with React hooks (useState)
+- No external dependencies
+- No props required - self-contained component
+- Inline styles only (no CSS modules or external stylesheets)
+- Jest and React Testing Library already configured in project
+
+ARCHITECTURE
+------------
+
+File Structure:
+src/
+├── Counter.tsx        # Main component implementation
+├── Counter.test.tsx   # Unit tests with React Testing Library
+└── index.ts           # Named export barrel file
+
+Component Design:
+- State: Single useState<number> hook initialized to 0
+- Event Handlers: Three functions - increment, decrement, reset
+- Layout: Counter value displayed prominently, three buttons arranged horizontally below
+- Export: Named export (export { Counter })
+
+IMPLEMENTATION STEPS
+--------------------
+
+1. Create src/Counter.tsx
+   - Define functional component with React.FC type
+   - Initialize state: const [count, setCount] = useState(0)
+   - Create handler functions:
+     - increment: setCount(prev => prev + 1)
+     - decrement: setCount(prev => prev - 1)
+     - reset: setCount(0)
+   - Render counter value in centered container with prominent styling
+   - Render three buttons with labels: −, +, Reset
+   - Apply inline styles for layout and visual hierarchy
+
+2. Create src/index.ts
+   - Add named export: export { Counter } from './Counter'
+
+3. Create src/Counter.test.tsx
+   - Import render, screen, fireEvent from @testing-library/react
+   - Import Counter component
+   - Write test cases:
+     - "renders with initial count of 0"
+     - "increments count when + button is clicked"
+     - "decrements count when − button is clicked"
+     - "allows count to go negative"
+     - "resets count to 0 from positive value"
+     - "resets count to 0 from negative value"
+
+TESTING
+-------
+
+Unit Tests (React Testing Library):
+
+| Test Case | Action | Expected Result |
+|-----------|--------|-----------------|
+| Initial render | Render component | Display shows 0 |
+| Increment | Click + button | Count increases by 1 |
+| Decrement | Click − button | Count decreases by 1 |
+| Negative values | Click − multiple times from 0 | Count goes negative (e.g., -1, -2) |
+| Reset from positive | Set count to positive, click Reset | Count returns to 0 |
+| Reset from negative | Set count to negative, click Reset | Count returns to 0 |
+
+Manual Verification:
+1. Run npm test or yarn test to execute unit tests
+2. Import and render <Counter /> in application
+3. Verify visual layout: count centered, buttons below
+4. Test all button interactions manually
+
+UI MOCKUP
+---------
+
+┌─────────────────────────┐
+│                         │
+│           0             │  ← Counter value (large, centered)
+│                         │
+│    [ − ]  [ + ]  [Reset]│  ← Buttons (horizontal row)
+│                         │
+└─────────────────────────┘
+
+ACCEPTANCE CRITERIA
+-------------------
+
+- [ ] Component renders without errors
+- [ ] Initial count displays as 0
+- [ ] Clicking + increments the count
+- [ ] Clicking − decrements the count
+- [ ] Count can go negative
+- [ ] Clicking Reset returns count to 0
+- [ ] All unit tests pass
+- [ ] Named export works from src/index.ts

@@ -1,0 +1,39 @@
+{
+  "score": 53,
+  "level": "standard",
+  "factors": [
+    {
+      "name": "state_management",
+      "weight": 10,
+      "detected": true,
+      "details": "Matched: state"
+    },
+    {
+      "name": "file_upload",
+      "weight": 10,
+      "detected": true,
+      "details": "Matched: file"
+    },
+    {
+      "name": "ui_component",
+      "weight": 5,
+      "detected": true,
+      "details": "Matched: component, button"
+    },
+    {
+      "name": "styling",
+      "weight": 3,
+      "detected": true,
+      "details": "Matched: css, style"
+    },
+    {
+      "name": "feature_count",
+      "weight": 25,
+      "detected": true,
+      "details": "6 distinct features detected"
+    }
+  ],
+  "suggestedMode": "smart-spec",
+  "confidence": 0.8,
+  "analyzedAt": 1766259825175
+}

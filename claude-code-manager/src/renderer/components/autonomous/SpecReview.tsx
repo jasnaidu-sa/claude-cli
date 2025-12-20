@@ -27,20 +27,25 @@ import {
   Cpu,
   X,
   AlertCircle,
-  Loader2
+  Loader2,
+  ShieldCheck,
+  ShieldAlert,
+  RefreshCw
 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
 import { cn } from '@renderer/lib/utils'
 import type { AgentStatus, GeneratedSpec } from '@renderer/stores/autonomous-store'
+import type { ReadinessCheck } from '../../../shared/types'
 
-// Required sections for a valid spec
-const REQUIRED_SECTIONS = [
-  'Overview',
-  'Features',
-  'Technical Requirements',
-  'Test Cases'
-]
+// Required sections for a valid spec (flexible matching)
+// We check for these OR their common alternatives
+const SECTION_PATTERNS: Record<string, RegExp> = {
+  'Overview': /overview|introduction|summary/i,
+  'Features/Requirements': /features?|requirements?|functional/i,
+  'Technical': /technical|architecture|implementation|design/i,
+  'Testing': /test(s|ing)?|verification|quality/i
+}
 
 // ----------------------------------------------------------------------------
 // Simple Markdown Renderer (no external dependencies)
@@ -499,25 +504,39 @@ interface ValidationResult {
 }
 
 function validateSpec(markdown: string): ValidationResult {
-  const sections = REQUIRED_SECTIONS.map((name) => {
-    // Check if section header exists (case-insensitive)
-    const regex = new RegExp(`^##\\s+${name}`, 'im')
-    return {
-      name,
-      present: regex.test(markdown)
-    }
+  // Extract all H2 section headers from the markdown
+  const h2Headers: string[] = []
+  const headerMatches = markdown.matchAll(/^##\s+(.+)$/gim)
+  for (const match of headerMatches) {
+    h2Headers.push(match[1].trim())
+  }
+
+  // Check each required section pattern against actual headers
+  const sections = Object.entries(SECTION_PATTERNS).map(([name, pattern]) => {
+    const present = h2Headers.some(header => pattern.test(header))
+    return { name, present }
   })
 
-  // Count features mentioned (look for numbered lists or feature-related content)
-  const featureSection = markdown.match(
-    /##\s+Features[\s\S]*?(?=##|$)/i
-  )
+  // Count features/requirements mentioned (look in any features/requirements section)
   let featureCount = 0
+  const featureSection = markdown.match(
+    /##\s+(Features?|Requirements?|Functional)[\s\S]*?(?=##|$)/i
+  )
   if (featureSection) {
     // Count numbered items
     const numberedItems = featureSection[0].match(/^\d+\./gm)
     // Count bullet items
     const bulletItems = featureSection[0].match(/^[\s]*[-*]\s/gm)
+    featureCount = (numberedItems?.length || 0) + (bulletItems?.length || 0)
+  }
+
+  // Also check Implementation Steps for feature-like content
+  const implSection = markdown.match(
+    /##\s+Implementation[\s\S]*?(?=##|$)/i
+  )
+  if (implSection && featureCount === 0) {
+    const numberedItems = implSection[0].match(/^\d+\./gm)
+    const bulletItems = implSection[0].match(/^[\s]*[-*]\s/gm)
     featureCount = (numberedItems?.length || 0) + (bulletItems?.length || 0)
   }
 
@@ -533,13 +552,13 @@ function validateSpec(markdown: string): ValidationResult {
 
   // Check feature count
   if (featureCount < 3) {
-    warnings.push('Spec should list at least 3 features')
+    warnings.push('Spec should list at least 3 features/steps')
   }
 
-  // Check for test cases section content
-  const testSection = markdown.match(/##\s+Test Cases[\s\S]*?(?=##|$)/i)
+  // Check for test/testing section content
+  const testSection = markdown.match(/##\s+(Test(s|ing)?|Verification)[\s\S]*?(?=##|$)/i)
   if (testSection && testSection[0].length < 100) {
-    warnings.push('Test Cases section seems incomplete')
+    warnings.push('Testing section seems incomplete')
   }
 
   return {
@@ -685,7 +704,58 @@ export function SpecReview() {
   const [activeSection, setActiveSection] = useState<string | null>(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [isApproving, setIsApproving] = useState(false)
+  // BMAD-Inspired: Readiness Gate
+  const [readinessCheck, setReadinessCheck] = useState<ReadinessCheck | null>(null)
+  const [isCheckingReadiness, setIsCheckingReadiness] = useState(false)
+  const [specFromDisk, setSpecFromDisk] = useState<string | null>(null)
+  const [isLoadingSpec, setIsLoadingSpec] = useState(true)
   const contentRef = useRef<HTMLDivElement>(null)
+
+  // Load spec from disk on mount (Quick Spec saves directly to disk)
+  useEffect(() => {
+    const loadSpecFromDisk = async () => {
+      if (!selectedProject?.path) {
+        setIsLoadingSpec(false)
+        return
+      }
+
+      try {
+        // Try to load spec.md from .autonomous directory
+        const specPath = `${selectedProject.path}/.autonomous/spec.md`
+        const result = await window.electron.files.readFile(specPath)
+
+        if (result.success && result.content) {
+          console.log('[SpecReview] Loaded spec from disk:', specPath)
+          setSpecFromDisk(result.content)
+
+          // Also update the store so other components can use it
+          if (!generatedSpec || generatedSpec.markdown !== result.content) {
+            const appSpecTxt = convertToAppSpec(result.content, selectedProject.name || 'Unknown')
+            setGeneratedSpec({
+              markdown: result.content,
+              appSpecTxt,
+              sections: parseMarkdownSections(result.content).map(s => ({
+                id: s.id,
+                title: s.title,
+                content: '',
+                editable: true
+              })),
+              featureCount: parseMarkdownSections(result.content).length,
+              readyForExecution: true
+            })
+          }
+        } else {
+          console.log('[SpecReview] No spec.md found on disk, using store or placeholder')
+        }
+      } catch (err) {
+        console.error('[SpecReview] Error loading spec from disk:', err)
+      } finally {
+        setIsLoadingSpec(false)
+      }
+    }
+
+    loadSpecFromDisk()
+  }, [selectedProject?.path])
 
   // Placeholder spec for development
   const placeholderSpec = `# Feature Specification
@@ -783,13 +853,41 @@ src/
 *Review this specification carefully before approving. Once approved, the autonomous coding process will begin.*
 `
 
-  const displaySpec = generatedSpec?.markdown || placeholderSpec
+  // Priority: disk spec > store spec > placeholder
+  const displaySpec = specFromDisk || generatedSpec?.markdown || placeholderSpec
 
   // Parse sections for TOC
   const sections = useMemo(() => parseMarkdownSections(displaySpec), [displaySpec])
 
   // Validate spec
   const validation = useMemo(() => validateSpec(displaySpec), [displaySpec])
+
+  // BMAD-Inspired: Check spec readiness for implementation
+  const checkReadiness = useCallback(async () => {
+    if (!selectedProject?.path) return
+
+    setIsCheckingReadiness(true)
+    try {
+      const result = await window.electron.discovery.validateSpec(
+        selectedProject.path,
+        displaySpec
+      )
+      if (result.success && result.readinessCheck) {
+        setReadinessCheck(result.readinessCheck)
+      }
+    } catch (err) {
+      console.error('Failed to check readiness:', err)
+    } finally {
+      setIsCheckingReadiness(false)
+    }
+  }, [selectedProject?.path, displaySpec])
+
+  // Run readiness check when spec loads or changes
+  useEffect(() => {
+    if (displaySpec && selectedProject?.path && !isEditing) {
+      checkReadiness()
+    }
+  }, [displaySpec, selectedProject?.path, isEditing, checkReadiness])
 
   // Update edited markdown when generatedSpec changes
   useEffect(() => {
@@ -898,6 +996,16 @@ src/
     setShowConfirmDialog(false)
   }
 
+  // Show loading state while spec is being loaded from disk
+  if (isLoadingSpec) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
+        <p className="text-muted-foreground">Loading specification...</p>
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex flex-col">
       {/* Toolbar */}
@@ -905,7 +1013,12 @@ src/
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-muted-foreground" />
           <span className="font-medium text-sm">Generated Specification</span>
-          {!generatedSpec && (
+          {specFromDisk && (
+            <span className="text-xs bg-emerald-500/20 text-emerald-500 px-2 py-0.5 rounded">
+              Loaded from disk
+            </span>
+          )}
+          {!specFromDisk && !generatedSpec && (
             <span className="text-xs bg-yellow-500/20 text-yellow-500 px-2 py-0.5 rounded">
               Placeholder
             </span>
@@ -946,11 +1059,33 @@ src/
               <Button
                 size="sm"
                 onClick={handleApproveAndStart}
-                className="bg-emerald-600 hover:bg-emerald-700"
-                disabled={!validation.isValid}
+                className={cn(
+                  'bg-emerald-600 hover:bg-emerald-700',
+                  readinessCheck && !readinessCheck.passed && 'bg-yellow-600 hover:bg-yellow-700'
+                )}
+                disabled={
+                  // Button is enabled if:
+                  // 1. Local validation passes AND no blockers, OR
+                  // 2. Readiness check passed (score >= 70 with no blockers)
+                  !(
+                    (validation.isValid && (readinessCheck?.blockers.length ?? 0) === 0) ||
+                    (readinessCheck?.passed && (readinessCheck?.blockers.length ?? 0) === 0)
+                  )
+                }
+                title={
+                  readinessCheck?.blockers.length
+                    ? `Blocked: ${readinessCheck.blockers[0]}`
+                    : !validation.isValid && !readinessCheck?.passed
+                      ? 'Validation incomplete - waiting for readiness check'
+                      : 'Approve and start execution'
+                }
               >
-                <Play className="h-4 w-4 mr-1" />
-                Approve & Start
+                {readinessCheck && !readinessCheck.passed ? (
+                  <ShieldAlert className="h-4 w-4 mr-1" />
+                ) : (
+                  <Play className="h-4 w-4 mr-1" />
+                )}
+                {readinessCheck?.blockers.length ? 'Fix Blockers' : 'Approve & Start'}
               </Button>
             </>
           )}
@@ -1076,6 +1211,108 @@ src/
                 </ul>
               </div>
             )}
+
+            {/* BMAD-Inspired: Implementation Readiness Gate */}
+            <div className={cn(
+              'p-3 rounded-lg border',
+              isCheckingReadiness && 'bg-secondary/50 border-border',
+              readinessCheck?.passed && 'bg-emerald-500/10 border-emerald-500/20',
+              readinessCheck && !readinessCheck.passed && 'bg-red-500/10 border-red-500/20'
+            )}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  {isCheckingReadiness ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  ) : readinessCheck?.passed ? (
+                    <ShieldCheck className="h-4 w-4 text-emerald-500" />
+                  ) : (
+                    <ShieldAlert className="h-4 w-4 text-red-500" />
+                  )}
+                  <span className="font-medium text-sm">Readiness Gate</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={checkReadiness}
+                  disabled={isCheckingReadiness}
+                  title="Re-check readiness"
+                >
+                  <RefreshCw className={cn(
+                    'h-3 w-3',
+                    isCheckingReadiness && 'animate-spin'
+                  )} />
+                </Button>
+              </div>
+
+              {isCheckingReadiness ? (
+                <p className="text-xs text-muted-foreground">Checking implementation readiness...</p>
+              ) : readinessCheck ? (
+                <div className="space-y-2">
+                  {/* Readiness Score */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Score</span>
+                      <span className={cn(
+                        'font-medium',
+                        readinessCheck.score >= 70 && 'text-emerald-500',
+                        readinessCheck.score >= 40 && readinessCheck.score < 70 && 'text-yellow-500',
+                        readinessCheck.score < 40 && 'text-red-500'
+                      )}>{readinessCheck.score}/100</span>
+                    </div>
+                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all duration-300',
+                          readinessCheck.score >= 70 && 'bg-emerald-500',
+                          readinessCheck.score >= 40 && readinessCheck.score < 70 && 'bg-yellow-500',
+                          readinessCheck.score < 40 && 'bg-red-500'
+                        )}
+                        style={{ width: `${readinessCheck.score}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Blockers */}
+                  {readinessCheck.blockers.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-red-500">Blockers:</p>
+                      {readinessCheck.blockers.map((blocker, idx) => (
+                        <p key={idx} className="text-xs text-red-400 flex items-start gap-1">
+                          <XCircle className="h-3 w-3 mt-0.5 shrink-0" />
+                          {blocker}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Warnings */}
+                  {readinessCheck.warnings.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-yellow-500">Warnings:</p>
+                      {readinessCheck.warnings.map((warning, idx) => (
+                        <p key={idx} className="text-xs text-yellow-400 flex items-start gap-1">
+                          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                          {warning}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Passed Checks */}
+                  {readinessCheck.passed && readinessCheck.checks.filter(c => c.status === 'passed').length > 0 && (
+                    <div className="space-y-1 pt-1">
+                      <p className="text-xs text-emerald-500 font-medium">✓ Ready for implementation</p>
+                      <p className="text-xs text-muted-foreground">
+                        {readinessCheck.checks.filter(c => c.status === 'passed').length} checks passed
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Click refresh to check readiness</p>
+              )}
+            </div>
 
             {/* Agent Status */}
             <div className="pt-3 border-t border-border">

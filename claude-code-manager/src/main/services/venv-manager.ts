@@ -157,6 +157,8 @@ export class VenvManager extends EventEmitter {
 
   // Mutex flag to prevent concurrent venv operations (P1 race condition fix)
   private operationInProgress = false
+  // Promise to wait on if operation is in progress (allows callers to await instead of fail)
+  private pendingOperation: Promise<VenvStatus> | null = null
 
   constructor() {
     super()
@@ -346,12 +348,29 @@ export class VenvManager extends EventEmitter {
    * Create the virtual environment and install dependencies
    */
   async ensureVenv(): Promise<VenvStatus> {
-    // Mutex: prevent concurrent operations (P1 race condition fix)
-    if (this.operationInProgress) {
-      throw new Error('Venv operation already in progress')
+    // Mutex: if operation in progress, wait for it instead of throwing
+    if (this.operationInProgress && this.pendingOperation) {
+      console.log('[VenvManager] Operation in progress, waiting for existing operation...')
+      return this.pendingOperation
     }
 
     this.operationInProgress = true
+
+    // Create the promise for this operation so other callers can wait
+    this.pendingOperation = this._doEnsureVenv()
+
+    try {
+      return await this.pendingOperation
+    } finally {
+      this.operationInProgress = false
+      this.pendingOperation = null
+    }
+  }
+
+  /**
+   * Internal implementation of ensureVenv
+   */
+  private async _doEnsureVenv(): Promise<VenvStatus> {
 
     try {
       this.emitProgress('checking', 'Checking existing venv...', 0)
@@ -413,8 +432,9 @@ export class VenvManager extends EventEmitter {
 
       this.emitProgress('complete', 'Venv setup complete', 100)
       return this.getStatus()
-    } finally {
-      this.operationInProgress = false
+    } catch (error) {
+      // Re-throw to let the outer ensureVenv handle cleanup
+      throw error
     }
   }
 

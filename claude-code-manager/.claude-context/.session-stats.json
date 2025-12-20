@@ -1,6 +1,6 @@
 {
-  "totalEdits": 124,
-  "lastEdit": "2025-12-19T12:30:20.538Z",
+  "totalEdits": 237,
+  "lastEdit": "2025-12-20T18:33:56.073Z",
   "files": {
     "src/main/ipc/preflight-handlers.ts": {
       "edits": 9,
@@ -28,14 +28,14 @@
       "lastEdit": "2025-12-19T10:53:32.744Z"
     },
     "src/main/ipc/discovery-handlers.ts": {
-      "edits": 8,
+      "edits": 13,
       "firstEdit": "2025-12-18T21:06:16.847Z",
-      "lastEdit": "2025-12-19T07:08:36.894Z"
+      "lastEdit": "2025-12-20T08:46:50.887Z"
     },
     "src/preload/index.ts": {
-      "edits": 9,
+      "edits": 15,
       "firstEdit": "2025-12-18T21:07:18.711Z",
-      "lastEdit": "2025-12-19T12:30:20.538Z"
+      "lastEdit": "2025-12-20T12:11:38.476Z"
     },
     "src/renderer/components/autonomous/ProjectPicker.tsx": {
       "edits": 18,
@@ -48,14 +48,14 @@
       "lastEdit": "2025-12-19T06:11:18.131Z"
     },
     "src/main/services/research-agent-runner.ts": {
-      "edits": 13,
+      "edits": 15,
       "firstEdit": "2025-12-19T06:11:48.757Z",
-      "lastEdit": "2025-12-19T06:48:39.097Z"
+      "lastEdit": "2025-12-20T10:54:02.211Z"
     },
     "src/main/services/discovery-chat-service.ts": {
-      "edits": 3,
+      "edits": 28,
       "firstEdit": "2025-12-19T07:06:20.307Z",
-      "lastEdit": "2025-12-19T07:07:34.406Z"
+      "lastEdit": "2025-12-20T18:33:56.073Z"
     },
     "src/renderer/styles/globals.css": {
       "edits": 1,
@@ -73,9 +73,9 @@
       "lastEdit": "2025-12-19T07:55:09.181Z"
     },
     "src/renderer/components/autonomous/DiscoveryChat.tsx": {
-      "edits": 9,
+      "edits": 26,
       "firstEdit": "2025-12-19T10:38:35.203Z",
-      "lastEdit": "2025-12-19T10:40:38.678Z"
+      "lastEdit": "2025-12-20T12:19:25.625Z"
     },
     "src/renderer/components/autonomous/AutonomousView.tsx": {
       "edits": 2,
@@ -83,9 +83,9 @@
       "lastEdit": "2025-12-19T10:41:04.950Z"
     },
     "src/renderer/components/autonomous/ExecutionDashboard.tsx": {
-      "edits": 4,
+      "edits": 27,
       "firstEdit": "2025-12-19T10:41:48.857Z",
-      "lastEdit": "2025-12-19T10:42:48.527Z"
+      "lastEdit": "2025-12-20T18:08:05.257Z"
     },
     "src/renderer/components/autonomous/SpecGenerating.tsx": {
       "edits": 3,
@@ -118,9 +118,9 @@
       "lastEdit": "2025-12-19T10:54:09.818Z"
     },
     "src/renderer/components/autonomous/SpecReview.tsx": {
-      "edits": 3,
+      "edits": 15,
       "firstEdit": "2025-12-19T10:51:24.491Z",
-      "lastEdit": "2025-12-19T10:51:33.213Z"
+      "lastEdit": "2025-12-20T12:36:00.091Z"
     },
     "src/renderer/components/autonomous/WorkflowCard.tsx": {
       "edits": 5,
@@ -146,6 +146,51 @@
       "edits": 1,
       "firstEdit": "2025-12-19T12:27:37.179Z",
       "lastEdit": "2025-12-19T12:27:37.179Z"
+    },
+    "src/main/services/orchestrator-runner.ts": {
+      "edits": 9,
+      "firstEdit": "2025-12-20T07:20:01.123Z",
+      "lastEdit": "2025-12-20T16:13:47.357Z"
+    },
+    "src/shared/types.ts": {
+      "edits": 3,
+      "firstEdit": "2025-12-20T07:20:28.513Z",
+      "lastEdit": "2025-12-20T08:45:49.699Z"
+    },
+    "src/renderer/components/autonomous/AgentTerminalGrid.tsx": {
+      "edits": 2,
+      "firstEdit": "2025-12-20T07:31:54.408Z",
+      "lastEdit": "2025-12-20T07:32:43.609Z"
+    },
+    "src/renderer/components/autonomous/index.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-20T07:32:11.956Z",
+      "lastEdit": "2025-12-20T07:32:11.956Z"
+    },
+    "src/main/services/complexity-analyzer.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-20T08:41:56.524Z",
+      "lastEdit": "2025-12-20T08:41:56.524Z"
+    },
+    "src/main/services/spec-validator.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-20T08:42:59.654Z",
+      "lastEdit": "2025-12-20T08:42:59.654Z"
+    },
+    "src/main/services/checkpoint-conditions.ts": {
+      "edits": 1,
+      "firstEdit": "2025-12-20T08:45:17.082Z",
+      "lastEdit": "2025-12-20T08:45:17.082Z"
+    },
+    "src/renderer/stores/autonomous-store.ts": {
+      "edits": 2,
+      "firstEdit": "2025-12-20T10:46:41.342Z",
+      "lastEdit": "2025-12-20T10:46:57.748Z"
+    },
+    "src/main/services/venv-manager.ts": {
+      "edits": 3,
+      "firstEdit": "2025-12-20T13:28:43.626Z",
+      "lastEdit": "2025-12-20T13:29:14.080Z"
     }
   }
 }

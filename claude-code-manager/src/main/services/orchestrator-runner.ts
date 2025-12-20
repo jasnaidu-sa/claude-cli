@@ -23,10 +23,41 @@ import { randomBytes } from 'crypto'
 import { EventEmitter } from 'events'
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import * as os from 'os'
 import { venvManager } from './venv-manager'
 import { getMainWindow } from '../index'
 import { IPC_CHANNELS } from '@shared/types'
 import type { OrchestratorOutputType } from '@shared/types'
+
+/**
+ * Read OAuth token from Claude CLI credentials file
+ * Returns the access token if available, undefined otherwise
+ */
+async function getClaudeOAuthToken(): Promise<string | undefined> {
+  try {
+    const credentialsPath = path.join(os.homedir(), '.claude', '.credentials.json')
+    const content = await fs.readFile(credentialsPath, 'utf-8')
+    const credentials = JSON.parse(content)
+
+    // Check if token exists and is not expired
+    const oauth = credentials?.claudeAiOauth
+    if (oauth?.accessToken) {
+      const expiresAt = oauth.expiresAt || 0
+      const now = Date.now()
+
+      // Token is valid if it expires more than 5 minutes from now
+      if (expiresAt > now + 5 * 60 * 1000) {
+        console.log('[OrchestratorRunner] Found valid OAuth token from Claude CLI credentials')
+        return oauth.accessToken
+      } else {
+        console.warn('[OrchestratorRunner] OAuth token is expired or expiring soon')
+      }
+    }
+  } catch (error) {
+    console.log('[OrchestratorRunner] Could not read Claude CLI credentials:', error)
+  }
+  return undefined
+}
 
 // Orchestrator workflow phases
 export type OrchestratorPhase = 'validation' | 'generation' | 'implementation'
@@ -312,15 +343,47 @@ export class OrchestratorRunner extends EventEmitter {
     }
 
     const pythonPath = venvManager.getPythonPath()
-    const orchestratorPath = venvManager.getOrchestratorPath()
 
-    // Verify orchestrator scripts exist
-    const orchestratorScript = path.join(orchestratorPath, 'autonomous_agent_demo.py')
-    const scriptExists = await fs.access(orchestratorScript).then(() => true).catch(() => false)
+    // Get orchestrator script path from the app's autonomous-orchestrator directory
+    // Using __dirname to locate scripts relative to compiled output
+    // In dev: dist/main/index.js -> ../../../autonomous-orchestrator
+    // In production: may vary based on packaging
+    let orchestratorScript = path.join(__dirname, '../../../autonomous-orchestrator/autonomous_agent_demo.py')
+    let scriptExists = await fs.access(orchestratorScript).then(() => true).catch(() => false)
 
     if (!scriptExists) {
-      throw new Error('Orchestrator script not found. Run setup first.')
+      // Try alternative dev path (from dist/main/services/)
+      const altPath = path.join(__dirname, '../../autonomous-orchestrator/autonomous_agent_demo.py')
+      const altExists = await fs.access(altPath).then(() => true).catch(() => false)
+      if (altExists) {
+        orchestratorScript = altPath
+        scriptExists = true
+      }
     }
+
+    if (!scriptExists) {
+      // Try one more level up
+      const upPath = path.join(__dirname, '../../../../autonomous-orchestrator/autonomous_agent_demo.py')
+      const upExists = await fs.access(upPath).then(() => true).catch(() => false)
+      if (upExists) {
+        orchestratorScript = upPath
+        scriptExists = true
+      }
+    }
+
+    if (!scriptExists) {
+      console.error('[OrchestratorRunner] Script search paths:', {
+        __dirname,
+        tried: [
+          path.join(__dirname, '../../../autonomous-orchestrator/autonomous_agent_demo.py'),
+          path.join(__dirname, '../../autonomous-orchestrator/autonomous_agent_demo.py'),
+          path.join(__dirname, '../../../../autonomous-orchestrator/autonomous_agent_demo.py')
+        ]
+      })
+      throw new Error('Orchestrator script not found. Check autonomous-orchestrator directory.')
+    }
+
+    console.log('[OrchestratorRunner] Using script:', orchestratorScript)
 
     // Record session start for rate limiting
     this.sessionStartTimestamps.push(Date.now())
@@ -334,8 +397,8 @@ export class OrchestratorRunner extends EventEmitter {
       startedAt: Date.now()
     }
 
-    // Build environment variables
-    const env = this.buildEnvironment(config)
+    // Build environment variables (includes fetching OAuth token)
+    const env = await this.buildEnvironment(config)
 
     // Build command arguments based on phase
     const args = this.buildArguments(config, orchestratorScript)
@@ -347,32 +410,44 @@ export class OrchestratorRunner extends EventEmitter {
 
     // Spawn the process
     try {
+      console.log('[OrchestratorRunner] Spawning process:', {
+        pythonPath,
+        args,
+        cwd: config.projectPath
+      })
+
       const proc = spawn(pythonPath, args, {
         cwd: config.projectPath,
         env,
         stdio: ['pipe', 'pipe', 'pipe']
       })
 
+      console.log('[OrchestratorRunner] Process spawned, PID:', proc.pid)
+
       // Update session entry with process (safe assignment)
       sessionEntry.process = proc
 
       // Handle stdout
       proc.stdout?.on('data', (data: Buffer) => {
+        console.log('[OrchestratorRunner] stdout:', data.toString().substring(0, 200))
         this.handleOutput(session.id, 'stdout', data.toString())
       })
 
       // Handle stderr
       proc.stderr?.on('data', (data: Buffer) => {
+        console.log('[OrchestratorRunner] stderr:', data.toString().substring(0, 200))
         this.handleOutput(session.id, 'stderr', data.toString())
       })
 
       // Handle process exit
       proc.on('close', (code) => {
+        console.log('[OrchestratorRunner] Process closed with code:', code)
         this.handleProcessExit(session.id, code)
       })
 
       // Handle process error
       proc.on('error', (error) => {
+        console.log('[OrchestratorRunner] Process error:', error)
         this.handleProcessError(session.id, error)
       })
 
@@ -505,8 +580,9 @@ export class OrchestratorRunner extends EventEmitter {
 
   /**
    * Build environment variables for the process
+   * Fetches OAuth token from Claude CLI credentials if available
    */
-  private buildEnvironment(config: OrchestratorConfig): NodeJS.ProcessEnv {
+  private async buildEnvironment(config: OrchestratorConfig): Promise<NodeJS.ProcessEnv> {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       // Python-specific
@@ -515,12 +591,31 @@ export class OrchestratorRunner extends EventEmitter {
     }
 
     // Pass API keys from environment (don't hardcode)
-    if (process.env.ANTHROPIC_API_KEY) {
-      env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
+    // Check multiple possible env var names for the API key
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY
+    if (apiKey) {
+      env.ANTHROPIC_API_KEY = apiKey
+      console.log('[OrchestratorRunner] Using ANTHROPIC_API_KEY from environment')
     }
-    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN
+
+    // Check for OAuth token - first from env, then from Claude CLI credentials file
+    let oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN
+    if (!oauthToken) {
+      // Try to get OAuth token from Claude CLI credentials file
+      oauthToken = await getClaudeOAuthToken()
     }
+
+    if (oauthToken) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken
+      console.log('[OrchestratorRunner] Using OAuth token for authentication')
+    }
+
+    // Log warning if no auth method available
+    if (!apiKey && !oauthToken) {
+      console.warn('[OrchestratorRunner] WARNING: No authentication configured.')
+      console.warn('[OrchestratorRunner] Set ANTHROPIC_API_KEY or log in with `claude login`.')
+    }
+
     if (process.env.SUPABASE_ACCESS_TOKEN) {
       env.SUPABASE_ACCESS_TOKEN = process.env.SUPABASE_ACCESS_TOKEN
     }
@@ -540,21 +635,21 @@ export class OrchestratorRunner extends EventEmitter {
    * Build command arguments for the orchestrator
    */
   private buildArguments(config: OrchestratorConfig, scriptPath: string): string[] {
-    const args = [scriptPath, '--project-dir', config.projectPath]
+    const args = [scriptPath, '--project-path', config.projectPath]
 
-    // Phase-specific arguments
+    // Phase-specific arguments (must match Python argparse choices)
     switch (config.phase) {
       case 'validation':
-        args.push('--phase', 'validate')
+        args.push('--phase', 'validation')
         break
       case 'generation':
-        args.push('--phase', 'generate')
+        args.push('--phase', 'generation')
         if (config.specFile) {
           args.push('--spec-file', config.specFile)
         }
         break
       case 'implementation':
-        args.push('--phase', 'implement')
+        args.push('--phase', 'implementation')
         break
     }
 
@@ -595,6 +690,7 @@ export class OrchestratorRunner extends EventEmitter {
 
   /**
    * Parse output for progress information
+   * Handles both legacy text patterns and new JSON streaming events
    */
   private parseProgress(sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId)?.session
@@ -603,6 +699,62 @@ export class OrchestratorRunner extends EventEmitter {
     // Security: Limit data length to prevent ReDoS
     const limitedData = data.length > 10000 ? data.substring(0, 10000) : data
 
+    // Try to parse as JSON first (new streaming format from Claude Agent SDK)
+    // Each line may be a JSON object
+    const lines = limitedData.split('\n')
+    for (const line of lines) {
+      const trimmedLine = line.trim()
+      if (!trimmedLine || !trimmedLine.startsWith('{')) continue
+
+      try {
+        const parsed = JSON.parse(trimmedLine)
+
+        // Handle stream_chunk events (real-time streaming)
+        if (parsed.type === 'stream_chunk') {
+          this.handleStreamChunk(sessionId, parsed)
+          continue
+        }
+
+        // Handle progress events
+        if (parsed.type === 'progress') {
+          if (parsed.tests_passing !== undefined) {
+            session.testsPassing = parsed.tests_passing
+          }
+          if (parsed.tests_total !== undefined) {
+            session.testsTotal = parsed.tests_total
+          }
+          this.emitProgress(sessionId, {
+            sessionId,
+            phase: session.phase,
+            testsTotal: session.testsTotal,
+            testsPassing: session.testsPassing,
+            currentTest: parsed.current_test || parsed.currentTest,
+            message: parsed.message
+          })
+          continue
+        }
+
+        // Handle status events
+        if (parsed.type === 'status') {
+          if (parsed.status === 'completed') {
+            session.status = 'completed'
+            this.emitSessionUpdate(session)
+          } else if (parsed.status === 'error') {
+            session.status = 'error'
+            session.error = parsed.error || 'Unknown error'
+            this.emitSessionUpdate(session)
+          } else if (parsed.status === 'paused') {
+            session.status = 'paused'
+            this.emitSessionUpdate(session)
+          }
+          continue
+        }
+      } catch {
+        // Not JSON, continue with legacy pattern matching
+      }
+    }
+
+    // Legacy pattern matching for non-JSON output
     // Look for test progress patterns with bounded capture groups
     // Pattern: "Tests passing: X/Y" or "X/Y tests passing"
     const progressMatch = limitedData.match(/(\d{1,6})\/(\d{1,6})\s*(?:tests?\s*)?(?:passing|complete)/i)
@@ -642,6 +794,40 @@ export class OrchestratorRunner extends EventEmitter {
     if (/(?:Phase complete|All tests passing|SESSION COMPLETE)/i.test(limitedData)) {
       session.status = 'completed'
       this.emitSessionUpdate(session)
+    }
+  }
+
+  /**
+   * Handle stream_chunk events from Claude Agent SDK streaming
+   */
+  private handleStreamChunk(sessionId: string, chunk: {
+    chunk_type: string
+    data: unknown
+    phase?: string
+    iteration?: number
+    timestamp?: number
+  }): void {
+    const mainWindow = getMainWindow()
+    if (!mainWindow) return
+
+    // Emit the stream chunk to the renderer for real-time display
+    mainWindow.webContents.send(IPC_CHANNELS.ORCHESTRATOR_STREAM_CHUNK, {
+      sessionId,
+      chunkType: chunk.chunk_type,
+      data: chunk.data,
+      phase: chunk.phase,
+      iteration: chunk.iteration,
+      timestamp: chunk.timestamp || Date.now()
+    })
+
+    // Also emit as regular output for logging
+    if (chunk.chunk_type === 'text' && typeof chunk.data === 'string') {
+      this.emit('stream_text', { sessionId, text: chunk.data })
+    } else if (chunk.chunk_type === 'tool_start' && typeof chunk.data === 'object') {
+      const toolData = chunk.data as { name?: string }
+      this.emit('tool_start', { sessionId, tool: toolData.name })
+    } else if (chunk.chunk_type === 'complete') {
+      this.emit('stream_complete', { sessionId, data: chunk.data })
     }
   }
 

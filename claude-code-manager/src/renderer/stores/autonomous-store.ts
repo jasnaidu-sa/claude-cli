@@ -734,8 +734,9 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
     const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
     if (currentIndex < PHASE_ORDER.length - 1) {
       const nextPhase = PHASE_ORDER[currentIndex + 1]
-      // Skip journey_analysis for new projects
-      if (nextPhase === 'journey_analysis' && state.selectedProject?.isNew) {
+      // Skip journey_analysis - codebase analysis happens during spec generation
+      // after user conversation and complexity determination
+      if (nextPhase === 'journey_analysis') {
         set({ currentPhase: 'discovery_chat' })
       } else {
         set({ currentPhase: nextPhase })
@@ -748,8 +749,8 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
     const currentIndex = PHASE_ORDER.indexOf(state.currentPhase)
     if (currentIndex > 0) {
       const prevPhase = PHASE_ORDER[currentIndex - 1]
-      // Skip journey_analysis for new projects when going back
-      if (prevPhase === 'journey_analysis' && state.selectedProject?.isNew) {
+      // Skip journey_analysis when going back
+      if (prevPhase === 'journey_analysis') {
         set({ currentPhase: 'preflight' })
       } else {
         set({ currentPhase: prevPhase })
@@ -844,7 +845,8 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
       case 'preflight':
         return state.preflightStatus !== null && state.preflightStatus.errors.length === 0
       case 'journey_analysis':
-        return state.journeyAnalysis?.completed ?? false
+        // Journey analysis is now skipped - always return true
+        return true
       case 'discovery_chat':
         // Require minimum messages before advancing
         const userMessages = state.chatMessages.filter(m => m.role === 'user').length

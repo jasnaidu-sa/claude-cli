@@ -1,0 +1,111 @@
+APP SPECIFICATION
+================
+Project: test-project
+Generated: 2025-12-20T13:25:42.772Z
+
+=====================
+PROJECT SPECIFICATION
+=====================
+
+> Generated: 2025-12-20T13:25:16.808Z
+> Project: C:\Claude_Projects\Claude-cli\test-project
+
+---
+
+========================================
+FEATURE SPECIFICATION: COUNTER COMPONENT
+========================================
+
+OVERVIEW
+--------
+
+A minimal, self-contained React counter component with increment, decrement, and reset functionality. The component uses TypeScript, React hooks (useState), and inline styles with no external dependencies.
+
+REQUIREMENTS
+------------
+
+Functional Requirements:
+- Display a counter value prominently in the center
+- Three buttons below the counter: - (decrement), + (increment), Reset
+- Increment button adds 1 to the counter
+- Decrement button subtracts 1 from the counter
+- Reset button sets the counter back to 0
+- Counter can go negative (no minimum value constraint)
+- Always starts at 0 (no configurable initial value)
+
+Technical Constraints:
+- TypeScript with React functional components
+- Use useState hook for state management
+- Inline styles only (no CSS modules or external styling)
+- No external dependencies
+- No props required
+- Jest and React Testing Library already configured in project
+
+ARCHITECTURE
+------------
+
+File Structure:
+src/
+├── Counter.tsx        # Main component implementation
+├── Counter.test.tsx   # Unit tests with React Testing Library
+└── index.ts           # Named export barrel file
+
+Component Design:
+- Counter.tsx: Stateless presentation with local state via useState
+  - State: count: number initialized to 0
+  - Three handler functions: handleIncrement, handleDecrement, handleReset
+  - Inline styles for layout (centered value, button row below)
+
+- index.ts: Simple named re-export for clean imports
+    export { Counter } from './Counter'
+  
+
+IMPLEMENTATION STEPS
+--------------------
+
+1. Create src/Counter.tsx
+   - Define Counter functional component with useState(0)
+   - Implement three click handlers:
+     - handleIncrement: setCount(count + 1)
+     - handleDecrement: setCount(count - 1)
+     - handleReset: setCount(0)
+   - Render structure:
+     - Container div with centered content
+     - Display count value prominently (large font)
+     - Button row with -, +, Reset buttons
+   - Apply inline styles for layout and visual hierarchy
+
+2. Create src/index.ts
+   - Add named export: export { Counter } from './Counter'
+
+3. Create src/Counter.test.tsx
+   - Import render, screen, fireEvent from @testing-library/react
+   - Import Counter from ./Counter
+   - Write test cases:
+     - "renders with initial count of 0"
+     - "increments count when + button clicked"
+     - "decrements count when - button clicked"
+     - "decrements below zero (negative values)"
+     - "resets count to 0 from positive value"
+     - "resets count to 0 from negative value"
+
+TESTING
+-------
+
+Unit Tests (React Testing Library):
+
+| Test Case | Action | Expected Result |
+|-----------|--------|-----------------|
+| Initial render | None | Display shows "0" |
+| Increment | Click + button | Count increases by 1 |
+| Decrement | Click - button | Count decreases by 1 |
+| Negative values | Click - when count is 0 | Count shows "-1" |
+| Reset from positive | Set count to 5, click Reset | Count shows "0" |
+| Reset from negative | Set count to -3, click Reset | Count shows "0" |
+
+Manual Verification:
+1. Run npm test to execute test suite
+2. Import and render <Counter /> in app
+3. Verify buttons respond correctly to clicks
+4. Confirm negative values display properly
+5. Confirm reset works from any state

@@ -21,6 +21,8 @@ import { app } from 'electron'
 import { getMainWindow } from '../index'
 import { ConfigStore } from './config-store'
 import { ResearchAgentRunner } from './research-agent-runner'
+import { analyzeComplexity } from './complexity-analyzer'
+import type { ComplexityAnalysis } from '../../shared/types'
 
 /**
  * MCP servers for research agents (NOT discovery chat)
@@ -168,19 +170,23 @@ function createSafeEnv(): NodeJS.ProcessEnv {
   const allowedVars = [
     // System paths
     'PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP',
-    // Windows app data paths (needed for Claude CLI to find credentials)
+    // Windows app data paths (needed for Claude CLI to find OAuth credentials)
     'APPDATA', 'LOCALAPPDATA',
+    // XDG paths (Linux/Mac OAuth credential storage)
+    'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
     // Locale
     'LANG', 'LC_ALL', 'SHELL',
-    // Claude CLI authentication (required for API access)
+    // Claude CLI authentication (API key or OAuth)
     'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
     // Node.js
     'NODE_ENV', 'npm_config_prefix',
     // System
-    'SystemRoot', 'COMSPEC'
+    'SystemRoot', 'COMSPEC',
+    // Terminal (some CLIs need this)
+    'TERM', 'COLORTERM'
   ]
   const safeEnv: NodeJS.ProcessEnv = {
-    CI: 'true',
+    // NOTE: Not setting CI=true as it may interfere with OAuth auth flow
     // Allow longer responses for spec generation (default is 32000)
     CLAUDE_CODE_MAX_OUTPUT_TOKENS: '128000'
   }
@@ -316,6 +322,23 @@ async function saveSpecToDisk(projectPath: string, specContent: string): Promise
   await fs.writeFile(specPath, header + specContent)
   console.log('[DiscoveryChat] Spec saved to disk:', specPath)
   return specPath
+}
+
+/**
+ * Save complexity analysis to disk
+ * Saves to: project/.autonomous/complexity.json
+ */
+async function saveComplexityToDisk(
+  projectPath: string,
+  analysis: ComplexityAnalysis
+): Promise<string> {
+  const autonomousPath = await ensureAutonomousDir(projectPath)
+  const complexityPath = path.join(autonomousPath, 'complexity.json')
+
+  await fs.writeFile(complexityPath, JSON.stringify(analysis, null, 2))
+  console.log('[DiscoveryChat] Complexity analysis saved:', complexityPath)
+  console.log('[DiscoveryChat] Complexity level:', analysis.level, 'Score:', analysis.score)
+  return complexityPath
 }
 
 /**
@@ -860,6 +883,19 @@ export class DiscoveryChatService extends EventEmitter {
       console.log('[DiscoveryChat] MCP config path:', projectMcpConfig)
       console.log('[DiscoveryChat] Claude CLI path:', claudePath)
 
+      // Generate response ID for tracking
+      const responseId = this.generateId()
+
+      // STEP 1: Send system message to UI - Starting
+      this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+        sessionId,
+        messageId: responseId,
+        chunk: '🔍 Starting Claude CLI...\n',
+        fullContent: '',
+        eventType: 'system',
+        timestamp: Date.now()
+      })
+
       // Spawn Claude CLI with the message
       // Using --print with stream-json for real-time streaming output
       // Using --strict-mcp-config to ONLY use project's .mcp.json, ignoring user's 9+ MCP servers
@@ -870,6 +906,7 @@ export class DiscoveryChatService extends EventEmitter {
         '--print',
         '--verbose',
         '--output-format', 'stream-json',
+        '--include-partial-messages',  // CRITICAL: Get incremental text chunks!
         `--mcp-config=${projectMcpConfig}`,
         '--strict-mcp-config',
         '--dangerously-skip-permissions',  // Auto-approve since user selected project
@@ -888,6 +925,16 @@ export class DiscoveryChatService extends EventEmitter {
       // Log spawn event
       this.activeProcess.on('spawn', () => {
         console.log('[DiscoveryChat] Claude CLI process spawned successfully, PID:', this.activeProcess?.pid)
+
+        // STEP 1: Send system message to UI - Process started
+        this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+          sessionId,
+          messageId: responseId,
+          chunk: `✓ Claude CLI started (PID: ${this.activeProcess?.pid})\n`,
+          fullContent: '',
+          eventType: 'system',
+          timestamp: Date.now()
+        })
       })
 
       // Write prompt to stdin to avoid shell injection
@@ -896,16 +943,38 @@ export class DiscoveryChatService extends EventEmitter {
         this.activeProcess.stdin.write(prompt)
         this.activeProcess.stdin.end()
         console.log('[DiscoveryChat] stdin closed, waiting for response...')
+
+        // STEP 1: Send system message to UI - Waiting for response
+        this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+          sessionId,
+          messageId: responseId,
+          chunk: '⏳ Waiting for response...\n',
+          fullContent: '',
+          eventType: 'system',
+          timestamp: Date.now()
+        })
       } else {
         console.error('[DiscoveryChat] No stdin available!')
+
+        // STEP 1: Send error to UI
+        this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+          sessionId,
+          messageId: responseId,
+          chunk: '❌ ERROR: No stdin available!\n',
+          fullContent: '',
+          eventType: 'stderr',
+          timestamp: Date.now()
+        })
       }
 
       let responseContent = ''
-      const responseId = this.generateId()
       let jsonBuffer = ''
 
       // Track current tool for activity panel
       let currentToolName = ''
+
+      // Track if we've received first event
+      let firstEventReceived = false
 
       // Handle stdout (Claude's streaming JSON response)
       this.activeProcess.stdout?.on('data', (data: Buffer) => {
@@ -924,11 +993,46 @@ export class DiscoveryChatService extends EventEmitter {
             // Debug: log event types to understand the stream
             console.log('[DiscoveryChat] Stream event type:', parsed.type, parsed.event?.type || '')
 
+            // STEP 1: Send system message on first event
+            if (!firstEventReceived) {
+              firstEventReceived = true
+              this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                sessionId,
+                messageId: responseId,
+                chunk: '📡 Receiving response...\n',
+                fullContent: '',
+                eventType: 'system',
+                timestamp: Date.now()
+              })
+            }
+
+            // Handle stream events from --include-partial-messages
+            // These are the REAL-TIME incremental chunks we want!
+            if (parsed.type === 'stream_event' && parsed.event) {
+              const event = parsed.event
+
+              if (event.type === 'content_block_delta' && event.delta?.text) {
+                // INCREMENTAL TEXT DELTA - This is word-by-word streaming!
+                const delta = event.delta.text
+                responseContent += delta
+
+                this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                  sessionId,
+                  messageId: responseId,
+                  chunk: delta,
+                  fullContent: responseContent,
+                  eventType: 'text',
+                  timestamp: Date.now()
+                })
+              }
+              // Other stream events (content_block_start, content_block_stop, message_delta, message_stop)
+              // are handled implicitly - we just care about the text deltas
+            }
             // NOTE: Claude CLI outputs 'system', 'assistant', 'user', 'result' types
-            // NOT 'stream_event' like the raw Anthropic API
+            // WITH --include-partial-messages, we also get 'stream_event' types
             // See: claude-cli-electron skill for documentation
 
-            if (parsed.type === 'system') {
+            else if (parsed.type === 'system') {
               // System initialization event - show in activity panel
               const initInfo = parsed.subtype === 'init'
                 ? `Initializing... Model: ${parsed.model || 'unknown'}, Tools: ${parsed.tools?.length || 0}`
@@ -1199,9 +1303,15 @@ export class DiscoveryChatService extends EventEmitter {
 
   /**
    * Trigger research agents based on conversation progress
-   * FEAT-020: Process Agent - runs on first user message
-   * FEAT-021: Codebase Analyzer - runs on second message for existing projects
-   * FEAT-022: Spec Builder - runs when user has provided enough context (3+ messages)
+   *
+   * STEP 2: DISABLED for simplified discovery flow
+   * Research agents now run on-demand via generateSmartSpec() instead of automatically
+   * This makes Discovery instant and reduces token usage for simple tasks
+   *
+   * OLD BEHAVIOR (commented out):
+   * - FEAT-020: Process Agent - runs on first user message
+   * - FEAT-021: Codebase Analyzer - runs on second message for existing projects
+   * - FEAT-022: Spec Builder - runs when user has provided enough context (3+ messages)
    */
   private triggerResearchAgents(
     sessionId: string,
@@ -1209,6 +1319,11 @@ export class DiscoveryChatService extends EventEmitter {
     userMessage: string,
     messageCount: number
   ): void {
+    // STEP 2: Disabled automatic agent triggers
+    // Agents now run only when user explicitly requests Smart Spec generation
+    return
+
+    /* OLD CODE - agents run automatically (DISABLED)
     const context = this.buildContext(session)
 
     // Process Agent: Run on first message to extract initial requirements
@@ -1250,6 +1365,321 @@ export class DiscoveryChatService extends EventEmitter {
           console.error('[DiscoveryChat] Spec builder error:', err)
         })
       }
+    }
+    */
+    // END OLD CODE
+  }
+
+  /**
+   * STEP 4: Generate Quick Spec (fast, conversation-only)
+   * Uses conversation history and .schema/ files (if exist)
+   * No codebase scanning - fast for simple tasks
+   */
+  async generateQuickSpec(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`)
+    }
+
+    // Check if enough conversation happened
+    if (session.messages.length < 3) {
+      throw new Error('Need at least 3 messages before generating spec')
+    }
+
+    // Notify UI that spec generation started
+    this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+      sessionId,
+      messageId: this.generateId(),
+      chunk: '🚀 Generating Quick Spec from conversation...\n',
+      fullContent: '',
+      eventType: 'system',
+      timestamp: Date.now()
+    })
+
+    // Build context from conversation
+    const conversation = this.buildContext(session)
+
+    // Check if .schema/ exists
+    const schemaPath = path.join(session.projectPath, '.schema')
+    let hasSchema = false
+    try {
+      const stats = await fs.stat(schemaPath)
+      hasSchema = stats.isDirectory()
+    } catch {
+      hasSchema = false
+    }
+
+    // Build prompt for spec generation
+    // IMPORTANT: Tell Claude to output spec directly WITHOUT using tools
+    const prompt = hasSchema
+      ? `Based on this conversation, generate a detailed specification document.
+
+IMPORTANT: Output the spec DIRECTLY in your response. Do NOT use any tools (Read, Write, Edit, Bash, etc.). Just write the markdown content directly.
+
+${conversation}
+
+The project has .schema/ documentation available. Consider existing architecture patterns when generating the spec.
+
+Generate a spec in markdown format with these sections:
+# Feature Specification
+
+## Overview
+Brief description of what needs to be built.
+
+## Requirements
+- Functional requirements from conversation
+- Technical constraints mentioned
+
+## Architecture
+- How this fits into existing codebase
+- Key components to create/modify
+
+## Implementation Steps
+1. Numbered steps for implementation
+2. Include file paths and key changes
+
+## Testing
+- How to verify the feature works
+
+Remember: Output the full spec directly. Do NOT use any tools.`
+      : `Based on this conversation, generate a detailed specification document.
+
+IMPORTANT: Output the spec DIRECTLY in your response. Do NOT use any tools (Read, Write, Edit, Bash, etc.). Just write the markdown content directly.
+
+${conversation}
+
+Generate a spec in markdown format with these sections:
+# Feature Specification
+
+## Overview
+Brief description of what needs to be built.
+
+## Requirements
+- Functional requirements from conversation
+- Technical constraints mentioned
+
+## Implementation Steps
+1. Numbered steps for implementation
+2. Include key components to create
+
+## Testing
+- How to verify the feature works
+
+Remember: Output the full spec directly. Do NOT use any tools.`
+
+    try {
+      // Get Claude CLI path
+      const claudePath = this.configStore.get('claudeCliPath')
+      if (!claudePath || typeof claudePath !== 'string') {
+        throw new Error('Claude CLI path not configured')
+      }
+
+      console.log('[QuickSpec] Starting Claude CLI process')
+      console.log('[QuickSpec] Claude path:', claudePath)
+
+      // Use empty MCP config (no tools needed for spec generation)
+      const projectMcpConfig = await ensureProjectMcpConfig(session.projectPath, true)
+
+      // Spawn Claude CLI to generate spec
+      const { command, shellOption } = getSpawnConfig(claudePath)
+      const args = [
+        '--print',
+        '--verbose',  // Required when using --output-format=stream-json with --print
+        '--output-format', 'stream-json',
+        '--include-partial-messages',  // CRITICAL: Get real-time streaming text deltas!
+        `--mcp-config=${projectMcpConfig}`,
+        '--strict-mcp-config',
+        '--dangerously-skip-permissions',
+        '-'
+      ]
+
+      console.log('[QuickSpec] Spawn command:', command)
+      console.log('[QuickSpec] Spawn args:', args.join(' '))
+
+      const process = spawn(command, args, {
+        cwd: session.projectPath,
+        shell: shellOption,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: createSafeEnv()
+      })
+
+      console.log('[QuickSpec] Process spawned with PID:', process.pid)
+
+      // Write prompt
+      if (process.stdin) {
+        process.stdin.write(prompt)
+        process.stdin.end()
+        console.log('[QuickSpec] Prompt written to stdin, length:', prompt.length)
+      }
+
+      let specContent = ''
+      let jsonBuffer = ''
+      let stderrOutput = ''
+      const responseId = this.generateId()
+      let lastStreamedLength = 0 // Track what we've already streamed
+
+      // Collect stderr for debugging
+      process.stderr?.on('data', (data: Buffer) => {
+        const text = data.toString()
+        stderrOutput += text
+        console.log('[QuickSpec] stderr chunk:', text.substring(0, 200))
+      })
+
+      // Debug: log when stdout receives data
+      let stdoutChunkCount = 0
+
+      // Collect response and stream to UI
+      process.stdout?.on('data', (data: Buffer) => {
+        stdoutChunkCount++
+        const chunk = data.toString()
+        console.log(`[QuickSpec] stdout chunk #${stdoutChunkCount}, length:`, chunk.length)
+        jsonBuffer += chunk
+        const lines = jsonBuffer.split('\n')
+        jsonBuffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const parsed = JSON.parse(line)
+
+            // Debug: log parsed JSON types (only log type, subtype for brevity)
+            const subtype = parsed.subtype || parsed.event?.type || ''
+            console.log('[QuickSpec] Parsed JSON type:', parsed.type, subtype ? `(${subtype})` : '')
+
+            // WITH --include-partial-messages, we get 'stream_event' with content_block_delta
+            // This is TRUE real-time streaming - word by word!
+            if (parsed.type === 'stream_event' && parsed.event?.type === 'content_block_delta') {
+              const delta = parsed.event.delta?.text
+              if (delta) {
+                specContent += delta
+                this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                  sessionId,
+                  messageId: responseId,
+                  chunk: delta,
+                  fullContent: specContent,
+                  eventType: 'content',
+                  timestamp: Date.now()
+                })
+              }
+            }
+            // Also handle complete 'assistant' messages (fallback if partial messages not available)
+            else if (parsed.type === 'assistant' && parsed.message?.content) {
+              for (const block of parsed.message.content) {
+                if (block.type === 'text' && block.text) {
+                  const newText = block.text
+                  // Calculate delta (new content since last stream)
+                  if (newText.length > lastStreamedLength) {
+                    const delta = newText.slice(lastStreamedLength)
+                    console.log('[QuickSpec] Streaming assistant delta, length:', delta.length)
+
+                    // Stream the new content to UI
+                    this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                      sessionId,
+                      messageId: responseId,
+                      chunk: delta,
+                      fullContent: newText,
+                      eventType: 'content',
+                      timestamp: Date.now()
+                    })
+
+                    lastStreamedLength = newText.length
+                  }
+                  specContent = newText
+                }
+              }
+            } else if (parsed.type === 'result' && parsed.result) {
+              // Final result - update specContent (already streamed via deltas)
+              const result = typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result)
+              // Only stream if we haven't already via deltas
+              if (result.length > specContent.length) {
+                const delta = result.slice(specContent.length)
+                console.log('[QuickSpec] Streaming result delta, length:', delta.length)
+
+                this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                  sessionId,
+                  messageId: responseId,
+                  chunk: delta,
+                  fullContent: result,
+                  eventType: 'content',
+                  timestamp: Date.now()
+                })
+              }
+              specContent = result
+            } else if (parsed.type === 'system') {
+              // System messages - show initialization info
+              if (parsed.subtype === 'init') {
+                this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+                  sessionId,
+                  messageId: responseId,
+                  chunk: `📊 Model: ${parsed.model || 'claude'}\n`,
+                  fullContent: '',
+                  eventType: 'system',
+                  timestamp: Date.now()
+                })
+              }
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      })
+
+      // Wait for completion
+      await new Promise<void>((resolve, reject) => {
+        process.on('close', (code) => {
+          console.log('[QuickSpec] Process closed with code:', code)
+          console.log('[QuickSpec] specContent length:', specContent.length)
+          console.log('[QuickSpec] stderr length:', stderrOutput.length)
+          if (code === 0 && specContent) {
+            resolve()
+          } else {
+            console.log('[QuickSpec] Failed with code:', code, 'stderr:', stderrOutput)
+            reject(new Error(`Quick spec generation failed with code ${code}: ${stderrOutput}`))
+          }
+        })
+        process.on('error', (err) => {
+          console.log('[QuickSpec] Process error:', err)
+          reject(err)
+        })
+      })
+
+      // Save spec to disk
+      await saveSpecToDisk(session.projectPath, specContent)
+
+      // Analyze and save complexity to disk for generation agent
+      const messages = session.messages.map(m => ({
+        role: m.role,
+        content: m.content
+      }))
+      const complexityAnalysis = analyzeComplexity(messages)
+      await saveComplexityToDisk(session.projectPath, complexityAnalysis)
+
+      // Notify UI
+      this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.SPEC_READY, {
+        sessionId,
+        spec: specContent
+      })
+
+      this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+        sessionId,
+        messageId: responseId,
+        chunk: '✅ Quick Spec generated successfully!\n',
+        fullContent: '',
+        eventType: 'system',
+        timestamp: Date.now()
+      })
+
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      this.sendToRenderer(DISCOVERY_CHAT_CHANNELS.RESPONSE_CHUNK, {
+        sessionId,
+        messageId: this.generateId(),
+        chunk: `❌ Quick Spec generation failed: ${errorMsg}\n`,
+        fullContent: '',
+        eventType: 'stderr',
+        timestamp: Date.now()
+      })
+      throw error
     }
   }
 

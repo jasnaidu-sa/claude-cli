@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 
 from config import AgentConfig
-from client import get_client
+from client import get_client, get_streaming_client, StreamEvent
 from security import BashSecurityFilter, sanitize_output
 from context_agent import ContextAgent
 from checkpoint_agent import CheckpointAgent
@@ -46,7 +46,8 @@ class AutonomousAgent:
 
     def __init__(self, config: AgentConfig):
         self.config = config
-        self.client = get_client(config)
+        # Use streaming client with event callback
+        self.client = get_client(config, on_event=self._handle_stream_event)
         self.security = BashSecurityFilter(config.get_project_root())
         self.state = AgentState()
         self.output_dir = config.get_output_dir()
@@ -60,6 +61,39 @@ class AutonomousAgent:
         self.features_since_last_summary = 0
         self.current_category: Optional[str] = None
         self.category_features: Dict[str, List[str]] = {}
+
+    def _handle_stream_event(self, event: StreamEvent):
+        """Handle streaming events from Claude SDK client."""
+        if event.type == "text":
+            # Real-time text streaming - emit as stdout chunk
+            self.emit_stream_chunk("text", event.data)
+        elif event.type == "tool_start":
+            # Tool started - emit tool info
+            self.emit_stream_chunk("tool_start", event.data)
+        elif event.type == "tool_result":
+            # Tool completed - emit result
+            self.emit_stream_chunk("tool_result", event.data)
+        elif event.type == "complete":
+            # Response complete - emit completion info
+            self.emit_stream_chunk("complete", event.data)
+        elif event.type == "error":
+            # Error occurred - emit as stderr
+            self.emit_output("stderr", str(event.data))
+        elif event.type == "system":
+            # System message - emit as info
+            self.emit_stream_chunk("system", event.data)
+
+    def emit_stream_chunk(self, chunk_type: str, data: Any):
+        """Emit a streaming chunk to stdout for real-time updates."""
+        chunk = {
+            "type": "stream_chunk",
+            "chunk_type": chunk_type,
+            "data": data,
+            "phase": self.state.phase,
+            "iteration": self.state.iteration,
+            "timestamp": time.time()
+        }
+        print(json.dumps(chunk), flush=True)
 
     def emit_output(self, output_type: str, data: str):
         """Emit output to stdout for the Electron app to capture."""
@@ -163,12 +197,51 @@ Check for:
 
 Output a JSON file at .autonomous/schema_validation.json with your findings."""
 
+        # Streaming happens via _handle_stream_event callback
+        # send_message returns complete response after streaming finishes
         response = await self.client.send_message(message, prompt)
-        self.emit_output("stdout", response)
+        # Emit completion marker (streaming already sent the content)
         self.emit_progress("Schema validation complete")
 
+    def _load_complexity_level(self) -> str:
+        """
+        Load project complexity from complexity.json.
+
+        Returns:
+            'quick', 'standard', or 'enterprise'
+        """
+        complexity_path = self.output_dir / "complexity.json"
+
+        if complexity_path.exists():
+            try:
+                import json
+                with open(complexity_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    level = data.get('level', 'standard')
+                    score = data.get('score', 0)
+                    self.emit_output("stdout", f"Detected complexity: {level} (score: {score})")
+                    return level
+            except Exception as e:
+                self.emit_output("stderr", f"Warning: Could not load complexity: {e}")
+
+        self.emit_output("stdout", "No complexity.json found, defaulting to 'standard'")
+        return 'standard'
+
+    async def _emit_heartbeat(self):
+        """Emit heartbeat every 5 seconds to show agent is alive."""
+        try:
+            while True:
+                await asyncio.sleep(5)
+                self.emit_stream_chunk("heartbeat", {
+                    "phase": self.state.phase,
+                    "iteration": self.state.iteration,
+                    "message": "Working..."
+                })
+        except asyncio.CancelledError:
+            pass
+
     async def run_generation_phase(self):
-        """Run test generation phase."""
+        """Run test generation phase with complexity-aware prompting."""
         self.state.phase = "generation"
         self.emit_status("running")
         self.emit_progress("Starting test generation")
@@ -178,18 +251,70 @@ Output a JSON file at .autonomous/schema_validation.json with your findings."""
             self.emit_output("stderr", "No specification file found")
             return
 
+        # Load complexity level from discovery phase
+        complexity = self._load_complexity_level()
+
+        # Start heartbeat task
+        heartbeat_task = asyncio.create_task(self._emit_heartbeat())
+
         prompt = self.load_system_prompt()
-        message = f"""Based on this specification, generate a comprehensive feature list
-with test cases:
+
+        # Build complexity-aware message
+        if complexity == 'quick':
+            message = f"""Based on this specification, generate a FOCUSED feature list.
 
 {spec}
+
+IMPORTANT - This is a SIMPLE project (complexity: quick):
+- Create 2-5 features maximum
+- Group related functionality together (e.g., "Counter component with all operations" as ONE feature)
+- Only separate features if they have clear dependencies or test in different ways
+- Include basic unit tests per feature
+- Avoid creating separate features for infrastructure, styling, exports unless truly necessary
+
+Create a feature_list.json file at .autonomous/feature_list.json."""
+
+        elif complexity == 'enterprise':
+            message = f"""Based on this specification, generate a COMPREHENSIVE feature list.
+
+{spec}
+
+IMPORTANT - This is a COMPLEX project (complexity: enterprise):
+- Break down into granular features (1-2 hours of work each)
+- Create separate features for infrastructure (testing setup, migrations, etc.)
+- Include detailed integration tests
+- Track dependencies carefully between features
+- Consider security, performance, and scalability implications
 
 Create a feature_list.json file at .autonomous/feature_list.json with all features
 categorized and ready for implementation."""
 
-        response = await self.client.send_message(message, prompt)
-        self.emit_output("stdout", response)
-        self.emit_progress("Test generation complete")
+        else:  # standard
+            message = f"""Based on this specification, generate a BALANCED feature list.
+
+{spec}
+
+This is a MODERATE complexity project (complexity: standard):
+- Create 5-10 features with clear boundaries
+- Group simple operations together, separate complex integrations
+- Include appropriate test coverage
+- Balance between granularity and implementation efficiency
+
+Create a feature_list.json file at .autonomous/feature_list.json with all features
+categorized and ready for implementation."""
+
+        try:
+            # Streaming happens via _handle_stream_event callback
+            response = await self.client.send_message(message, prompt)
+            # Emit completion marker (streaming already sent the content)
+            self.emit_progress("Test generation complete")
+        finally:
+            # Stop heartbeat
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     async def run_implementation_phase(self):
         """Run the main implementation loop."""
@@ -274,8 +399,9 @@ Report your progress."""
             message = self.inject_context(base_message, feature_id)
 
             try:
+                # Streaming happens via _handle_stream_event callback
+                # We still need the response to check for test results
                 response = await self.client.send_message(message, prompt)
-                self.emit_output("stdout", response)
 
                 # Check if implementation succeeded (simple heuristic)
                 if "test" in response.lower() and "pass" in response.lower():
@@ -580,7 +706,17 @@ Report your progress."""
                 self.impact_agent.apply_respec(flagged_data)
 
     async def run(self):
-        """Run the agent based on configured phase."""
+        """
+        Run the agent based on configured phase.
+
+        Enhanced multi-phase architecture with human-in-the-loop:
+        - validation: Schema validation for brownfield projects (optional)
+        - generation: Generate feature_list.json from spec (Initializer Agent)
+        - implementation: Implement features with checkpoints and impact analysis (Coding Agent)
+
+        Unlike Anthropic's simple auto-continue pattern, we maintain explicit phases
+        to support checkpoint-based human review and impact assessment.
+        """
         self.state.started_at = time.time()
         self.emit_status("starting")
 

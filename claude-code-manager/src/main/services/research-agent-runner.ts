@@ -144,18 +144,23 @@ function createSafeEnv(): NodeJS.ProcessEnv {
   const allowedVars = [
     // System paths
     'PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP',
-    // Windows app data paths (needed for Claude CLI to find credentials)
+    // Windows app data paths (needed for Claude CLI to find OAuth credentials)
     'APPDATA', 'LOCALAPPDATA',
+    // XDG paths (Linux/Mac OAuth credential storage)
+    'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
     // Locale
     'LANG', 'LC_ALL', 'SHELL',
-    // Claude CLI authentication (required for API access)
+    // Claude CLI authentication (API key or OAuth)
     'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
     // Node.js
     'NODE_ENV', 'npm_config_prefix',
     // System
-    'SystemRoot', 'COMSPEC'
+    'SystemRoot', 'COMSPEC',
+    // Terminal (some CLIs need this)
+    'TERM', 'COLORTERM'
   ]
-  const safeEnv: NodeJS.ProcessEnv = { CI: 'true' }
+  // NOTE: Not setting CI=true as it may interfere with OAuth auth flow
+  const safeEnv: NodeJS.ProcessEnv = {}
   for (const key of allowedVars) {
     if (process.env[key]) {
       safeEnv[key] = process.env[key]
@@ -193,27 +198,101 @@ export interface AgentTask {
 // Heavy Spec Architecture Prompts
 // Philosophy: ALL intelligence in planning phase. Execution agents just follow the spec.
 // The spec must be so detailed that no decision-making is required during implementation.
+// BMAD-Inspired: Document-Project workflow for thorough brownfield analysis.
 const AGENT_PROMPTS: Record<ResearchAgentType, string> = {
-  'user-journey': `You are a codebase analyzer for an existing project. Your job is to QUICKLY understand the project structure and user flows.
+  'user-journey': `You are a comprehensive codebase analyst performing THOROUGH brownfield analysis.
 
-IMPORTANT: This is a FAST analysis (under 60 seconds). Focus on HIGH-LEVEL understanding, not exhaustive detail.
+IMPORTANT: Take up to 2 minutes for complete analysis. This context is CRITICAL for implementation.
+Implementation agents are "dumb workers" - they CANNOT make decisions. Everything must be documented NOW.
 
-Analyze and output JSON with these fields:
+## PHASE 1: Project Overview (30 seconds)
+1. Read package.json/pyproject.toml/Cargo.toml for dependencies and exact versions
+2. Identify primary framework: Next.js, Express, Django, FastAPI, etc.
+3. Identify database: PostgreSQL, SQLite, MongoDB, Supabase, etc.
+4. Identify state management: Redux, Zustand, Context, MobX, etc.
+5. Identify styling: Tailwind, styled-components, CSS Modules, etc.
+
+## PHASE 2: Architecture Analysis (45 seconds)
+1. Map complete directory structure with purpose of each folder
+2. Identify routing pattern (file-based like Next.js, or config-based)
+3. Find API layer location (routes/, api/, endpoints/, services/)
+4. Locate data layer (models/, schemas/, prisma/, drizzle/, types/)
+5. Find component organization (atomic design, feature-based, etc.)
+
+## PHASE 3: Pattern Extraction (45 seconds)
+1. Find 3-5 existing features MOST SIMILAR to typical new features
+2. Document exact file naming conventions (kebab-case, camelCase, PascalCase)
+3. Document function/variable naming patterns
+4. Extract error handling patterns (try-catch, Result types, error boundaries)
+5. Identify testing patterns (file naming, describe/it structure, mocking)
+6. Find import organization patterns (absolute vs relative, grouping)
+
+## OUTPUT FORMAT (JSON)
 {
-  "userFlows": ["List 3-5 main user flows/features in the app"],
-  "entryPoints": ["List main entry point files (index.ts, main.ts, App.tsx, etc)"],
-  "dataModels": ["List main data models/types used"],
-  "techStack": ["List technologies: framework, language, database, etc"],
-  "patterns": ["List 2-3 key code patterns used (e.g., Zustand store, REST API, etc)"],
-  "summary": "2-3 sentence summary of what this project does"
+  "overview": {
+    "framework": "e.g., Next.js 14.0.4",
+    "language": "e.g., TypeScript 5.3",
+    "database": "e.g., PostgreSQL via Prisma 5.7",
+    "stateManagement": "e.g., Zustand 4.4",
+    "styling": "e.g., Tailwind CSS 3.4",
+    "runtime": "e.g., Node.js 20 LTS"
+  },
+  "architecture": {
+    "sourceRoot": "e.g., src/",
+    "routingPattern": "e.g., app/ directory (Next.js App Router)",
+    "apiPattern": "e.g., src/app/api/[route]/route.ts with typed handlers",
+    "dataLayer": "e.g., src/lib/db/ with Prisma client singleton",
+    "componentStructure": "e.g., src/components/ with ui/, shared/, features/ subdirs",
+    "storeLocation": "e.g., src/stores/ with one file per domain"
+  },
+  "patterns": {
+    "componentPattern": "e.g., Functional components with Props interface, no default exports",
+    "hookPattern": "e.g., Custom hooks in src/hooks/, use- prefix, return tuples",
+    "apiPattern": "e.g., REST with Zod validation, typed req/res, error middleware",
+    "errorPattern": "e.g., Custom AppError class, error boundaries for UI, try-catch in API",
+    "testPattern": "e.g., Vitest for unit (*.test.ts), Playwright for e2e (tests/e2e/)",
+    "importPattern": "e.g., Absolute imports via @/ alias, group: react > external > internal > relative"
+  },
+  "conventions": {
+    "fileNaming": "e.g., kebab-case for files, PascalCase for component files",
+    "functionNaming": "e.g., camelCase, verb-first for actions (handleClick, fetchUser)",
+    "typeNaming": "e.g., PascalCase, Props suffix for component props, I prefix for interfaces",
+    "constantNaming": "e.g., UPPER_SNAKE_CASE for constants",
+    "directoryNaming": "e.g., lowercase with hyphens"
+  },
+  "similarFeatures": [
+    {
+      "name": "e.g., User Authentication",
+      "files": ["src/app/api/auth/route.ts", "src/stores/auth-store.ts", "src/components/auth/LoginForm.tsx"],
+      "relevance": "e.g., Shows complete flow: API route -> store -> UI component",
+      "copyablePatterns": ["API validation pattern", "Store structure", "Form handling"]
+    },
+    {
+      "name": "e.g., CRUD for Products",
+      "files": ["src/app/api/products/route.ts", "src/components/products/ProductList.tsx"],
+      "relevance": "e.g., Shows data fetching, list rendering, pagination",
+      "copyablePatterns": ["List component pattern", "Pagination hook", "Loading states"]
+    }
+  ],
+  "referenceFiles": {
+    "componentTemplate": "e.g., src/components/ui/button.tsx",
+    "apiTemplate": "e.g., src/app/api/users/route.ts",
+    "storeTemplate": "e.g., src/stores/user-store.ts",
+    "hookTemplate": "e.g., src/hooks/use-fetch.ts",
+    "testTemplate": "e.g., src/components/__tests__/Button.test.tsx"
+  },
+  "buildAndDeploy": {
+    "devCommand": "e.g., npm run dev",
+    "buildCommand": "e.g., npm run build",
+    "testCommand": "e.g., npm run test",
+    "lintCommand": "e.g., npm run lint",
+    "envFiles": ["e.g., .env.local", ".env.development"]
+  },
+  "summary": "2-3 sentence summary of what this project does and its primary purpose"
 }
 
-Focus on:
-1. Read package.json or similar to understand tech stack
-2. Scan main directories (src/, app/, lib/) for structure
-3. Look for router files to understand user flows
-4. Identify main data models from types/schemas
-
+Be THOROUGH. Implementation agents will blindly follow these patterns.
+If you cannot determine something, state "UNKNOWN - needs clarification" rather than guessing.
 Output ONLY valid JSON, no markdown or explanation.`,
 
   process: `You are a HEAVY SPEC requirements analyst. Your job is to extract EXHAUSTIVE requirements.

@@ -1,0 +1,10 @@
+{
+  "id": "wf-1766237142830-1e61c057",
+  "name": "Auto-generated workflow 12/20/2025, 3:25:42 PM",
+  "projectPath": "C:\\Claude_Projects\\Claude-cli\\test-project",
+  "specFile": "C:\\Claude_Projects\\Claude-cli\\test-project\\.autonomous\\specs\\wf-1766237142830-1e61c057.txt",
+  "model": "claude-sonnet-4-20250514",
+  "status": "pending",
+  "createdAt": 1766237142832,
+  "updatedAt": 1766237142832
+}

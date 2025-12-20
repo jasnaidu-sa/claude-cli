@@ -1,0 +1,17 @@
+{
+  "feature_id": "feat-004",
+  "decision": "auto-proceed",
+  "risk_score": 15,
+  "risk_factors": {
+    "file_count_score": 0,
+    "file_type_score": 5,
+    "recent_failures_score": 0,
+    "blast_radius_score": 10,
+    "total_score": 15
+  },
+  "reason": "High-risk file types (5 pts)",
+  "timestamp": 1766261676259,
+  "approved": null,
+  "approved_at": null,
+  "skipped": null
+}

@@ -95,11 +95,19 @@
       "timestamp": 1766262181614,
       "approved": null,
       "skipped": null
+    },
+    {
+      "featureId": "feat-007",
+      "decision": "auto-proceed",
+      "riskScore": 15,
+      "timestamp": 1766262208316,
+      "approved": null,
+      "skipped": null
     }
   ],
   "stats": {
-    "totalDecisions": 12,
-    "autoProceed": 12,
+    "totalDecisions": 13,
+    "autoProceed": 13,
     "softCheckpoints": 0,
     "hardCheckpoints": 0
   }

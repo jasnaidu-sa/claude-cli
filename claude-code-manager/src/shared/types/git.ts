@@ -80,6 +80,46 @@ export interface WorktreeStore {
   error: string | null
 }
 
+// Conflict Resolution Types
+
+export interface ConflictRegion {
+  filePath: string
+  startLine: number
+  endLine: number
+  oursContent: string          // HEAD content (current branch)
+  theirsContent: string        // Incoming content (merging branch)
+  baseContent?: string         // Common ancestor content
+  contextBefore: string        // 5 lines before conflict
+  contextAfter: string         // 5 lines after conflict
+}
+
+export interface ConflictResolutionResult {
+  filePath: string
+  resolvedContent: string
+  strategy: 'auto-merge' | 'ai-conflict-only' | 'ai-full-file'
+  confidence: number           // 0-100
+  syntaxValid: boolean
+  error?: string
+}
+
+export interface ValidationResult {
+  valid: boolean
+  errors?: Array<{
+    line?: number
+    column?: number
+    message: string
+  }>
+}
+
+export interface WorktreeLifecycle {
+  workflowId: string
+  worktreePath: string
+  createdAt: number
+  status: 'active' | 'testing' | 'merged' | 'discarded'
+  autoCleanupAfterMerge: boolean
+  autoCleanupAfterDays: number
+}
+
 // IPC Channel types
 export interface GitIpcChannels {
   'git:list-worktrees': (repoPath: string) => Promise<Worktree[]>

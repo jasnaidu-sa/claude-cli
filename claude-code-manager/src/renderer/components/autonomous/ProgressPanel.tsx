@@ -49,7 +49,7 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
     }
   }, [workflow.id, workflow.projectPath, workflow.worktreePath, watchProgress, unwatchProgress])
 
-  // Load feature_list.json
+  // Load feature_list.json with polling
   useEffect(() => {
     const loadFeatures = async () => {
       const projectPath = workflow.worktreePath || workflow.projectPath
@@ -69,13 +69,16 @@ export function ProgressPanel({ workflow }: ProgressPanelProps) {
       }
     }
 
+    // Initial load
     loadFeatures()
 
-    // Reload features when progress updates (features might have status changes)
-    if (progress) {
-      loadFeatures()
+    // Poll every 2 seconds to check for feature updates
+    const pollInterval = setInterval(loadFeatures, 2000)
+
+    return () => {
+      clearInterval(pollInterval)
     }
-  }, [workflow.projectPath, workflow.worktreePath, progress])
+  }, [workflow.projectPath, workflow.worktreePath])
 
   // Calculate stats
   const total = progress?.total || workflow.progress?.testsTotal || 0

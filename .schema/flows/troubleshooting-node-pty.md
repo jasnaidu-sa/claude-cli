@@ -1,5 +1,7 @@
 # Troubleshooting: node-pty on Windows with Electron
 
+**Last Updated**: 2025-12-21
+
 ## Overview
 
 This guide provides systematic troubleshooting for node-pty issues when used with Electron on Windows. node-pty is a native Node.js module that requires compilation against specific ABI (Application Binary Interface) versions, making it particularly susceptible to version mismatches in Electron environments.

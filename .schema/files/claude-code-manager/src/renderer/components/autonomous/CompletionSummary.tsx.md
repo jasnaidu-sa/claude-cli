@@ -21,4 +21,5 @@ Shows the final summary after workflow completion. Displays total time, test res
 - Category icons use `primary` instead of hardcoded colors
 
 ## Change History
+- 2025-12-21: Fixed elapsed time calculation to use orchestrator sessions instead of workflow.startedAt/completedAt. Now sums all session durations to show accurate total execution time.
 - 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)

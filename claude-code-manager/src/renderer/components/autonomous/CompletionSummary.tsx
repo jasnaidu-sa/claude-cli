@@ -156,7 +156,8 @@ export function CompletionSummary() {
     progressByWorkflow,
     activeWorkflowId,
     resetPhaseState,
-    generatedSpec
+    generatedSpec,
+    sessionsByWorkflow
   } = useAutonomousStore()
 
   const [selectedCommitOption, setSelectedCommitOption] = useState<CommitOption>('squash-single')
@@ -184,14 +185,27 @@ export function CompletionSummary() {
   const activeWorkflow = getActiveWorkflow()
   const progress = activeWorkflowId ? progressByWorkflow[activeWorkflowId] : null
 
-  // Calculate elapsed time
+  // Calculate elapsed time from orchestrator sessions
   const elapsedTime = useMemo(() => {
-    if (!activeWorkflow?.startedAt) return null
-    const endTime = activeWorkflow.completedAt || Date.now()
-    const durationMs = endTime - activeWorkflow.startedAt
-    const hours = Math.floor(durationMs / 3600000)
-    const minutes = Math.floor((durationMs % 3600000) / 60000)
-    const seconds = Math.floor((durationMs % 60000) / 1000)
+    if (!activeWorkflowId) return null
+
+    const workflowSessions = sessionsByWorkflow[activeWorkflowId] || []
+    if (workflowSessions.length === 0) return null
+
+    // Sum the duration of all completed sessions
+    let totalDurationMs = 0
+    for (const session of workflowSessions) {
+      if (session.startedAt) {
+        const endTime = session.endedAt || Date.now()
+        totalDurationMs += (endTime - session.startedAt)
+      }
+    }
+
+    if (totalDurationMs === 0) return null
+
+    const hours = Math.floor(totalDurationMs / 3600000)
+    const minutes = Math.floor((totalDurationMs % 3600000) / 60000)
+    const seconds = Math.floor((totalDurationMs % 60000) / 1000)
 
     if (hours > 0) {
       return `${hours}h ${minutes}m ${seconds}s`
@@ -199,7 +213,7 @@ export function CompletionSummary() {
       return `${minutes}m ${seconds}s`
     }
     return `${seconds}s`
-  }, [activeWorkflow?.startedAt, activeWorkflow?.completedAt])
+  }, [activeWorkflowId, sessionsByWorkflow])
 
   // Calculate file stats (estimated from progress categories)
   const fileStats = useMemo(() => {

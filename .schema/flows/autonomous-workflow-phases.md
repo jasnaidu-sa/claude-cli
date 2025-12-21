@@ -1,5 +1,7 @@
 # Autonomous Coding Workflow Phases
 
+**Last Updated**: 2025-12-21
+
 ## Overview
 
 The Autonomous Coding system follows a 5-phase workflow that guides users from project selection through completion. All intelligence and planning happens in the early phases, while execution is handled by "dumb worker" agents that simply follow the detailed specification.

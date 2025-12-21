@@ -6,9 +6,10 @@
  * Inspired by Leon's autonomous-coding-with-ui.
  */
 
-import React, { useMemo } from 'react'
-import { CheckCircle2, Circle, Clock, XCircle } from 'lucide-react'
+import React, { useMemo, useState } from 'react'
+import { CheckCircle2, Circle, Clock, XCircle, X, FileText, TestTube } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
+import { Button } from '../ui/button'
 
 export interface Feature {
   id: string
@@ -77,13 +78,14 @@ function getCategoryColor(category: string): string {
   return colors[hash % colors.length]
 }
 
-function FeatureCard({ feature }: { feature: Feature }) {
+function FeatureCard({ feature, onClick }: { feature: Feature; onClick?: () => void }) {
   const categoryColor = getCategoryColor(feature.category)
 
   return (
     <div
+      onClick={onClick}
       className={cn(
-        'p-3 rounded-lg border bg-card transition-all hover:shadow-md',
+        'p-3 rounded-lg border bg-card transition-all hover:shadow-md cursor-pointer',
         feature.status === 'passed' && 'border-green-500/20 bg-green-500/5',
         feature.status === 'failed' && 'border-red-500/20 bg-red-500/5',
         feature.status === 'in_progress' && 'border-blue-500/20 bg-blue-500/5'
@@ -127,7 +129,7 @@ function FeatureCard({ feature }: { feature: Feature }) {
   )
 }
 
-function KanbanColumn({ title, features, count, icon }: { title: string; features: Feature[]; count: number; icon: React.ReactNode }) {
+function KanbanColumn({ title, features, count, icon, onFeatureClick }: { title: string; features: Feature[]; count: number; icon: React.ReactNode; onFeatureClick?: (feature: Feature) => void }) {
   return (
     <div className="flex flex-col h-full">
       {/* Column Header */}
@@ -149,7 +151,11 @@ function KanbanColumn({ title, features, count, icon }: { title: string; feature
           </div>
         ) : (
           features.map((feature) => (
-            <FeatureCard key={feature.id} feature={feature} />
+            <FeatureCard
+              key={feature.id}
+              feature={feature}
+              onClick={() => onFeatureClick?.(feature)}
+            />
           ))
         )}
       </div>
@@ -157,7 +163,91 @@ function KanbanColumn({ title, features, count, icon }: { title: string; feature
   )
 }
 
+function FeatureDetailModal({ feature, onClose }: { feature: Feature; onClose: () => void }) {
+  const categoryColor = getCategoryColor(feature.category)
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-card border border-border rounded-lg shadow-lg max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="p-4 border-b border-border flex items-start justify-between sticky top-0 bg-card z-10">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-semibold mb-2">{feature.name}</h2>
+            <div className="flex items-center gap-2">
+              <div className={cn('text-xs px-2 py-1 rounded-full border inline-block', categoryColor)}>
+                {feature.category}
+              </div>
+              {getStatusBadge(feature.status)}
+            </div>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onClose} className="shrink-0">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        {/* Content */}
+        <div className="p-4 space-y-4">
+          {/* Description */}
+          {feature.description && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <h3 className="font-medium text-sm">Description</h3>
+              </div>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap">{feature.description}</p>
+            </div>
+          )}
+
+          {/* Test Cases */}
+          {feature.testCases && feature.testCases.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <TestTube className="h-4 w-4 text-muted-foreground" />
+                <h3 className="font-medium text-sm">Test Cases ({feature.testCases.length})</h3>
+              </div>
+              <div className="space-y-2">
+                {feature.testCases.map((testCase, idx) => (
+                  <div key={idx} className="text-sm bg-secondary/30 p-2 rounded border border-border">
+                    <div className="font-mono text-xs text-muted-foreground mb-1">{testCase.type}</div>
+                    <div>{testCase.name}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Dependencies */}
+          {feature.dependencies && feature.dependencies.length > 0 && (
+            <div>
+              <h3 className="font-medium text-sm mb-2">Dependencies</h3>
+              <div className="space-y-1">
+                {feature.dependencies.map((dep, idx) => (
+                  <div key={idx} className="text-sm text-amber-500 font-mono bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                    {dep}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Priority */}
+          {feature.priority !== undefined && (
+            <div>
+              <h3 className="font-medium text-sm mb-2">Priority</h3>
+              <div className="text-sm">
+                <span className="font-mono bg-secondary/30 px-2 py-1 rounded">{feature.priority}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function KanbanBoard({ features, className }: KanbanBoardProps) {
+  const [selectedFeature, setSelectedFeature] = useState<Feature | null>(null)
+
   // Organize features by status
   const columns = useMemo(() => {
     const todo = features.filter((f) => f.status === 'pending')
@@ -168,36 +258,49 @@ export function KanbanBoard({ features, className }: KanbanBoardProps) {
   }, [features])
 
   return (
-    <div className={cn('grid grid-cols-3 gap-4 h-full', className)}>
-      {/* To-Do Column */}
-      <div className="border border-border rounded-lg overflow-hidden bg-card">
-        <KanbanColumn
-          title="To-Do"
-          features={columns.todo}
-          count={columns.todo.length}
-          icon={<Circle className="h-4 w-4 text-muted-foreground" />}
-        />
+    <>
+      <div className={cn('grid grid-cols-3 gap-4 h-full', className)}>
+        {/* To-Do Column */}
+        <div className="border border-border rounded-lg overflow-hidden bg-card">
+          <KanbanColumn
+            title="To-Do"
+            features={columns.todo}
+            count={columns.todo.length}
+            icon={<Circle className="h-4 w-4 text-muted-foreground" />}
+            onFeatureClick={setSelectedFeature}
+          />
+        </div>
+
+        {/* In Progress Column */}
+        <div className="border border-border rounded-lg overflow-hidden bg-card">
+          <KanbanColumn
+            title="In Progress"
+            features={columns.inProgress}
+            count={columns.inProgress.length}
+            icon={<Clock className="h-4 w-4 text-blue-400 animate-pulse" />}
+            onFeatureClick={setSelectedFeature}
+          />
+        </div>
+
+        {/* Done Column */}
+        <div className="border border-border rounded-lg overflow-hidden bg-card">
+          <KanbanColumn
+            title="Done"
+            features={columns.done}
+            count={columns.done.length}
+            icon={<CheckCircle2 className="h-4 w-4 text-green-400" />}
+            onFeatureClick={setSelectedFeature}
+          />
+        </div>
       </div>
 
-      {/* In Progress Column */}
-      <div className="border border-border rounded-lg overflow-hidden bg-card">
-        <KanbanColumn
-          title="In Progress"
-          features={columns.inProgress}
-          count={columns.inProgress.length}
-          icon={<Clock className="h-4 w-4 text-blue-400 animate-pulse" />}
+      {/* Feature Detail Modal */}
+      {selectedFeature && (
+        <FeatureDetailModal
+          feature={selectedFeature}
+          onClose={() => setSelectedFeature(null)}
         />
-      </div>
-
-      {/* Done Column */}
-      <div className="border border-border rounded-lg overflow-hidden bg-card">
-        <KanbanColumn
-          title="Done"
-          features={columns.done}
-          count={columns.done.length}
-          icon={<CheckCircle2 className="h-4 w-4 text-green-400" />}
-        />
-      </div>
-    </div>
+      )}
+    </>
   )
 }

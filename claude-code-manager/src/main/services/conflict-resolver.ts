@@ -4,6 +4,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { ConflictRegion, ConflictResolutionResult } from '@shared/types/git';
 import { claudeAPIService } from './claude-api-service';
+import { syntaxValidator } from './syntax-validator';
 
 const execFileAsync = promisify(execFile);
 
@@ -313,14 +314,30 @@ class ConflictResolver {
    * Resolve a conflict using AI (Tier 2: conflict-only resolution)
    *
    * @param conflict - Conflict region to resolve
-   * @returns Resolution result
+   * @returns Resolution result with syntax validation
    */
   async resolveConflictWithAI(conflict: ConflictRegion): Promise<ConflictResolutionResult> {
     // Validate the conflict region is from an allowed repository
     await this.validateFilePath(conflict.filePath);
 
     // Delegate to Claude API service
-    return claudeAPIService.resolveConflict(conflict);
+    const result = await claudeAPIService.resolveConflict(conflict);
+
+    // If resolution failed, return as-is
+    if (result.error || !result.resolvedContent) {
+      return result;
+    }
+
+    // Validate syntax of resolved content
+    const language = syntaxValidator.detectLanguage(conflict.filePath);
+    const validation = await syntaxValidator.validateContent(result.resolvedContent, language);
+
+    // Update result with validation status
+    return {
+      ...result,
+      syntaxValid: validation.valid,
+      error: validation.valid ? undefined : `Syntax validation failed: ${validation.errors?.map(e => e.message).join('; ')}`
+    };
   }
 
   /**

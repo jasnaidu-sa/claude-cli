@@ -24,7 +24,12 @@ type SortOption = 'recent' | 'created' | 'project' | 'status'
 const ITEMS_PER_PAGE = 20
 
 export function WorkflowHistory({ onClose, onSelectWorkflow }: WorkflowHistoryProps) {
-  const { workflows } = useAutonomousStore()
+  const { workflows, refreshWorkflows } = useAutonomousStore()
+
+  // Load workflows on mount
+  React.useEffect(() => {
+    refreshWorkflows()
+  }, [refreshWorkflows])
 
   // State
   const [searchQuery, setSearchQuery] = useState('')

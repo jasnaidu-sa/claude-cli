@@ -65,6 +65,7 @@ Full-screen modal displaying all historical workflows across all projects. Allow
 
 ## Integration with Store
 - Reads from `useAutonomousStore().workflows`
+- Calls `refreshWorkflows()` on mount to load all workflows from disk
 - No direct mutations - all actions delegated to parent via callbacks
 
 ## Layout
@@ -82,4 +83,5 @@ Full-screen modal displaying all historical workflows across all projects. Allow
 - Consistent with Kanban board styling
 
 ## Change History
+- 2025-12-21: Fixed workflow loading by calling refreshWorkflows() on mount
 - 2025-12-21: Created workflow history modal with filtering, sorting, pagination, and archive functionality

@@ -294,6 +294,115 @@ Provide the resolved code:`;
   }
 
   /**
+   * Resolve a file with conflicts using full-file context (Tier 3: fallback)
+   *
+   * Provides complete file context to the AI when conflict-only resolution fails.
+   * This is more expensive but has higher success rate for complex conflicts.
+   *
+   * @param filePath - Path to file with conflicts
+   * @param fileContent - Complete file content including conflict markers
+   * @param conflicts - Array of conflict regions in the file
+   * @param options - API request options
+   * @returns Resolution result
+   */
+  async resolveFileWithFullContext(
+    filePath: string,
+    fileContent: string,
+    conflicts: ConflictRegion[],
+    options: ClaudeAPIRequest = {}
+  ): Promise<ConflictResolutionResult> {
+    const fileExtension = filePath.split('.').pop() || '';
+    const language = this.detectLanguage(fileExtension);
+
+    const systemPrompt = `You are an expert code merge conflict resolver with access to the full file context.
+
+Your task is to resolve ALL merge conflicts in the file while maintaining:
+1. Code functionality and correctness
+2. Consistent code style throughout the file
+3. Proper syntax
+4. Logical coherence between all parts of the file
+
+Rules:
+1. You have the complete file with conflict markers (<<<<<<, =======, >>>>>>>)
+2. Resolve all conflicts by choosing the best approach for each
+3. Return the COMPLETE file with all conflicts resolved
+4. Do NOT include any conflict markers in your response
+5. Maintain all non-conflicted code exactly as-is
+6. If you cannot resolve, return "ERROR: [reason]"
+
+Output format:
+- Success: Return the complete resolved file content
+- Failure: Return exactly "ERROR: [reason]"`;
+
+    const conflictSummary = conflicts
+      .map(
+        (c, i) =>
+          `Conflict ${i + 1}: Lines ${c.startLine}-${c.endLine} (${c.endLine - c.startLine + 1} lines)`
+      )
+      .join('\n');
+
+    const userPrompt = `Resolve all merge conflicts in this ${language} file:
+
+File: ${filePath}
+Total conflicts: ${conflicts.length}
+
+Conflict locations:
+${conflictSummary}
+
+Complete file content with conflict markers:
+\`\`\`${language}
+${fileContent}
+\`\`\`
+
+Provide the complete resolved file:`;
+
+    try {
+      const response = await this.makeRequest(systemPrompt, userPrompt, {
+        ...options,
+        maxTokens: options.maxTokens || 8192 // Larger context for full files
+      });
+
+      // Extract text from response
+      const textContent = response.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('\n');
+
+      // Check for error response
+      if (textContent.startsWith('ERROR:')) {
+        const errorMessage = textContent.substring(6).trim();
+        return {
+          filePath,
+          resolvedContent: '',
+          strategy: 'ai-full-file',
+          confidence: 0,
+          syntaxValid: false,
+          error: errorMessage
+        };
+      }
+
+      // Return successful resolution
+      return {
+        filePath,
+        resolvedContent: textContent,
+        strategy: 'ai-full-file',
+        confidence: this.calculateConfidence(response),
+        syntaxValid: true // Will be validated by syntax-validator
+      };
+    } catch (error) {
+      const message = isErrorObject(error) ? error.message : String(error);
+      return {
+        filePath,
+        resolvedContent: '',
+        strategy: 'ai-full-file',
+        confidence: 0,
+        syntaxValid: false,
+        error: `Full-file AI resolution failed: ${message}`
+      };
+    }
+  }
+
+  /**
    * Detect programming language from file extension
    */
   private detectLanguage(extension: string): string {

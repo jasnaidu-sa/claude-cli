@@ -341,35 +341,81 @@ class ConflictResolver {
   }
 
   /**
-   * Resolve all conflicts in a file using AI
+   * Resolve all conflicts in a file using AI with automatic Tier 3 fallback
+   *
+   * Strategy:
+   * - Tier 2: Try conflict-only resolution for each conflict
+   * - Tier 3: If any resolution has low confidence or fails validation, use full-file resolution
    *
    * @param filePath - Path to file with conflicts
    * @param contextLines - Context lines (default: 5)
+   * @param confidenceThreshold - Minimum confidence to accept Tier 2 (default: 60)
    * @returns Array of resolution results
    */
   async resolveFileConflicts(
     filePath: string,
-    contextLines: number = 5
+    contextLines: number = 5,
+    confidenceThreshold: number = 60
   ): Promise<ConflictResolutionResult[]> {
     const validatedPath = await this.validateFilePath(filePath);
     const conflicts = await this.extractConflictRegions(validatedPath, contextLines);
 
-    // Resolve conflicts sequentially to avoid rate limits
-    const results: ConflictResolutionResult[] = [];
+    if (conflicts.length === 0) {
+      return [];
+    }
+
+    // Tier 2: Try conflict-only resolution for each conflict
+    const tier2Results: ConflictResolutionResult[] = [];
 
     for (const conflict of conflicts) {
       const result = await this.resolveConflictWithAI(conflict);
-      results.push(result);
+      tier2Results.push(result);
     }
 
-    return results;
+    // Check if we need Tier 3 fallback
+    const needsFallback = tier2Results.some(
+      (result) =>
+        result.error !== undefined ||
+        !result.syntaxValid ||
+        result.confidence < confidenceThreshold
+    );
+
+    if (needsFallback) {
+      // Tier 3: Use full-file resolution
+      const fileContent = await fs.readFile(validatedPath, 'utf-8');
+      const fullFileResult = await claudeAPIService.resolveFileWithFullContext(
+        validatedPath,
+        fileContent,
+        conflicts
+      );
+
+      // Validate the full-file resolution
+      const language = syntaxValidator.detectLanguage(validatedPath);
+      const validation = await syntaxValidator.validateContent(
+        fullFileResult.resolvedContent,
+        language
+      );
+
+      // Update validation status
+      fullFileResult.syntaxValid = validation.valid;
+      if (!validation.valid) {
+        fullFileResult.error = `Syntax validation failed: ${validation.errors?.map(e => e.message).join('; ')}`;
+      }
+
+      // Return a single result for the entire file
+      return [fullFileResult];
+    }
+
+    // Return Tier 2 results if all passed
+    return tier2Results;
   }
 
   /**
    * Apply resolved content to a file
    *
-   * Takes conflict regions and their resolutions, then applies them to the file
-   * by replacing the conflict markers with the resolved content.
+   * Handles both Tier 2 (conflict-only) and Tier 3 (full-file) resolutions:
+   * - Tier 2: Replaces individual conflict markers with resolved content
+   * - Tier 3: Replaces entire file content
    *
    * @param filePath - Path to file
    * @param conflicts - Original conflict regions
@@ -382,10 +428,6 @@ class ConflictResolver {
   ): Promise<void> {
     const validatedPath = await this.validateFilePath(filePath);
 
-    if (conflicts.length !== resolutions.length) {
-      throw new Error('Mismatch between conflicts and resolutions count');
-    }
-
     // Verify all resolutions succeeded
     const failedResolutions = resolutions.filter(r => r.error || !r.syntaxValid);
     if (failedResolutions.length > 0) {
@@ -394,6 +436,18 @@ class ConflictResolver {
     }
 
     try {
+      // Check if this is a Tier 3 full-file resolution
+      if (resolutions.length === 1 && resolutions[0].strategy === 'ai-full-file') {
+        // Full-file resolution: replace entire file
+        await fs.writeFile(validatedPath, resolutions[0].resolvedContent, 'utf-8');
+        return;
+      }
+
+      // Tier 2 conflict-only resolution: replace individual conflicts
+      if (conflicts.length !== resolutions.length) {
+        throw new Error('Mismatch between conflicts and resolutions count');
+      }
+
       // Read the file
       const content = await fs.readFile(validatedPath, 'utf-8');
       const lines = content.split('\n');

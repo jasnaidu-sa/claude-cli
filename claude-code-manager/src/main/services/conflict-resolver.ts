@@ -11,12 +11,49 @@ const execFileAsync = promisify(execFile);
 // Constants for security hardening
 const MAX_CONTEXT_LINES = 100;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const DEFAULT_MAX_CONCURRENCY = 3; // Max parallel API calls
 
 /**
  * Type guard for Error objects
  */
 function isErrorObject(error: unknown): error is Error {
   return error instanceof Error;
+}
+
+/**
+ * Process items in parallel with concurrency limit
+ *
+ * @param items - Array of items to process
+ * @param processor - Async function to process each item
+ * @param maxConcurrency - Maximum number of concurrent operations
+ * @returns Array of results in original order
+ */
+async function parallelProcess<T, R>(
+  items: T[],
+  processor: (item: T, index: number) => Promise<R>,
+  maxConcurrency: number
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  const executing: Promise<void>[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const promise = processor(items[i], i).then((result) => {
+      results[i] = result;
+    });
+
+    executing.push(promise);
+
+    if (executing.length >= maxConcurrency) {
+      await Promise.race(executing);
+      executing.splice(
+        executing.findIndex((p) => p === promise),
+        1
+      );
+    }
+  }
+
+  await Promise.all(executing);
+  return results;
 }
 
 /**
@@ -344,18 +381,20 @@ class ConflictResolver {
    * Resolve all conflicts in a file using AI with automatic Tier 3 fallback
    *
    * Strategy:
-   * - Tier 2: Try conflict-only resolution for each conflict
+   * - Tier 2: Try conflict-only resolution for each conflict (parallel processing)
    * - Tier 3: If any resolution has low confidence or fails validation, use full-file resolution
    *
    * @param filePath - Path to file with conflicts
    * @param contextLines - Context lines (default: 5)
    * @param confidenceThreshold - Minimum confidence to accept Tier 2 (default: 60)
+   * @param maxConcurrency - Max parallel API calls (default: 3)
    * @returns Array of resolution results
    */
   async resolveFileConflicts(
     filePath: string,
     contextLines: number = 5,
-    confidenceThreshold: number = 60
+    confidenceThreshold: number = 60,
+    maxConcurrency: number = DEFAULT_MAX_CONCURRENCY
   ): Promise<ConflictResolutionResult[]> {
     const validatedPath = await this.validateFilePath(filePath);
     const conflicts = await this.extractConflictRegions(validatedPath, contextLines);
@@ -364,13 +403,12 @@ class ConflictResolver {
       return [];
     }
 
-    // Tier 2: Try conflict-only resolution for each conflict
-    const tier2Results: ConflictResolutionResult[] = [];
-
-    for (const conflict of conflicts) {
-      const result = await this.resolveConflictWithAI(conflict);
-      tier2Results.push(result);
-    }
+    // Tier 2: Try conflict-only resolution for each conflict (parallel)
+    const tier2Results = await parallelProcess(
+      conflicts,
+      async (conflict) => this.resolveConflictWithAI(conflict),
+      maxConcurrency
+    );
 
     // Check if we need Tier 3 fallback
     const needsFallback = tier2Results.some(
@@ -487,11 +525,15 @@ class ConflictResolver {
    *
    * @param filePath - Path to file with conflicts
    * @param contextLines - Context lines (default: 5)
+   * @param confidenceThreshold - Minimum confidence for Tier 2 (default: 60)
+   * @param maxConcurrency - Max parallel API calls (default: 3)
    * @returns Resolution results
    */
   async resolveAndApply(
     filePath: string,
-    contextLines: number = 5
+    contextLines: number = 5,
+    confidenceThreshold: number = 60,
+    maxConcurrency: number = DEFAULT_MAX_CONCURRENCY
   ): Promise<ConflictResolutionResult[]> {
     const validatedPath = await this.validateFilePath(filePath);
 
@@ -502,13 +544,105 @@ class ConflictResolver {
       return [];
     }
 
-    // Resolve with AI
-    const resolutions = await this.resolveFileConflicts(validatedPath, contextLines);
+    // Resolve with AI (with parallel processing and automatic fallback)
+    const resolutions = await this.resolveFileConflicts(
+      validatedPath,
+      contextLines,
+      confidenceThreshold,
+      maxConcurrency
+    );
 
     // Apply resolutions
     await this.applyResolutions(validatedPath, conflicts, resolutions);
 
     return resolutions;
+  }
+
+  /**
+   * Resolve conflicts across multiple files in parallel
+   *
+   * Processes multiple conflicted files concurrently with concurrency control.
+   * Each file is independently resolved using the 3-tier strategy.
+   *
+   * @param repoPath - Repository path
+   * @param contextLines - Context lines (default: 5)
+   * @param confidenceThreshold - Minimum confidence for Tier 2 (default: 60)
+   * @param maxConcurrency - Max parallel file operations (default: 3)
+   * @returns Map of file paths to resolution results
+   */
+  async resolveAllConflictsInRepo(
+    repoPath: string,
+    contextLines: number = 5,
+    confidenceThreshold: number = 60,
+    maxConcurrency: number = DEFAULT_MAX_CONCURRENCY
+  ): Promise<Map<string, ConflictResolutionResult[]>> {
+    const normalizedRepoPath = await this.validateRepoPath(repoPath);
+    const conflictedFiles = await this.getConflictedFiles(normalizedRepoPath);
+
+    const results = new Map<string, ConflictResolutionResult[]>();
+
+    // Process files in parallel with concurrency limit
+    await parallelProcess(
+      conflictedFiles,
+      async (file) => {
+        const absolutePath = path.join(normalizedRepoPath, file);
+
+        // Validate and resolve
+        const resolutions = await this.resolveFileConflicts(
+          absolutePath,
+          contextLines,
+          confidenceThreshold,
+          maxConcurrency
+        );
+
+        results.set(file, resolutions);
+      },
+      maxConcurrency
+    );
+
+    return results;
+  }
+
+  /**
+   * Resolve and apply conflicts across entire repository
+   *
+   * @param repoPath - Repository path
+   * @param contextLines - Context lines (default: 5)
+   * @param confidenceThreshold - Minimum confidence for Tier 2 (default: 60)
+   * @param maxConcurrency - Max parallel file operations (default: 3)
+   * @returns Map of file paths to resolution results
+   */
+  async resolveAndApplyAllInRepo(
+    repoPath: string,
+    contextLines: number = 5,
+    confidenceThreshold: number = 60,
+    maxConcurrency: number = DEFAULT_MAX_CONCURRENCY
+  ): Promise<Map<string, ConflictResolutionResult[]>> {
+    const normalizedRepoPath = await this.validateRepoPath(repoPath);
+    const conflictedFiles = await this.getConflictedFiles(normalizedRepoPath);
+
+    const results = new Map<string, ConflictResolutionResult[]>();
+
+    // Process files in parallel with concurrency limit
+    await parallelProcess(
+      conflictedFiles,
+      async (file) => {
+        const absolutePath = path.join(normalizedRepoPath, file);
+
+        // Resolve and apply
+        const resolutions = await this.resolveAndApply(
+          absolutePath,
+          contextLines,
+          confidenceThreshold,
+          maxConcurrency
+        );
+
+        results.set(file, resolutions);
+      },
+      maxConcurrency
+    );
+
+    return results;
   }
 }
 

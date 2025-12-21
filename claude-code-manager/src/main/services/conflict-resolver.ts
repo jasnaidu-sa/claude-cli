@@ -2,7 +2,8 @@ import * as path from 'path';
 import { promises as fs } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { ConflictRegion } from '@shared/types/git';
+import type { ConflictRegion, ConflictResolutionResult } from '@shared/types/git';
+import { claudeAPIService } from './claude-api-service';
 
 const execFileAsync = promisify(execFile);
 
@@ -306,6 +307,137 @@ class ConflictResolver {
     }
 
     return allConflicts;
+  }
+
+  /**
+   * Resolve a conflict using AI (Tier 2: conflict-only resolution)
+   *
+   * @param conflict - Conflict region to resolve
+   * @returns Resolution result
+   */
+  async resolveConflictWithAI(conflict: ConflictRegion): Promise<ConflictResolutionResult> {
+    // Validate the conflict region is from an allowed repository
+    await this.validateFilePath(conflict.filePath);
+
+    // Delegate to Claude API service
+    return claudeAPIService.resolveConflict(conflict);
+  }
+
+  /**
+   * Resolve all conflicts in a file using AI
+   *
+   * @param filePath - Path to file with conflicts
+   * @param contextLines - Context lines (default: 5)
+   * @returns Array of resolution results
+   */
+  async resolveFileConflicts(
+    filePath: string,
+    contextLines: number = 5
+  ): Promise<ConflictResolutionResult[]> {
+    const validatedPath = await this.validateFilePath(filePath);
+    const conflicts = await this.extractConflictRegions(validatedPath, contextLines);
+
+    // Resolve conflicts sequentially to avoid rate limits
+    const results: ConflictResolutionResult[] = [];
+
+    for (const conflict of conflicts) {
+      const result = await this.resolveConflictWithAI(conflict);
+      results.push(result);
+    }
+
+    return results;
+  }
+
+  /**
+   * Apply resolved content to a file
+   *
+   * Takes conflict regions and their resolutions, then applies them to the file
+   * by replacing the conflict markers with the resolved content.
+   *
+   * @param filePath - Path to file
+   * @param conflicts - Original conflict regions
+   * @param resolutions - Resolution results
+   */
+  async applyResolutions(
+    filePath: string,
+    conflicts: ConflictRegion[],
+    resolutions: ConflictResolutionResult[]
+  ): Promise<void> {
+    const validatedPath = await this.validateFilePath(filePath);
+
+    if (conflicts.length !== resolutions.length) {
+      throw new Error('Mismatch between conflicts and resolutions count');
+    }
+
+    // Verify all resolutions succeeded
+    const failedResolutions = resolutions.filter(r => r.error || !r.syntaxValid);
+    if (failedResolutions.length > 0) {
+      const errors = failedResolutions.map(r => r.error || 'Syntax invalid').join('; ');
+      throw new Error(`Cannot apply resolutions: ${errors}`);
+    }
+
+    try {
+      // Read the file
+      const content = await fs.readFile(validatedPath, 'utf-8');
+      const lines = content.split('\n');
+
+      // Apply resolutions in reverse order (bottom to top) to maintain line numbers
+      const sortedPairs = conflicts
+        .map((conflict, index) => ({ conflict, resolution: resolutions[index] }))
+        .sort((a, b) => b.conflict.startLine - a.conflict.startLine);
+
+      for (const { conflict, resolution } of sortedPairs) {
+        // Find conflict markers
+        const startLine = conflict.startLine - 1; // Convert to 0-indexed
+        const endLine = conflict.endLine - 1;
+
+        // Verify markers still exist at expected locations
+        if (!lines[startLine]?.startsWith('<<<<<<<') || !lines[endLine]?.startsWith('>>>>>>>')) {
+          throw new Error(
+            `Conflict markers not found at expected location (lines ${conflict.startLine}-${conflict.endLine})`
+          );
+        }
+
+        // Replace conflict markers and content with resolution
+        const resolvedLines = resolution.resolvedContent.split('\n');
+        lines.splice(startLine, endLine - startLine + 1, ...resolvedLines);
+      }
+
+      // Write back to file
+      await fs.writeFile(validatedPath, lines.join('\n'), 'utf-8');
+    } catch (error) {
+      const message = isErrorObject(error) ? error.message : String(error);
+      throw new Error(`Failed to apply resolutions: ${message}`);
+    }
+  }
+
+  /**
+   * Full workflow: Extract conflicts, resolve with AI, and apply
+   *
+   * @param filePath - Path to file with conflicts
+   * @param contextLines - Context lines (default: 5)
+   * @returns Resolution results
+   */
+  async resolveAndApply(
+    filePath: string,
+    contextLines: number = 5
+  ): Promise<ConflictResolutionResult[]> {
+    const validatedPath = await this.validateFilePath(filePath);
+
+    // Extract conflicts
+    const conflicts = await this.extractConflictRegions(validatedPath, contextLines);
+
+    if (conflicts.length === 0) {
+      return [];
+    }
+
+    // Resolve with AI
+    const resolutions = await this.resolveFileConflicts(validatedPath, contextLines);
+
+    // Apply resolutions
+    await this.applyResolutions(validatedPath, conflicts, resolutions);
+
+    return resolutions;
   }
 }
 

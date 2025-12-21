@@ -5,11 +5,20 @@ Main dashboard for workflow execution. Shows phase stepper, progress overview, a
 
 ## Key Features
 - Phase stepper with visual progress
-- Auto-workflow creation from spec
+- Auto-workflow creation from spec with intelligent naming
 - Real-time progress tracking
 - Phase transition animations
 - **Read-only mode** for viewing completed/paused workflows from history
 - Kanban view integration for historical workflow viewing
+
+## Workflow Creation
+
+When creating workflows, the component:
+1. Parses the spec using `parseSpecMetadata()` from `spec-parser.ts`
+2. Extracts:
+   - **Title**: From "FEATURE SPECIFICATION: X" header (title-cased)
+   - **Description**: From OVERVIEW section (max 200 chars)
+3. Creates workflow with meaningful name and description instead of generic timestamp
 
 ## Props
 - `workflow?: Workflow` - Current workflow (optional, can auto-create)
@@ -47,5 +56,6 @@ Read-only mode is active when:
 4. **Historical reference**: Browse past implementations for learning/reference
 
 ## Change History
+- 2025-12-21: Implemented spec-based workflow naming using parseSpecMetadata() to extract title and description
 - 2025-12-21: Added read-only mode for viewing historical workflows from History modal. Detects completed/paused/error workflows and hides control buttons, shows completion info.
 - 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)

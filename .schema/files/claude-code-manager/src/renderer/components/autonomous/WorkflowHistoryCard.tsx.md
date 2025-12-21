@@ -13,15 +13,23 @@ Individual workflow card component displayed in the WorkflowHistory modal. Shows
 
 ## Card Layout
 
-### Header Section
-- **Workflow name**: Bold, truncated with hover tooltip
-- **Project name**: Extracted from projectPath, shown with folder icon
-- **Timestamp**: Context-aware based on status
-  - Completed: "Completed 2h ago"
-  - Paused: "Last active 3 days ago"
-  - Error: "Failed 1 week ago"
-  - In Progress: "Started 30m ago"
-- **Status badge**: Color-coded pill (green/amber/red/blue)
+### Header Section (Top to Bottom)
+1. **Project name** (prominent):
+   - Folder icon (primary color)
+   - Medium font weight, primary color
+   - Extracted from projectPath.split(/[/\\]/).pop()
+2. **Workflow name**:
+   - Bold, large text, truncated with hover tooltip
+   - Spec-based title (e.g., "Counter Component")
+3. **Description** (if present):
+   - Muted text, 2-line clamp
+   - Spec overview section (max 200 chars)
+4. **Timestamp**: Context-aware based on status
+   - Completed: "Completed 2h ago"
+   - Paused: "Last active 3 days ago"
+   - Error: "Failed 1 week ago"
+   - In Progress: "Started 30m ago"
+5. **Status badge**: Color-coded pill (green/amber/red/blue)
 
 ### Progress Section
 - **Test progress**: "X/Y tests passing" with checkmark icon
@@ -103,4 +111,5 @@ Formats as short date:
 - Lucide icons throughout
 
 ## Change History
+- 2025-12-21: Enhanced layout to make project name prominent and display workflow description
 - 2025-12-21: Created workflow history card with status-based actions and formatting

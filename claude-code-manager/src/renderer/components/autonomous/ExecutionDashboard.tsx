@@ -35,6 +35,7 @@ import { OutputViewer } from './OutputViewer'
 import { ResizeHandle } from '../ui/ResizeHandle'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
 import { cn } from '@renderer/lib/utils'
+import { parseSpecMetadata } from '@renderer/lib/spec-parser'
 
 /** Implementation phases for the stepper UI */
 type ImplementationPhase = 'initialization' | 'implementation' | 'verification'
@@ -188,9 +189,13 @@ export function ExecutionDashboard() {
       setWorkflowError(null)
 
       try {
+        // Parse spec to extract meaningful title and description
+        const specMetadata = parseSpecMetadata(generatedSpec.appSpecTxt)
+
         const workflow = await createWorkflow({
           projectPath: selectedProject.path,
-          name: `Auto-generated workflow ${new Date().toLocaleString()}`,
+          name: specMetadata.title,
+          description: specMetadata.description,
           specContent: generatedSpec.appSpecTxt,
           model: 'claude-sonnet-4-20250514'
         })

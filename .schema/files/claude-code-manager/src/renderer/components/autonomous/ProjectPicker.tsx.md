@@ -30,8 +30,9 @@ Phase 0a component for selecting or creating a project. First step in the autono
 5. Sets selectedProject and advances to next phase
 
 ## UI Elements
-- Two main option cards (New Project / Existing Project)
+- Three main option cards (New Project / Existing Project / History)
 - Recent projects list
+- **History Modal**: Full-screen workflow history viewer
 - **Drafts Timeline Dialog** (shown when drafts exist):
   - Visual timeline with markers
   - Draft cards showing name, description, timestamp
@@ -73,7 +74,18 @@ interface SelectedProject {
 - Hover states use theme accent colors
 - Ready indicator uses `emerald-500` for success
 
+## History Modal Integration
+- Third option card: "History" shows workflow count
+- Click opens `WorkflowHistory` modal
+- Modal handles filtering/sorting/pagination
+- Selection calls `handleSelectWorkflow` which:
+  - Sets active workflow
+  - Sets selected project
+  - Navigates to `executing` phase
+  - Opens ExecutionDashboard in Kanban view mode
+
 ## Change History
+- 2025-12-21: Added History block as third option card with WorkflowHistory modal integration. Enables viewing and resuming past workflows from a global history view.
 - 2025-12-19: Updated colors to use theme variables (primary instead of amber-500)
 - 2025-12-19: Added multi-draft timeline UI with resume/delete/start-fresh actions
 - 2025-12-18: Part of Option C architecture implementation

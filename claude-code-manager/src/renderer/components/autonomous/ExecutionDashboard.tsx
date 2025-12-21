@@ -153,6 +153,13 @@ export function ExecutionDashboard() {
   )
   const progress = activeWorkflowId ? progressByWorkflow[activeWorkflowId] : null
 
+  // Determine if we're in read-only mode (viewing completed/paused workflows from history)
+  const isReadOnly = activeWorkflow && (
+    activeWorkflow.status === 'completed' ||
+    (activeWorkflow.status === 'paused' && !activeSession) ||
+    (activeWorkflow.status === 'error' && !activeSession)
+  )
+
   // Determine current implementation phase based on progress
   useEffect(() => {
     if (!progress) {
@@ -499,11 +506,14 @@ export function ExecutionDashboard() {
             !activeSession && 'bg-secondary'
           )} />
           <span className="font-medium text-sm">
-            {activeSession?.status === 'running' && 'Executing...'}
-            {activeSession?.status === 'paused' && 'Paused'}
-            {activeSession?.status === 'starting' && 'Starting...'}
-            {activeSession?.status === 'error' && 'Error'}
-            {!activeSession && 'Ready to Start'}
+            {isReadOnly && activeWorkflow?.status === 'completed' && '📋 View Mode'}
+            {isReadOnly && activeWorkflow?.status === 'paused' && '⏸️ Paused Workflow'}
+            {isReadOnly && activeWorkflow?.status === 'error' && '❌ Failed Workflow'}
+            {!isReadOnly && activeSession?.status === 'running' && 'Executing...'}
+            {!isReadOnly && activeSession?.status === 'paused' && 'Paused'}
+            {!isReadOnly && activeSession?.status === 'starting' && 'Starting...'}
+            {!isReadOnly && activeSession?.status === 'error' && 'Error'}
+            {!isReadOnly && !activeSession && 'Ready to Start'}
           </span>
 
           {/* Agent Type Badge */}
@@ -550,7 +560,23 @@ export function ExecutionDashboard() {
             </div>
           )}
 
-          {!activeSession ? (
+          {/* Read-only mode info */}
+          {isReadOnly && activeWorkflow && (
+            <div className="flex items-center gap-2">
+              {activeWorkflow.completedAt && (
+                <span className="text-xs text-muted-foreground">
+                  Completed {new Date(activeWorkflow.completedAt).toLocaleString()}
+                </span>
+              )}
+              <Button variant="outline" size="sm" onClick={goToPreviousPhase}>
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                Back
+              </Button>
+            </div>
+          )}
+
+          {/* Control buttons (hidden in read-only mode) */}
+          {!isReadOnly && !activeSession ? (
             <Button
               size="sm"
               onClick={handleStart}
@@ -568,7 +594,7 @@ export function ExecutionDashboard() {
                 </>
               )}
             </Button>
-          ) : activeSession.status === 'running' ? (
+          ) : !isReadOnly && activeSession.status === 'running' ? (
             <>
               <Button variant="outline" size="sm" onClick={handlePause}>
                 <Pause className="h-4 w-4 mr-1" />
@@ -579,7 +605,7 @@ export function ExecutionDashboard() {
                 Stop
               </Button>
             </>
-          ) : activeSession.status === 'paused' ? (
+          ) : !isReadOnly && activeSession.status === 'paused' ? (
             <>
               <Button size="sm" onClick={handleStart} disabled={isStartingOrchestrator}>
                 {isStartingOrchestrator ? (

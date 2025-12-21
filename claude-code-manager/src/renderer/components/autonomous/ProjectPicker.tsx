@@ -13,12 +13,14 @@
  */
 
 import React, { useState, useEffect } from 'react'
-import { FolderOpen, FolderPlus, ChevronRight, Clock, Loader2, RefreshCw, Play, AlertCircle, Trash2, FileText, CheckCircle } from 'lucide-react'
+import { FolderOpen, FolderPlus, ChevronRight, Clock, Loader2, RefreshCw, Play, AlertCircle, Trash2, FileText, CheckCircle, History } from 'lucide-react'
 import { Button } from '../ui/button'
+import { WorkflowHistory } from './WorkflowHistory'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
 import { useSessionStore } from '@renderer/stores/session-store'
 import { cn } from '@renderer/lib/utils'
 import type { ExistingSessionInfo, DraftMetadata } from '../../../preload/index'
+import type { WorkflowConfig } from '@shared/types'
 
 // Drafts dialog state
 interface DraftsDialogState {
@@ -32,7 +34,7 @@ interface DraftsDialogState {
 
 export function ProjectPicker() {
   const { sessions } = useSessionStore()
-  const { setSelectedProject, goToNextPhase, ensureVenv, venvStatus } = useAutonomousStore()
+  const { setSelectedProject, goToNextPhase, ensureVenv, venvStatus, workflows, setActiveWorkflow, setPhase } = useAutonomousStore()
   const [isSelectingFolder, setIsSelectingFolder] = useState(false)
   const [recentProjects, setRecentProjects] = useState<string[]>([])
   const [isVenvReady, setIsVenvReady] = useState(false)
@@ -45,6 +47,7 @@ export function ProjectPicker() {
     isLoading: false
   })
   const [isCheckingSession, setIsCheckingSession] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
 
   // Load recent projects from config on mount
   useEffect(() => {
@@ -215,17 +218,38 @@ export function ProjectPicker() {
     return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  // Handle workflow selection from history
+  const handleSelectWorkflow = (workflow: WorkflowConfig, viewMode: 'view' | 'resume') => {
+    setShowHistory(false)
+
+    // Extract project name from path
+    const projectName = workflow.projectPath.split(/[/\\]/).pop() || 'Unknown'
+
+    // Set active workflow
+    setActiveWorkflow(workflow.id)
+
+    // Set selected project
+    setSelectedProject({
+      path: workflow.projectPath,
+      name: projectName,
+      isNew: false
+    })
+
+    // Navigate to executing phase (will show ExecutionDashboard with Kanban)
+    setPhase('executing')
+  }
+
   const isDisabled = isSelectingFolder || isCheckingSession
 
   return (
     <>
       <div className="h-full flex items-center justify-center p-8">
-        <div className="max-w-2xl w-full space-y-8">
+        <div className="max-w-4xl w-full space-y-8">
           {/* Header */}
           <div className="text-center">
             <h2 className="text-2xl font-semibold mb-2">Start Autonomous Coding</h2>
             <p className="text-muted-foreground">
-              Choose an existing project to enhance or create a new project from scratch
+              Choose an existing project, create a new one, or view your workflow history
             </p>
           </div>
 
@@ -240,7 +264,7 @@ export function ProjectPicker() {
           )}
 
           {/* Options */}
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-3 gap-6">
             {/* New Project */}
             <button
               onClick={handleCreateNew}
@@ -278,6 +302,26 @@ export function ProjectPicker() {
               <h3 className="font-medium text-lg mb-1">Existing Project</h3>
               <p className="text-sm text-muted-foreground text-center">
                 Add features to an existing codebase
+              </p>
+            </button>
+
+            {/* History */}
+            <button
+              onClick={() => setShowHistory(true)}
+              disabled={isDisabled}
+              className={cn(
+                'flex flex-col items-center p-8 rounded-lg border-2 border-dashed',
+                'hover:border-primary hover:bg-primary/5 transition-colors',
+                'focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                isDisabled && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                <History className="h-8 w-8 text-primary" />
+              </div>
+              <h3 className="font-medium text-lg mb-1">History</h3>
+              <p className="text-sm text-muted-foreground text-center">
+                {workflows.length > 0 ? `View ${workflows.length} workflow${workflows.length !== 1 ? 's' : ''}` : 'View past workflows'}
               </p>
             </button>
           </div>
@@ -446,6 +490,14 @@ export function ProjectPicker() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* History Modal */}
+      {showHistory && (
+        <WorkflowHistory
+          onClose={() => setShowHistory(false)}
+          onSelectWorkflow={handleSelectWorkflow}
+        />
       )}
     </>
   )

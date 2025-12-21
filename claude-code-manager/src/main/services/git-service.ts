@@ -9,8 +9,11 @@ import type {
   MergePreview,
   MergeResult,
   RemoteStatus,
-  MergeStrategy
+  MergeStrategy,
+  ConflictResolutionResult
 } from '@shared/types/git';
+import { conflictResolver } from './conflict-resolver';
+import { worktreeLifecycleManager } from './worktree-lifecycle-manager';
 
 const execAsync = promisify(exec);
 
@@ -653,6 +656,171 @@ class GitService {
    */
   generateId(): string {
     return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+
+  /**
+   * Merge with AI-powered conflict resolution
+   *
+   * Attempts to merge using the specified strategy. If conflicts occur,
+   * uses AI to automatically resolve them.
+   *
+   * @param worktreePath - Path to worktree
+   * @param strategy - Merge strategy
+   * @param useAI - Enable AI conflict resolution (default: true)
+   * @param confidenceThreshold - Min confidence for Tier 2 (default: 60)
+   * @returns Merge result with conflict resolution details
+   */
+  async mergeWithConflictResolution(
+    worktreePath: string,
+    strategy: MergeStrategy,
+    useAI: boolean = true,
+    confidenceThreshold: number = 60
+  ): Promise<MergeResult & { resolutions?: ConflictResolutionResult[] }> {
+    // First, try normal merge
+    const mergeResult = await this.merge(worktreePath, strategy);
+
+    // If merge succeeded without conflicts, return immediately
+    if (mergeResult.success) {
+      return mergeResult;
+    }
+
+    // If AI is disabled or no conflicts, return the result as-is
+    if (!useAI || !mergeResult.conflicts || mergeResult.conflicts.length === 0) {
+      return mergeResult;
+    }
+
+    console.log(`[GitService] Merge conflicts detected, attempting AI resolution...`);
+
+    try {
+      // Get main repo path
+      const mainRepoPath = await this.getMainRepoPath(worktreePath);
+
+      // Register repository with conflict resolver
+      conflictResolver.registerRepository(mainRepoPath);
+
+      // Resolve conflicts across all files
+      const resolutionMap = await conflictResolver.resolveAndApplyAllInRepo(
+        mainRepoPath,
+        5, // contextLines
+        confidenceThreshold,
+        3  // maxConcurrency
+      );
+
+      // Convert Map to array for response
+      const resolutions: ConflictResolutionResult[] = [];
+      for (const [filePath, fileResolutions] of resolutionMap.entries()) {
+        resolutions.push(...fileResolutions);
+      }
+
+      // Check if all resolutions succeeded
+      const failedResolutions = resolutions.filter(r => r.error || !r.syntaxValid);
+
+      if (failedResolutions.length > 0) {
+        console.error(`[GitService] ${failedResolutions.length} conflicts could not be resolved`);
+        return {
+          success: false,
+          conflicts: mergeResult.conflicts,
+          error: `AI resolution failed for ${failedResolutions.length} conflicts`,
+          resolutions
+        };
+      }
+
+      // All conflicts resolved, complete the merge
+      console.log(`[GitService] All conflicts resolved by AI, completing merge...`);
+
+      // Stage the resolved files
+      for (const conflict of mergeResult.conflicts) {
+        await execAsync(`git add "${conflict}"`, { cwd: mainRepoPath });
+      }
+
+      // Commit the merge
+      const { stdout: commitHash } = await execAsync(
+        `git commit --no-edit`,
+        { cwd: mainRepoPath }
+      );
+
+      console.log(`[GitService] Merge completed successfully with AI conflict resolution`);
+
+      // Update worktree lifecycle if managed
+      const lifecycle = worktreeLifecycleManager.getLifecycle(worktreePath);
+      if (lifecycle) {
+        await worktreeLifecycleManager.onMergeSuccess(worktreePath, mainRepoPath);
+      }
+
+      return {
+        success: true,
+        commitHash: commitHash.trim(),
+        resolutions
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[GitService] AI conflict resolution failed:`, message);
+
+      return {
+        success: false,
+        conflicts: mergeResult.conflicts,
+        error: `AI conflict resolution failed: ${message}`
+      };
+    }
+  }
+
+  /**
+   * Check if repository has AI conflict resolution available
+   *
+   * @returns true if ANTHROPIC_API_KEY is set
+   */
+  isAIResolutionAvailable(): boolean {
+    return !!(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
+  }
+
+  /**
+   * Initialize worktree lifecycle tracking for a repository
+   *
+   * @param repoPath - Repository path
+   */
+  async initializeLifecycleTracking(repoPath: string): Promise<void> {
+    await worktreeLifecycleManager.initialize(repoPath);
+  }
+
+  /**
+   * Create a managed worktree with lifecycle tracking
+   *
+   * @param repoPath - Repository path
+   * @param branchName - Branch name for the worktree
+   * @param baseBranch - Base branch (optional)
+   * @param workflowId - Workflow ID for tracking
+   * @param createBranch - Create new branch (default: true)
+   * @returns Created worktree
+   */
+  async createManagedWorktree(
+    repoPath: string,
+    branchName: string,
+    baseBranch: string | undefined,
+    workflowId: string
+  ): Promise<Worktree> {
+    // Create the worktree using existing method
+    const worktree = await this.createWorktree(repoPath, branchName, baseBranch);
+
+    // Register with lifecycle manager
+    await worktreeLifecycleManager.createManagedWorktree(
+      workflowId,
+      worktree.path,
+      true,  // autoCleanupAfterMerge
+      7      // autoCleanupAfterDays
+    );
+
+    return worktree;
+  }
+
+  /**
+   * Cleanup stale worktrees
+   *
+   * @param repoPath - Repository path
+   * @param dryRun - Preview only (default: false)
+   * @returns Array of cleaned worktree paths
+   */
+  async cleanupStaleWorktrees(repoPath: string, dryRun: boolean = false): Promise<string[]> {
+    return worktreeLifecycleManager.cleanupStale(repoPath, dryRun);
   }
 }
 

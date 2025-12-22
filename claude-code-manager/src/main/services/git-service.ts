@@ -14,6 +14,7 @@ import type {
 } from '@shared/types/git';
 import { conflictResolver } from './conflict-resolver';
 import { worktreeLifecycleManager } from './worktree-lifecycle-manager';
+import { authManager } from './auth-manager';
 
 const execAsync = promisify(exec);
 
@@ -767,10 +768,15 @@ class GitService {
   /**
    * Check if repository has AI conflict resolution available
    *
-   * @returns true if ANTHROPIC_API_KEY is set
+   * Uses centralized auth manager which checks:
+   * 1. OAuth token from Claude CLI (~/.claude/.credentials.json)
+   * 2. ANTHROPIC_API_KEY environment variable
+   * 3. CLAUDE_API_KEY environment variable
+   *
+   * @returns true if any authentication method is available
    */
-  isAIResolutionAvailable(): boolean {
-    return !!(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY);
+  async isAIResolutionAvailable(): Promise<boolean> {
+    return await authManager.isAuthAvailable();
   }
 
   /**

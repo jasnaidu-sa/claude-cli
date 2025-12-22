@@ -159,7 +159,7 @@ export function registerGitHandlers(): void {
   // Check AI availability
   ipcMain.handle('git:is-ai-available', async (_event): Promise<boolean> => {
     try {
-      return gitService.isAIResolutionAvailable()
+      return await gitService.isAIResolutionAvailable()
     } catch (error) {
       return false
     }

@@ -1,4 +1,5 @@
 import type { ConflictRegion, ConflictResolutionResult } from '@shared/types/git';
+import { authManager } from './auth-manager';
 
 /**
  * Claude API Service
@@ -103,49 +104,33 @@ class RateLimiter {
 }
 
 class ClaudeAPIService {
-  private apiKey: string | null = null;
   private rateLimiter: RateLimiter;
 
   constructor() {
     this.rateLimiter = new RateLimiter(RATE_LIMIT_REQUESTS_PER_MINUTE);
-    this.loadApiKey();
   }
 
   /**
-   * Load API key/token from environment
+   * Get authentication token from centralized auth manager
+   *
+   * Uses the same authentication source as orchestrator and other services:
+   * 1. OAuth token from Claude CLI credentials (~/.claude/.credentials.json)
+   * 2. ANTHROPIC_API_KEY environment variable
+   * 3. CLAUDE_API_KEY environment variable
+   * 4. ANTHROPIC_SESSION_KEY environment variable (manual override)
    */
-  private loadApiKey(): void {
-    // Check multiple sources:
-    // 1. ANTHROPIC_API_KEY - Direct API key (sk-ant-...)
-    // 2. CLAUDE_API_KEY - Alternative API key
-    // 3. ANTHROPIC_SESSION_KEY - OAuth token (Max plan)
-    this.apiKey =
-      process.env.ANTHROPIC_API_KEY ||
-      process.env.CLAUDE_API_KEY ||
-      process.env.ANTHROPIC_SESSION_KEY ||
-      null;
-  }
+  private async getAuthToken(): Promise<string> {
+    const token = await authManager.getAuthToken();
 
-  /**
-   * Validate API key/token is available
-   */
-  private validateApiKey(): void {
-    if (!this.apiKey) {
+    if (!token) {
       throw new Error(
-        'Claude authentication not found. Set ANTHROPIC_API_KEY (API key) or ANTHROPIC_SESSION_KEY (OAuth/Max plan) environment variable.'
+        'Claude authentication not found. Either:\n' +
+        '1. Run "claude auth login" to set up OAuth (recommended for Max plan)\n' +
+        '2. Set ANTHROPIC_API_KEY environment variable (for API key users)'
       );
     }
 
-    // Support both API keys (sk-ant-...) and OAuth tokens (sessionKey format)
-    // OAuth tokens don't have a consistent prefix, so we skip format validation for non-API-keys
-    const isApiKey = this.apiKey.startsWith('sk-ant-');
-    const isSessionKey = this.apiKey.length > 20 && !this.apiKey.startsWith('sk-ant-');
-
-    if (!isApiKey && !isSessionKey) {
-      throw new Error(
-        'Invalid authentication format. Expected API key (sk-ant-...) or OAuth session token.'
-      );
-    }
+    return token;
   }
 
   /**
@@ -156,7 +141,7 @@ class ClaudeAPIService {
     userPrompt: string,
     options: ClaudeAPIRequest = {}
   ): Promise<ClaudeAPIResponse> {
-    this.validateApiKey();
+    const authToken = await this.getAuthToken();
     this.rateLimiter.checkLimit();
 
     const controller = new AbortController();
@@ -167,7 +152,7 @@ class ClaudeAPIService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': this.apiKey!,
+          'x-api-key': authToken,
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({

@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { gitService } from '../services/git-service'
+import { worktreeLifecycleManager } from '../services/worktree-lifecycle-manager'
 import type {
   CreateWorktreeOptions,
   MergeStrategy,
@@ -8,7 +9,9 @@ import type {
   Branch,
   MergePreview,
   MergeResult,
-  RemoteStatus
+  RemoteStatus,
+  ConflictResolutionResult,
+  WorktreeLifecycle
 } from '@shared/types/git'
 
 export function registerGitHandlers(): void {
@@ -125,4 +128,118 @@ export function registerGitHandlers(): void {
       throw new Error(`Failed to get stale worktrees: ${String(error)}`)
     }
   })
+
+  // AI-powered conflict resolution
+  ipcMain.handle(
+    'git:merge-with-ai',
+    async (
+      _event,
+      worktreePath: string,
+      strategy: MergeStrategy,
+      useAI: boolean = true,
+      confidenceThreshold: number = 60
+    ): Promise<MergeResult & { resolutions?: ConflictResolutionResult[] }> => {
+      try {
+        console.log('[GitHandler] Merging with AI:', { worktreePath, strategy, useAI, confidenceThreshold })
+        const result = await gitService.mergeWithConflictResolution(
+          worktreePath,
+          strategy,
+          useAI,
+          confidenceThreshold
+        )
+        console.log('[GitHandler] Merge result:', result)
+        return result
+      } catch (error) {
+        console.error('[GitHandler] Error merging with AI:', error)
+        throw new Error(`Failed to merge with AI: ${String(error)}`)
+      }
+    }
+  )
+
+  // Check AI availability
+  ipcMain.handle('git:is-ai-available', async (_event): Promise<boolean> => {
+    try {
+      return gitService.isAIResolutionAvailable()
+    } catch (error) {
+      return false
+    }
+  })
+
+  // Worktree lifecycle management
+  ipcMain.handle('git:init-lifecycle-tracking', async (_event, repoPath: string): Promise<void> => {
+    try {
+      await gitService.initializeLifecycleTracking(repoPath)
+    } catch (error) {
+      throw new Error(`Failed to initialize lifecycle tracking: ${String(error)}`)
+    }
+  })
+
+  ipcMain.handle(
+    'git:create-managed-worktree',
+    async (
+      _event,
+      repoPath: string,
+      branchName: string,
+      baseBranch: string | undefined,
+      workflowId: string
+    ): Promise<Worktree> => {
+      try {
+        console.log('[GitHandler] Creating managed worktree:', {
+          repoPath,
+          branchName,
+          baseBranch,
+          workflowId
+        })
+        const worktree = await gitService.createManagedWorktree(
+          repoPath,
+          branchName,
+          baseBranch,
+          workflowId
+        )
+        console.log('[GitHandler] Managed worktree created:', worktree)
+        return worktree
+      } catch (error) {
+        console.error('[GitHandler] Error creating managed worktree:', error)
+        throw new Error(`Failed to create managed worktree: ${String(error)}`)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'git:cleanup-stale-worktrees',
+    async (_event, repoPath: string, dryRun: boolean = false): Promise<string[]> => {
+      try {
+        return await gitService.cleanupStaleWorktrees(repoPath, dryRun)
+      } catch (error) {
+        throw new Error(`Failed to cleanup stale worktrees: ${String(error)}`)
+      }
+    }
+  )
+
+  ipcMain.handle('git:get-lifecycle', async (_event, worktreePath: string): Promise<WorktreeLifecycle | null> => {
+    try {
+      return worktreeLifecycleManager.getLifecycle(worktreePath) ?? null
+    } catch (error) {
+      throw new Error(`Failed to get lifecycle: ${String(error)}`)
+    }
+  })
+
+  ipcMain.handle('git:get-all-lifecycles', async (_event): Promise<WorktreeLifecycle[]> => {
+    try {
+      return worktreeLifecycleManager.getAllLifecycles()
+    } catch (error) {
+      throw new Error(`Failed to get all lifecycles: ${String(error)}`)
+    }
+  })
+
+  ipcMain.handle(
+    'git:update-lifecycle-status',
+    async (_event, worktreePath: string, status: WorktreeLifecycle['status']): Promise<void> => {
+      try {
+        await worktreeLifecycleManager.updateStatus(worktreePath, status)
+      } catch (error) {
+        throw new Error(`Failed to update lifecycle status: ${String(error)}`)
+      }
+    }
+  )
 }

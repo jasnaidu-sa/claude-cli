@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
 import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck } from '../shared/types'
-import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
+import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy, ConflictResolutionResult, WorktreeLifecycle } from '../shared/types/git'
 import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection } from '../shared/context-types'
 
 // Venv types (matching venv-manager.ts)
@@ -140,6 +140,16 @@ export interface ElectronAPI {
     fetch: (repoPath: string) => Promise<void>
     getRemoteStatus: (worktreePath: string) => Promise<RemoteStatus>
     getStaleWorktrees: (repoPath: string, daysThreshold?: number) => Promise<Worktree[]>
+    // AI conflict resolution
+    mergeWithAI: (worktreePath: string, strategy: MergeStrategy, useAI?: boolean, confidenceThreshold?: number) => Promise<MergeResult & { resolutions?: ConflictResolutionResult[] }>
+    isAIAvailable: () => Promise<boolean>
+    // Lifecycle management
+    initLifecycleTracking: (repoPath: string) => Promise<void>
+    createManagedWorktree: (repoPath: string, branchName: string, baseBranch: string | undefined, workflowId: string) => Promise<Worktree>
+    cleanupStaleWorktrees: (repoPath: string, dryRun?: boolean) => Promise<string[]>
+    getLifecycle: (worktreePath: string) => Promise<WorktreeLifecycle | null>
+    getAllLifecycles: () => Promise<WorktreeLifecycle[]>
+    updateLifecycleStatus: (worktreePath: string, status: WorktreeLifecycle['status']) => Promise<void>
   }
 
   // Python venv management
@@ -475,7 +485,17 @@ const electronAPI: ElectronAPI = {
     push: (worktreePath, setUpstream) => ipcRenderer.invoke('git:push', worktreePath, setUpstream),
     fetch: (repoPath) => ipcRenderer.invoke('git:fetch', repoPath),
     getRemoteStatus: (worktreePath) => ipcRenderer.invoke('git:get-remote-status', worktreePath),
-    getStaleWorktrees: (repoPath, daysThreshold) => ipcRenderer.invoke('git:get-stale-worktrees', repoPath, daysThreshold)
+    getStaleWorktrees: (repoPath, daysThreshold) => ipcRenderer.invoke('git:get-stale-worktrees', repoPath, daysThreshold),
+    // AI conflict resolution
+    mergeWithAI: (worktreePath, strategy, useAI, confidenceThreshold) => ipcRenderer.invoke('git:merge-with-ai', worktreePath, strategy, useAI, confidenceThreshold),
+    isAIAvailable: () => ipcRenderer.invoke('git:is-ai-available'),
+    // Lifecycle management
+    initLifecycleTracking: (repoPath) => ipcRenderer.invoke('git:init-lifecycle-tracking', repoPath),
+    createManagedWorktree: (repoPath, branchName, baseBranch, workflowId) => ipcRenderer.invoke('git:create-managed-worktree', repoPath, branchName, baseBranch, workflowId),
+    cleanupStaleWorktrees: (repoPath, dryRun) => ipcRenderer.invoke('git:cleanup-stale-worktrees', repoPath, dryRun),
+    getLifecycle: (worktreePath) => ipcRenderer.invoke('git:get-lifecycle', worktreePath),
+    getAllLifecycles: () => ipcRenderer.invoke('git:get-all-lifecycles'),
+    updateLifecycleStatus: (worktreePath, status) => ipcRenderer.invoke('git:update-lifecycle-status', worktreePath, status)
   },
 
   venv: {

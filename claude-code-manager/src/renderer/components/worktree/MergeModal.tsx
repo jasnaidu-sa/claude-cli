@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { X, GitMerge, AlertTriangle, Loader2, FileCode } from 'lucide-react'
+import { X, GitMerge, AlertTriangle, Loader2, FileCode, Brain, Sparkles } from 'lucide-react'
 import { Button } from '../ui/button'
 import { useWorktreeStore } from '@renderer/stores/worktree-store'
 import { cn } from '@renderer/lib/utils'
-import type { Worktree, MergePreview, MergeStrategy } from '@shared/types/git'
+import type { Worktree, MergePreview, MergeStrategy, ConflictResolutionResult } from '@shared/types/git'
 
 interface MergeModalProps {
   worktree: Worktree
@@ -11,16 +11,21 @@ interface MergeModalProps {
 }
 
 export function MergeModal({ worktree, onClose }: MergeModalProps) {
-  const { getMergePreview, merge, abortMerge } = useWorktreeStore()
+  const { getMergePreview, merge, mergeWithAI, abortMerge, checkAIAvailability, isAIAvailable } = useWorktreeStore()
 
   const [preview, setPreview] = useState<MergePreview | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isMerging, setIsMerging] = useState(false)
   const [strategy, setStrategy] = useState<MergeStrategy>('merge')
   const [error, setError] = useState<string | null>(null)
+  const [useAI, setUseAI] = useState(true)
+  const [confidenceThreshold, setConfidenceThreshold] = useState(60)
+  const [resolutions, setResolutions] = useState<ConflictResolutionResult[]>([])
+  const [showAIDetails, setShowAIDetails] = useState(false)
 
   useEffect(() => {
     loadPreview()
+    checkAIAvailability()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worktree.path])
 
@@ -40,14 +45,33 @@ export function MergeModal({ worktree, onClose }: MergeModalProps) {
   const handleMerge = async () => {
     setIsMerging(true)
     setError(null)
+    setResolutions([])
     try {
-      const result = await merge(worktree.path, strategy)
-      if (result.success) {
-        onClose()
-      } else if (result.conflicts && result.conflicts.length > 0) {
-        setError(`Merge conflicts in: ${result.conflicts.join(', ')}`)
+      // Use AI merge if conflicts expected and AI available
+      const shouldUseAI = useAI && preview?.hasConflicts && isAIAvailable
+
+      if (shouldUseAI) {
+        const result = await mergeWithAI(worktree.path, strategy, true, confidenceThreshold)
+        if (result.success) {
+          if (result.resolutions && result.resolutions.length > 0) {
+            setResolutions(result.resolutions)
+            setShowAIDetails(true)
+          }
+          setTimeout(() => onClose(), result.resolutions ? 3000 : 0)
+        } else if (result.conflicts && result.conflicts.length > 0) {
+          setError(`Merge conflicts in: ${result.conflicts.join(', ')}`)
+        } else {
+          setError(result.error || 'Merge failed')
+        }
       } else {
-        setError(result.error || 'Merge failed')
+        const result = await merge(worktree.path, strategy)
+        if (result.success) {
+          onClose()
+        } else if (result.conflicts && result.conflicts.length > 0) {
+          setError(`Merge conflicts in: ${result.conflicts.join(', ')}`)
+        } else {
+          setError(result.error || 'Merge failed')
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Merge failed')
@@ -157,6 +181,84 @@ export function MergeModal({ worktree, onClose }: MergeModalProps) {
                   {strategy === 'rebase' && 'Replay commits on top of target branch'}
                 </p>
               </div>
+
+              {/* AI Conflict Resolution */}
+              {preview.hasConflicts && isAIAvailable && (
+                <div className="space-y-3 p-3 border border-primary/20 rounded-lg bg-primary/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Brain className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-medium">AI Conflict Resolution</span>
+                      <Sparkles className="h-3 w-3 text-primary" />
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setUseAI(!useAI)}
+                      className={cn('h-7', useAI && 'bg-primary/10')}
+                    >
+                      {useAI ? 'Enabled' : 'Disabled'}
+                    </Button>
+                  </div>
+
+                  {useAI && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Confidence Threshold</span>
+                        <span className="font-medium">{confidenceThreshold}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="40"
+                        max="90"
+                        step="10"
+                        value={confidenceThreshold}
+                        onChange={(e) => setConfidenceThreshold(Number(e.target.value))}
+                        className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Higher threshold = safer resolutions, may fall back to full-file analysis
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* AI Resolution Results */}
+              {resolutions.length > 0 && showAIDetails && (
+                <div className="space-y-2 p-3 border border-green-500/20 rounded-lg bg-green-500/5">
+                  <div className="flex items-center gap-2 text-sm font-medium text-green-600">
+                    <Sparkles className="h-4 w-4" />
+                    AI Successfully Resolved {resolutions.length} Conflict(s)
+                  </div>
+                  <div className="space-y-1 max-h-32 overflow-auto">
+                    {resolutions.map((res, i) => (
+                      <div key={i} className="text-xs p-2 bg-muted/30 rounded">
+                        <div className="flex items-center justify-between">
+                          <span className="truncate flex-1">{res.filePath}</span>
+                          <span
+                            className={cn(
+                              'ml-2 px-1.5 py-0.5 rounded text-xs font-medium',
+                              res.strategy === 'ai-conflict-only' && 'bg-blue-500/20 text-blue-600',
+                              res.strategy === 'ai-full-file' && 'bg-purple-500/20 text-purple-600',
+                              res.strategy === 'auto-merge' && 'bg-green-500/20 text-green-600'
+                            )}
+                          >
+                            {res.strategy === 'ai-conflict-only' && `Tier 2 (${res.confidence}%)`}
+                            {res.strategy === 'ai-full-file' && `Tier 3 (${res.confidence}%)`}
+                            {res.strategy === 'auto-merge' && 'Git Auto'}
+                          </span>
+                        </div>
+                        {!res.syntaxValid && (
+                          <div className="text-yellow-600 text-xs mt-1">
+                            ⚠ Syntax validation warning
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="text-center text-muted-foreground py-8">
@@ -185,12 +287,20 @@ export function MergeModal({ worktree, onClose }: MergeModalProps) {
           <Button
             onClick={handleMerge}
             disabled={isLoading || isMerging || !preview || preview.filesChanged === 0}
-            className={cn(preview?.hasConflicts && 'bg-yellow-600 hover:bg-yellow-700')}
+            className={cn(
+              preview?.hasConflicts && !useAI && 'bg-yellow-600 hover:bg-yellow-700',
+              preview?.hasConflicts && useAI && isAIAvailable && 'bg-primary'
+            )}
           >
             {isMerging ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Merging...
+                {useAI && preview?.hasConflicts && isAIAvailable ? 'AI Resolving...' : 'Merging...'}
+              </>
+            ) : preview?.hasConflicts && useAI && isAIAvailable ? (
+              <>
+                <Brain className="h-4 w-4 mr-2" />
+                Merge with AI
               </>
             ) : preview?.hasConflicts ? (
               'Merge (with conflicts)'

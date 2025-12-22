@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Worktree, WorktreeStatus, MergePreview, MergeResult, MergeStrategy, CreateWorktreeOptions } from '@shared/types/git'
+import type { Worktree, WorktreeStatus, MergePreview, MergeResult, MergeStrategy, CreateWorktreeOptions, ConflictResolutionResult, WorktreeLifecycle } from '@shared/types/git'
 
 interface WorktreeState {
   // State
@@ -9,6 +9,7 @@ interface WorktreeState {
   staleWorktrees: Worktree[]
   isLoading: boolean
   error: string | null
+  isAIAvailable: boolean | null
 
   // Actions
   refreshWorktrees: (repoPaths?: string[]) => Promise<void>
@@ -19,7 +20,14 @@ interface WorktreeState {
   // Merge actions
   getMergePreview: (worktreePath: string) => Promise<MergePreview | null>
   merge: (worktreePath: string, strategy: MergeStrategy) => Promise<MergeResult>
+  mergeWithAI: (worktreePath: string, strategy: MergeStrategy, useAI?: boolean, confidenceThreshold?: number) => Promise<MergeResult & { resolutions?: ConflictResolutionResult[] }>
   abortMerge: (repoPath: string) => Promise<void>
+
+  // AI and lifecycle actions
+  checkAIAvailability: () => Promise<boolean>
+  getLifecycle: (worktreePath: string) => Promise<WorktreeLifecycle | null>
+  getAllLifecycles: () => Promise<WorktreeLifecycle[]>
+  updateLifecycleStatus: (worktreePath: string, status: WorktreeLifecycle['status']) => Promise<void>
 
   // Remote actions
   pull: (worktreePath: string) => Promise<{ success: boolean; error?: string }>
@@ -44,6 +52,7 @@ export const useWorktreeStore = create<WorktreeState>((set, get) => ({
   staleWorktrees: [],
   isLoading: false,
   error: null,
+  isAIAvailable: null,
 
   // Actions
   refreshWorktrees: async (repoPaths?: string[]) => {
@@ -210,6 +219,26 @@ export const useWorktreeStore = create<WorktreeState>((set, get) => ({
     }
   },
 
+  mergeWithAI: async (worktreePath: string, strategy: MergeStrategy, useAI = true, confidenceThreshold = 60) => {
+    set({ isLoading: true, error: null })
+    try {
+      const result = await window.electron.git.mergeWithAI(worktreePath, strategy, useAI, confidenceThreshold)
+      set({ isLoading: false })
+
+      // Refresh status after merge
+      const worktree = get().worktrees.find(w => w.path === worktreePath)
+      if (worktree) {
+        get().refreshWorktreeStatus(worktree.id).catch(console.error)
+      }
+
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to merge with AI'
+      set({ error: message, isLoading: false })
+      throw error
+    }
+  },
+
   abortMerge: async (repoPath: string) => {
     set({ isLoading: true, error: null })
     try {
@@ -291,6 +320,46 @@ export const useWorktreeStore = create<WorktreeState>((set, get) => ({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to check stale worktrees'
       set({ error: message })
+    }
+  },
+
+  // AI and lifecycle methods
+  checkAIAvailability: async () => {
+    try {
+      const isAvailable = await window.electron.git.isAIAvailable()
+      set({ isAIAvailable: isAvailable })
+      return isAvailable
+    } catch (error) {
+      set({ isAIAvailable: false })
+      return false
+    }
+  },
+
+  getLifecycle: async (worktreePath: string) => {
+    try {
+      return await window.electron.git.getLifecycle(worktreePath)
+    } catch (error) {
+      console.error('Failed to get lifecycle:', error)
+      return null
+    }
+  },
+
+  getAllLifecycles: async () => {
+    try {
+      return await window.electron.git.getAllLifecycles()
+    } catch (error) {
+      console.error('Failed to get all lifecycles:', error)
+      return []
+    }
+  },
+
+  updateLifecycleStatus: async (worktreePath: string, status: WorktreeLifecycle['status']) => {
+    try {
+      await window.electron.git.updateLifecycleStatus(worktreePath, status)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update lifecycle status'
+      set({ error: message })
+      throw error
     }
   },
 

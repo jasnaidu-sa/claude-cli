@@ -897,3 +897,4 @@ sequenceDiagram
 | 2025-12-16 | 1.13.0 | FEAT-013: Control Panel Component (start/pause/stop, model select) |
 | 2025-12-16 | 1.14.0 | FEAT-014: Main UI Integration (AutonomousView, sidebar nav) |
 | 2025-12-16 | 1.15.0 | FEAT-015: Global Configuration (autonomous settings, MCP, security) |
+| 2025-12-22 | 1.16.0 | AI Merge Conflict Resolution System (3-tier resolution, OAuth auth) |

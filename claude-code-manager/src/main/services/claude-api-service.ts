@@ -112,26 +112,39 @@ class ClaudeAPIService {
   }
 
   /**
-   * Load API key from environment
+   * Load API key/token from environment
    */
   private loadApiKey(): void {
-    // Check ANTHROPIC_API_KEY first, fallback to CLAUDE_API_KEY
-    this.apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || null;
+    // Check multiple sources:
+    // 1. ANTHROPIC_API_KEY - Direct API key (sk-ant-...)
+    // 2. CLAUDE_API_KEY - Alternative API key
+    // 3. ANTHROPIC_SESSION_KEY - OAuth token (Max plan)
+    this.apiKey =
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.CLAUDE_API_KEY ||
+      process.env.ANTHROPIC_SESSION_KEY ||
+      null;
   }
 
   /**
-   * Validate API key is available
+   * Validate API key/token is available
    */
   private validateApiKey(): void {
     if (!this.apiKey) {
       throw new Error(
-        'Claude API key not found. Set ANTHROPIC_API_KEY environment variable or use "claude auth login".'
+        'Claude authentication not found. Set ANTHROPIC_API_KEY (API key) or ANTHROPIC_SESSION_KEY (OAuth/Max plan) environment variable.'
       );
     }
 
-    // Basic format validation (sk-ant-...)
-    if (!this.apiKey.startsWith('sk-ant-')) {
-      throw new Error('Invalid API key format. Expected format: sk-ant-...');
+    // Support both API keys (sk-ant-...) and OAuth tokens (sessionKey format)
+    // OAuth tokens don't have a consistent prefix, so we skip format validation for non-API-keys
+    const isApiKey = this.apiKey.startsWith('sk-ant-');
+    const isSessionKey = this.apiKey.length > 20 && !this.apiKey.startsWith('sk-ant-');
+
+    if (!isApiKey && !isSessionKey) {
+      throw new Error(
+        'Invalid authentication format. Expected API key (sk-ant-...) or OAuth session token.'
+      );
     }
   }
 

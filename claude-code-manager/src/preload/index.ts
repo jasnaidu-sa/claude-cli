@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck, Idea, IdeaStage, IdeaEmailSource, OutlookConfig, ProjectType } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy } from '../shared/types/git'
 import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection } from '../shared/context-types'
 
@@ -259,6 +259,28 @@ export interface ElectronAPI {
     onComplete: (callback: (data: { taskId: string; result: ContextSummarizationResult }) => void) => () => void
     onError: (callback: (data: { taskId: string; error: string }) => void) => () => void
   }
+
+  // Ideas Kanban (Email-based project ideas)
+  ideas: {
+    list: (stage?: IdeaStage) => Promise<{ success: boolean; ideas?: Idea[]; error?: string }>
+    get: (ideaId: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    create: (options: CreateIdeaOptions) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    update: (ideaId: string, options: UpdateIdeaOptions) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    delete: (ideaId: string) => Promise<{ success: boolean; error?: string }>
+    moveStage: (ideaId: string, newStage: IdeaStage) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    addDiscussion: (ideaId: string, role: 'user' | 'assistant', content: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    startProject: (ideaId: string, projectType: ProjectType, projectPath?: string, projectName?: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+  }
+
+  // Outlook Email Integration
+  outlook: {
+    configure: (config: Partial<OutlookConfig>) => Promise<{ success: boolean; error?: string }>
+    getConfig: () => Promise<{ success: boolean; config?: OutlookConfig | null; error?: string }>
+    authenticate: () => Promise<{ success: boolean; error?: string }>
+    fetchEmails: (options?: { maxResults?: number; sinceDate?: string; onlySinceLastSync?: boolean }) => Promise<{ success: boolean; count?: number; ideas?: Idea[]; error?: string }>
+    sync: () => Promise<{ success: boolean; count?: number; ideas?: Idea[]; error?: string }>
+    getStatus: () => Promise<{ success: boolean; status?: { configured: boolean; authenticated: boolean; sourceEmail: string | null; lastSyncAt: number | null }; error?: string }>
+  }
 }
 
 // Journey Analysis types
@@ -356,6 +378,26 @@ export interface UpdateWorkflowOptions {
   status?: WorkflowStatus
   progress?: WorkflowProgress
   error?: string
+}
+
+// Ideas options types (matching ideas-manager.ts)
+export interface CreateIdeaOptions {
+  title: string
+  description: string
+  emailSource: IdeaEmailSource
+  tags?: string[]
+  priority?: 'low' | 'medium' | 'high' | 'urgent'
+}
+
+export interface UpdateIdeaOptions {
+  title?: string
+  description?: string
+  projectType?: ProjectType
+  associatedProjectPath?: string
+  associatedProjectName?: string
+  reviewNotes?: string
+  tags?: string[]
+  priority?: 'low' | 'medium' | 'high' | 'urgent'
 }
 
 // Create the API object
@@ -686,6 +728,42 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('context:error', handler)
       return () => ipcRenderer.removeListener('context:error', handler)
     }
+  },
+
+  // Ideas Kanban (Email-based project ideas)
+  ideas: {
+    list: (stage?: IdeaStage) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_LIST, stage),
+    get: (ideaId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_GET, ideaId),
+    create: (options: CreateIdeaOptions) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_CREATE, options),
+    update: (ideaId: string, options: UpdateIdeaOptions) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_UPDATE, ideaId, options),
+    delete: (ideaId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_DELETE, ideaId),
+    moveStage: (ideaId: string, newStage: IdeaStage) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_MOVE_STAGE, ideaId, newStage),
+    addDiscussion: (ideaId: string, role: 'user' | 'assistant', content: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_ADD_DISCUSSION, ideaId, role, content),
+    startProject: (ideaId: string, projectType: ProjectType, projectPath?: string, projectName?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_START_PROJECT, ideaId, projectType, projectPath, projectName)
+  },
+
+  // Outlook Email Integration
+  outlook: {
+    configure: (config: Partial<OutlookConfig>) =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_CONFIGURE, config),
+    getConfig: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_GET_CONFIG),
+    authenticate: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_AUTHENTICATE),
+    fetchEmails: (options?: { maxResults?: number; sinceDate?: string; onlySinceLastSync?: boolean }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_FETCH_EMAILS, options),
+    sync: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_SYNC),
+    getStatus: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_STATUS)
   }
 }
 

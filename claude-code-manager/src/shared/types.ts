@@ -468,6 +468,24 @@ export const IPC_CHANNELS = {
   CHECKPOINT_UPDATE: 'checkpoint:update',
   CHECKPOINT_CONFIG_GET: 'checkpoint:config-get',
   CHECKPOINT_CONFIG_SET: 'checkpoint:config-set',
+
+  // Ideas Kanban Management
+  IDEAS_LIST: 'ideas:list',
+  IDEAS_GET: 'ideas:get',
+  IDEAS_CREATE: 'ideas:create',
+  IDEAS_UPDATE: 'ideas:update',
+  IDEAS_DELETE: 'ideas:delete',
+  IDEAS_MOVE_STAGE: 'ideas:move-stage',
+  IDEAS_ADD_DISCUSSION: 'ideas:add-discussion',
+  IDEAS_START_PROJECT: 'ideas:start-project',
+
+  // Outlook/Email Integration
+  OUTLOOK_CONFIGURE: 'outlook:configure',
+  OUTLOOK_GET_CONFIG: 'outlook:get-config',
+  OUTLOOK_AUTHENTICATE: 'outlook:authenticate',
+  OUTLOOK_FETCH_EMAILS: 'outlook:fetch-emails',
+  OUTLOOK_SYNC: 'outlook:sync',
+  OUTLOOK_STATUS: 'outlook:status',
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]
@@ -594,3 +612,96 @@ export const READINESS_CHECKS_CONFIG = [
   { name: 'error_handling_defined', description: 'Error cases and edge cases are specified', required: false },
   { name: 'similar_patterns_referenced', description: 'References existing code patterns for consistency', required: false },
 ] as const
+
+// ============================================================================
+// Email Ideas Kanban System
+// ============================================================================
+
+// Idea stages in the Kanban workflow
+export type IdeaStage =
+  | 'inbox'       // Just fetched from email, not yet reviewed
+  | 'pending'     // Acknowledged, waiting for review
+  | 'review'      // In active discussion/review
+  | 'approved'    // Discussed and approved, ready to start
+  | 'in_progress' // Project started
+  | 'completed'   // Project finished
+
+// Project type determination
+export type ProjectType = 'greenfield' | 'brownfield' | 'undetermined'
+
+// Source email metadata
+export interface IdeaEmailSource {
+  messageId: string
+  from: string
+  subject: string
+  receivedAt: number
+  body: string
+  snippet?: string
+}
+
+// Main Idea interface
+export interface Idea {
+  id: string
+  title: string
+  description: string
+  stage: IdeaStage
+  projectType: ProjectType
+
+  // Email source
+  emailSource: IdeaEmailSource
+
+  // Project association (for brownfield)
+  associatedProjectPath?: string
+  associatedProjectName?: string
+
+  // Review/discussion data
+  reviewNotes?: string
+  discussionMessages?: IdeaDiscussionMessage[]
+
+  // Workflow tracking
+  createdAt: number
+  updatedAt: number
+  movedToReviewAt?: number
+  approvedAt?: number
+  startedAt?: number
+  completedAt?: number
+
+  // Created workflow (when project starts)
+  workflowId?: string
+
+  // Tags/categories
+  tags?: string[]
+  priority?: 'low' | 'medium' | 'high' | 'urgent'
+}
+
+// Discussion message for review phase
+export interface IdeaDiscussionMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: number
+}
+
+// Outlook/Email integration configuration
+export interface OutlookConfig {
+  clientId: string
+  tenantId: string
+  redirectUri: string
+  sourceEmailAddress: string // The specific email address to fetch ideas from
+  lastSyncAt?: number
+  accessToken?: string
+  refreshToken?: string
+  tokenExpiresAt?: number
+}
+
+// Discovery result for greenfield/brownfield determination
+export interface ProjectDiscoveryResult {
+  projectType: ProjectType
+  suggestedProjects?: Array<{
+    path: string
+    name: string
+    matchScore: number
+    reason: string
+  }>
+  analysis: string
+}

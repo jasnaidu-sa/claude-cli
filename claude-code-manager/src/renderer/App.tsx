@@ -9,6 +9,7 @@ import { NewSessionModal } from './components/session/NewSessionModal'
 import { ResizeHandle } from './components/ui/ResizeHandle'
 import { WorktreePanel } from './components/worktree'
 import { AutonomousView } from './components/autonomous'
+import { IdeasView } from './components/ideas'
 import { useUIStore } from './stores/ui-store'
 import { useSessionStore } from './stores/session-store'
 import { useDevServerAutoStart } from './hooks/useDevServerAutoStart'
@@ -58,10 +59,10 @@ export default function App() {
   const hasActiveSessions = sessions.length > 0
 
   // Check if we should show a right panel
-  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || (activePanel === 'files' && selectedFile)
+  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || activePanel === 'ideas' || (activePanel === 'files' && selectedFile)
 
-  // Check if autonomous should take full width (no active sessions)
-  const autonomousFullWidth = activePanel === 'autonomous' && !hasActiveSessions
+  // Check if autonomous or ideas should take full width (no active sessions)
+  const autonomousFullWidth = (activePanel === 'autonomous' || activePanel === 'ideas') && !hasActiveSessions
 
   // Handle resize of right panel
   const handleRightPanelResize = useCallback((delta: number) => {
@@ -86,6 +87,9 @@ export default function App() {
     }
     if (activePanel === 'autonomous') {
       return <AutonomousView onClose={() => setActivePanel(null)} />
+    }
+    if (activePanel === 'ideas') {
+      return <IdeasView />
     }
     if (activePanel === 'files' && selectedFile) {
       return <FileViewer />

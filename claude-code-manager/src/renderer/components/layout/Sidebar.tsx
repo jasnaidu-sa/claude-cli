@@ -1,5 +1,5 @@
 import React from 'react'
-import { FolderOpen, Globe, Settings, ChevronDown, Circle, GitBranch, Bot } from 'lucide-react'
+import { FolderOpen, Globe, Settings, ChevronDown, Circle, GitBranch, Bot, Lightbulb } from 'lucide-react'
 import { Button } from '../ui/button'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useSessionStore } from '@renderer/stores/session-store'
@@ -116,6 +116,19 @@ export function Sidebar() {
             >
               <Bot className="h-4 w-4" />
               Autonomous
+            </button>
+
+            <button
+              onClick={() => setActivePanel(activePanel === 'ideas' ? null : 'ideas')}
+              className={cn(
+                'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors',
+                activePanel === 'ideas'
+                  ? 'bg-primary/10 text-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+              )}
+            >
+              <Lightbulb className="h-4 w-4" />
+              Ideas
             </button>
           </div>
         </div>

@@ -13,6 +13,7 @@ import { setupDiscoveryHandlers } from './discovery-handlers'
 import { registerPreflightHandlers } from './preflight-handlers'
 import { setupJourneyHandlers } from './journey-handlers'
 import { setupSpecBuilderHandlers } from './spec-builder-handlers'
+import { registerIdeasHandlers } from './ideas-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -59,6 +60,9 @@ export function registerIpcHandlers(): void {
 
   // Spec builder handlers
   setupSpecBuilderHandlers(researchAgentRunner)
+
+  // Ideas Kanban handlers (email integration + ideas management)
+  registerIdeasHandlers()
 }
 
 function registerSessionHandlers(): void {

@@ -160,7 +160,7 @@ export class OutlookIntegrationService extends EventEmitter {
       client_id: this.config!.clientId,
       response_type: 'code',
       redirect_uri: this.config!.redirectUri,
-      scope: 'Mail.Read Mail.ReadBasic offline_access',
+      scope: 'https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Contacts.Read https://graph.microsoft.com/User.Read offline_access',
       response_mode: 'query'
     })
 
@@ -171,6 +171,29 @@ export class OutlookIntegrationService extends EventEmitter {
    * Exchange auth code for access token
    */
   private async exchangeCodeForToken(code: string): Promise<void> {
+    const params: Record<string, string> = {
+      client_id: this.config!.clientId,
+      scope: 'https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Contacts.Read https://graph.microsoft.com/User.Read offline_access',
+      code,
+      redirect_uri: this.config!.redirectUri,
+      grant_type: 'authorization_code'
+    }
+
+    // Add client secret if configured (for confidential client flow)
+    if (this.config!.clientSecret) {
+      params.client_secret = this.config!.clientSecret
+      console.log('[OutlookAuth] Using confidential client flow with client secret')
+    } else {
+      console.log('[OutlookAuth] Using public client flow (no client secret)')
+    }
+
+    console.log('[OutlookAuth] Token exchange params:', {
+      client_id: params.client_id,
+      has_secret: !!params.client_secret,
+      redirect_uri: params.redirect_uri,
+      tenant: this.config!.tenantId
+    })
+
     const response = await fetch(
       `${AUTH_ENDPOINT}/${this.config!.tenantId}/oauth2/v2.0/token`,
       {
@@ -178,13 +201,7 @@ export class OutlookIntegrationService extends EventEmitter {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: new URLSearchParams({
-          client_id: this.config!.clientId,
-          scope: 'Mail.Read Mail.ReadBasic offline_access',
-          code,
-          redirect_uri: this.config!.redirectUri,
-          grant_type: 'authorization_code'
-        })
+        body: new URLSearchParams(params)
       }
     )
 
@@ -209,6 +226,18 @@ export class OutlookIntegrationService extends EventEmitter {
       throw new Error('No refresh token available. Please re-authenticate.')
     }
 
+    const params: Record<string, string> = {
+      client_id: this.config.clientId,
+      scope: 'https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/Calendars.ReadWrite https://graph.microsoft.com/Contacts.Read https://graph.microsoft.com/User.Read offline_access',
+      refresh_token: this.config.refreshToken,
+      grant_type: 'refresh_token'
+    }
+
+    // Add client secret if configured (for confidential client flow)
+    if (this.config.clientSecret) {
+      params.client_secret = this.config.clientSecret
+    }
+
     const response = await fetch(
       `${AUTH_ENDPOINT}/${this.config.tenantId}/oauth2/v2.0/token`,
       {
@@ -216,12 +245,7 @@ export class OutlookIntegrationService extends EventEmitter {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: new URLSearchParams({
-          client_id: this.config.clientId,
-          scope: 'Mail.Read Mail.ReadBasic offline_access',
-          refresh_token: this.config.refreshToken,
-          grant_type: 'refresh_token'
-        })
+        body: new URLSearchParams(params)
       }
     )
 
@@ -265,21 +289,27 @@ export class OutlookIntegrationService extends EventEmitter {
     }
 
     const maxResults = options?.maxResults || 50
-    let filter = `from/emailAddress/address eq '${this.config.sourceEmailAddress}'`
 
-    // Add date filter
-    if (options?.sinceDate) {
-      filter += ` and receivedDateTime ge ${options.sinceDate.toISOString()}`
-    } else if (options?.onlySinceLastSync && this.config.lastSyncAt) {
-      filter += ` and receivedDateTime ge ${new Date(this.config.lastSyncAt).toISOString()}`
-    }
-
+    // Simplified query - just get recent messages and filter client-side
+    // Microsoft Graph doesn't support complex filters with orderby on receivedDateTime
     const params = new URLSearchParams({
-      '$filter': filter,
       '$orderby': 'receivedDateTime desc',
       '$top': maxResults.toString(),
       '$select': 'id,subject,from,receivedDateTime,bodyPreview,body'
     })
+
+    // Store the filter criteria for client-side filtering
+    // Support multiple source emails separated by comma
+    const sourceEmails = this.config.sourceEmailAddress
+      .split(',')
+      .map(email => email.trim().toLowerCase())
+
+    let sinceTimestamp: number | undefined
+    if (options?.sinceDate) {
+      sinceTimestamp = options.sinceDate.getTime()
+    } else if (options?.onlySinceLastSync && this.config.lastSyncAt) {
+      sinceTimestamp = this.config.lastSyncAt
+    }
 
     const response = await fetch(
       `${GRAPH_API_BASE}/me/messages?${params.toString()}`,
@@ -298,26 +328,58 @@ export class OutlookIntegrationService extends EventEmitter {
 
     const data = await response.json()
 
+    console.log(`[OutlookSync] Fetched ${data.value.length} emails from mailbox`)
+    console.log(`[OutlookSync] Filtering for emails from: ${sourceEmails.join(', ')}`)
+
     // Update last sync time
     this.config.lastSyncAt = Date.now()
     this.saveConfig()
 
-    // Transform to IdeaEmailSource format
-    const emails: IdeaEmailSource[] = data.value.map((email: {
-      id: string
-      subject: string
-      from: { emailAddress: { address: string } }
-      receivedDateTime: string
-      body: { content: string }
-      bodyPreview: string
-    }) => ({
-      messageId: email.id,
-      from: email.from.emailAddress.address,
-      subject: email.subject,
-      receivedAt: new Date(email.receivedDateTime).getTime(),
-      body: this.stripHtml(email.body.content),
-      snippet: email.bodyPreview
-    }))
+    // Filter and transform to IdeaEmailSource format
+    const emails: IdeaEmailSource[] = data.value
+      .filter((email: {
+        from: { emailAddress: { address: string } }
+        receivedDateTime: string
+      }) => {
+        // Filter by source email address (check if from any of the allowed addresses)
+        const fromEmail = email.from.emailAddress.address.toLowerCase()
+
+        console.log(`[OutlookSync] Checking email from: ${fromEmail}`)
+
+        if (!sourceEmails.includes(fromEmail)) {
+          console.log(`[OutlookSync] Skipping - not from allowed addresses`)
+          return false
+        }
+
+        console.log(`[OutlookSync] Including - matches allowed address`)
+
+        // Filter by date if specified
+        if (sinceTimestamp) {
+          const emailTimestamp = new Date(email.receivedDateTime).getTime()
+          if (emailTimestamp < sinceTimestamp) {
+            return false
+          }
+        }
+
+        return true
+      })
+      .map((email: {
+        id: string
+        subject: string
+        from: { emailAddress: { address: string } }
+        receivedDateTime: string
+        body: { content: string }
+        bodyPreview: string
+      }) => ({
+        messageId: email.id,
+        from: email.from.emailAddress.address,
+        subject: email.subject,
+        receivedAt: new Date(email.receivedDateTime).getTime(),
+        body: this.stripHtml(email.body.content),
+        snippet: email.bodyPreview
+      }))
+
+    console.log(`[OutlookSync] Filtered to ${emails.length} emails from allowed addresses`)
 
     this.emit('emails-fetched', emails)
     return emails

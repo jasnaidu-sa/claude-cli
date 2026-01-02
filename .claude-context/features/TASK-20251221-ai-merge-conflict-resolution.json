@@ -1,0 +1,382 @@
+{
+  "task_id": "TASK-20251221-ai-merge-conflict-resolution",
+  "created": "2025-12-21T12:00:00Z",
+  "description": "Implement AI-Assisted Merge Conflict Resolution and Worktree Lifecycle Management",
+  "workflow_version": "7.0",
+
+  "features": [
+    {
+      "id": "FEAT-001",
+      "name": "Conflict Region Extraction",
+      "type": "api",
+      "status": "completed",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/conflict-resolver.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/shared/types/git.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create ConflictRegion interface in types/git.ts", "done": true },
+        { "description": "Implement extractConflictRegions() to parse conflict markers", "done": true },
+        { "description": "Add context extraction (5 lines before/after)", "done": true },
+        { "description": "Handle multiple conflicts in single file", "done": true }
+      ],
+      "verification": [
+        "Can parse <<<<<<< HEAD markers correctly",
+        "Extracts ours/theirs content properly",
+        "Returns structured conflict data"
+      ],
+      "review": {
+        "status": "completed",
+        "static_review": "simplified_3_agent",
+        "runtime_verification": "quality_gates_passed",
+        "issues_found": 21,
+        "issues_fixed": 8,
+        "attempts": 1
+      }
+    },
+    {
+      "id": "FEAT-002",
+      "name": "Tier 2 AI Conflict Resolution",
+      "type": "api",
+      "status": "completed",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/claude-api-service.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/main/services/conflict-resolver.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create Claude API service for LLM calls", "done": true },
+        { "description": "Implement conflict-only resolution prompt", "done": true },
+        { "description": "Parse AI response and validate format", "done": true },
+        { "description": "Apply resolved content to file", "done": true }
+      ],
+      "verification": [
+        "AI receives minimal context (not full file)",
+        "Response format is validated",
+        "Resolved content replaces conflict markers"
+      ],
+      "review": {
+        "status": "pending",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-003",
+      "name": "Syntax Validation Service",
+      "type": "api",
+      "status": "completed",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/syntax-validator.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/main/services/conflict-resolver.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create validation interface (ValidationResult)", "done": true },
+        { "description": "Implement TypeScript/JavaScript validation (tsc --noEmit)", "done": true },
+        { "description": "Implement JSON validation (JSON.parse)", "done": true },
+        { "description": "Add Python validation (python -m py_compile)", "done": true },
+        { "description": "Language detection by file extension", "done": true }
+      ],
+      "verification": [
+        "TypeScript syntax errors detected",
+        "Valid files pass validation",
+        "Returns structured error messages"
+      ],
+      "review": {
+        "status": "pending",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-004",
+      "name": "Tier 3 Full-File Fallback",
+      "type": "api",
+      "status": "pending",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/main/services/conflict-resolver.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Implement full-file resolution prompt", "done": false },
+        { "description": "Add confidence scoring to determine when to escalate", "done": false },
+        { "description": "Track resolution attempts and strategy used", "done": false }
+      ],
+      "verification": [
+        "Falls back when Tier 2 fails",
+        "Provides complete file context to AI",
+        "Tracks which tier was used"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-005",
+      "name": "Parallel Conflict Processing",
+      "type": "api",
+      "status": "pending",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/main/services/conflict-resolver.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Implement chunking for batched processing", "done": false },
+        { "description": "Add Promise.all for parallel API calls", "done": false },
+        { "description": "Set max concurrency limit (default: 3)", "done": false },
+        { "description": "Aggregate results from parallel processing", "done": false }
+      ],
+      "verification": [
+        "Multiple conflicts processed in parallel",
+        "Concurrency limit respected",
+        "All results aggregated correctly"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-006",
+      "name": "Worktree Lifecycle Manager",
+      "type": "api",
+      "status": "pending",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/worktree-lifecycle-manager.ts"
+        ],
+        "modify": [
+          "claude-code-manager/src/shared/types/git.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create WorktreeLifecycle interface", "done": false },
+        { "description": "Implement lifecycle tracking Map", "done": false },
+        { "description": "Add createManagedWorktree() method", "done": false },
+        { "description": "Implement onMergeSuccess() auto-cleanup", "done": false },
+        { "description": "Add cleanupStale() for old worktrees", "done": false }
+      ],
+      "verification": [
+        "Worktrees tracked by workflow ID",
+        "Auto-cleanup after merge works",
+        "Stale worktrees cleaned up"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-007",
+      "name": "Integration with git-service.ts",
+      "type": "integration",
+      "status": "pending",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/main/services/git-service.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Add mergeWithConflictResolution() method", "done": false },
+        { "description": "Integrate conflict-resolver service", "done": false },
+        { "description": "Add syntax validation before applying merge", "done": false },
+        { "description": "Return detailed resolution results", "done": false },
+        { "description": "Update merge() to optionally use AI resolution", "done": false }
+      ],
+      "verification": [
+        "AI resolution called when conflicts detected",
+        "Syntax validation runs before applying",
+        "Detailed results returned",
+        "Backwards compatible with existing merge()"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-008",
+      "name": "IPC Handlers for Frontend",
+      "type": "api",
+      "status": "pending",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/main/ipc/git-handlers.ts",
+          "claude-code-manager/src/preload/index.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Add IPC handler for mergeWithAI", "done": false },
+        { "description": "Add preload API typings", "done": false },
+        { "description": "Add handler for lifecycle management", "done": false },
+        { "description": "Add handler for cleanup operations", "done": false }
+      ],
+      "verification": [
+        "Frontend can call AI merge via IPC",
+        "Types properly exposed",
+        "No type errors"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-009",
+      "name": "Frontend UI Components",
+      "type": "ui",
+      "status": "pending",
+      "files": {
+        "create": [
+          "claude-code-manager/src/renderer/components/ConflictResolutionDialog.tsx"
+        ],
+        "modify": [
+          "claude-code-manager/src/renderer/stores/worktree-store.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Create ConflictResolutionDialog component", "done": false },
+        { "description": "Add progress indicator for AI resolution", "done": false },
+        { "description": "Display tier used and confidence", "done": false },
+        { "description": "Show syntax validation results", "done": false },
+        { "description": "Update worktree-store with AI merge actions", "done": false }
+      ],
+      "verification": [
+        "Dialog shows resolution progress",
+        "User sees which tier was used",
+        "Validation errors displayed"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-010",
+      "name": "Enhanced Merge Preview",
+      "type": "api",
+      "status": "pending",
+      "files": {
+        "create": [],
+        "modify": [
+          "claude-code-manager/src/main/services/git-service.ts",
+          "claude-code-manager/src/shared/types/git.ts"
+        ]
+      },
+      "subtasks": [
+        { "description": "Extend MergePreview interface with conflict analysis", "done": false },
+        { "description": "Add estimatedResolutionTime calculation", "done": false },
+        { "description": "Add riskAssessment field", "done": false },
+        { "description": "Implement analysis in getMergePreview()", "done": false }
+      ],
+      "verification": [
+        "Preview shows estimated time",
+        "Risk level calculated correctly",
+        "No regressions in existing preview"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    },
+    {
+      "id": "FEAT-011",
+      "name": "Basic Tests",
+      "type": "integration",
+      "status": "pending",
+      "files": {
+        "create": [
+          "claude-code-manager/src/main/services/__tests__/conflict-resolver.test.ts",
+          "claude-code-manager/src/main/services/__tests__/syntax-validator.test.ts",
+          "claude-code-manager/src/main/services/__tests__/worktree-lifecycle-manager.test.ts"
+        ],
+        "modify": []
+      },
+      "subtasks": [
+        { "description": "Test conflict extraction with mock git conflicts", "done": false },
+        { "description": "Test syntax validation for TS/JS/JSON/Python", "done": false },
+        { "description": "Test lifecycle manager cleanup logic", "done": false },
+        { "description": "Test parallel processing", "done": false }
+      ],
+      "verification": [
+        "All tests pass",
+        "Coverage for happy paths",
+        "Edge cases handled"
+      ],
+      "review": {
+        "status": "not_started",
+        "static_review": null,
+        "runtime_verification": null,
+        "issues_found": 0,
+        "issues_fixed": 0,
+        "attempts": 0
+      }
+    }
+  ],
+
+  "rules": {
+    "review_after_each_feature": true,
+    "all_priorities_block": true,
+    "developer_must_fix": true,
+    "max_fix_attempts": 3
+  },
+
+  "completion_criteria": {
+    "all_features_implemented": false,
+    "all_features_reviewed": false,
+    "all_issues_fixed": false,
+    "runtime_verification_passed": false
+  }
+}

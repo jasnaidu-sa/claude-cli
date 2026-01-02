@@ -36,14 +36,26 @@ interface OutlookSetupModalProps {
 
 function OutlookSetupModal({ isOpen, onClose, onSave, currentConfig }: OutlookSetupModalProps) {
   const [clientId, setClientId] = useState(currentConfig?.clientId || '')
+  const [clientSecret, setClientSecret] = useState(currentConfig?.clientSecret || '')
   const [tenantId, setTenantId] = useState(currentConfig?.tenantId || 'common')
   const [sourceEmail, setSourceEmail] = useState(currentConfig?.sourceEmailAddress || '')
+
+  // Update state when modal opens with current config
+  useEffect(() => {
+    if (isOpen && currentConfig) {
+      setClientId(currentConfig.clientId || '')
+      setClientSecret(currentConfig.clientSecret || '')
+      setTenantId(currentConfig.tenantId || 'common')
+      setSourceEmail(currentConfig.sourceEmailAddress || '')
+    }
+  }, [isOpen, currentConfig])
 
   if (!isOpen) return null
 
   const handleSave = () => {
     onSave({
       clientId,
+      clientSecret: clientSecret || undefined,
       tenantId,
       sourceEmailAddress: sourceEmail
     })
@@ -75,6 +87,20 @@ function OutlookSetupModal({ isOpen, onClose, onSave, currentConfig }: OutlookSe
               <a href="https://portal.azure.com" className="text-primary hover:underline">
                 Azure Portal
               </a>
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Client Secret (Optional)</label>
+            <input
+              type="password"
+              value={clientSecret}
+              onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="Enter client secret (recommended for work accounts)"
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Required to avoid admin consent for organizational accounts
             </p>
           </div>
 

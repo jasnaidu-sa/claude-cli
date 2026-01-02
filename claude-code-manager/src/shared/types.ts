@@ -686,6 +686,7 @@ export interface IdeaDiscussionMessage {
 // Outlook/Email integration configuration
 export interface OutlookConfig {
   clientId: string
+  clientSecret?: string // Optional: for confidential client flow (avoids admin consent issues)
   tenantId: string
   redirectUri: string
   sourceEmailAddress: string // The specific email address to fetch ideas from

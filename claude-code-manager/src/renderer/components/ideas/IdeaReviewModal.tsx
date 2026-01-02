@@ -34,7 +34,7 @@ import {
 import { cn } from '@renderer/lib/utils'
 import { Button } from '../ui/button'
 import { useAutonomousStore } from '@renderer/stores/autonomous-store'
-import { useNavigate } from 'react-router-dom'
+import { useUIStore } from '@renderer/stores/ui-store'
 import type { Idea, IdeaStage, ProjectType, IdeaDiscussionMessage } from '@shared/types'
 
 interface IdeaReviewModalProps {
@@ -89,7 +89,7 @@ export function IdeaReviewModal({
   onSetProjectType,
   onStartProject
 }: IdeaReviewModalProps) {
-  const navigate = useNavigate()
+  const { setActivePanel } = useUIStore()
   const { createWorkflow, setPhase, setSelectedProject } = useAutonomousStore()
 
   const [newMessage, setNewMessage] = useState('')
@@ -198,10 +198,10 @@ export function IdeaReviewModal({
       // Call the existing onStartProject to update idea stage to in_progress
       await onStartProject()
 
-      // Navigate to autonomous workflow view
-      navigate('/autonomous')
+      // Switch to autonomous panel
+      setActivePanel('autonomous')
 
-      // Set autonomous store to discovery_chat phase with pre-filled spec
+      // Set autonomous store to spec_review phase with pre-filled spec
       setPhase('spec_review')
       setSelectedProject({
         path: workflowProjectPath || '',

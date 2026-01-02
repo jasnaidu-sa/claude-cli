@@ -19,6 +19,9 @@
   },
   "dependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.53.3",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
     "chokidar": "^3.6.0",
     "clsx": "^2.1.1",
     "electron-store": "^8.2.0",
@@ -28,21 +31,19 @@
     "react-arborist": "^3.4.0",
     "react-dom": "^18.3.1",
     "react-resizable-panels": "^2.1.7",
+    "react-router-dom": "^7.11.0",
     "tailwind-merge": "^2.6.0",
-    "@xterm/xterm": "^5.5.0",
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-web-links": "^0.11.0",
     "zustand": "^4.5.2"
   },
   "devDependencies": {
     "@electron-toolkit/utils": "^3.0.0",
+    "@electron/rebuild": "^3.6.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.14",
     "@types/react-dom": "^18.3.2",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "electron": "^33.0.0",
-    "@electron/rebuild": "^3.6.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "node-gyp": "^12.1.0",
@@ -75,7 +76,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "signAndEditExecutable": false

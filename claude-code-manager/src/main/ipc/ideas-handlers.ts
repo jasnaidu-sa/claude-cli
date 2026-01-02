@@ -167,6 +167,24 @@ export function registerIdeasHandlers(): void {
     }
   )
 
+  // Link workflow to idea
+  ipcMain.handle(
+    IPC_CHANNELS.IDEAS_LINK_WORKFLOW,
+    async (
+      _event,
+      ideaId: string,
+      workflowId: string
+    ): Promise<{ success: boolean; idea?: Idea; error?: string }> => {
+      try {
+        const idea = ideasManager.linkWorkflow(ideaId, workflowId)
+        return { success: true, idea }
+      } catch (error) {
+        console.error('[IdeasHandler] Error linking workflow to idea:', error)
+        return { success: false, error: getErrorMessage(error) }
+      }
+    }
+  )
+
   // ============================================================================
   // Outlook Integration
   // ============================================================================

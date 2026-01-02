@@ -478,6 +478,7 @@ export const IPC_CHANNELS = {
   IDEAS_MOVE_STAGE: 'ideas:move-stage',
   IDEAS_ADD_DISCUSSION: 'ideas:add-discussion',
   IDEAS_START_PROJECT: 'ideas:start-project',
+  IDEAS_LINK_WORKFLOW: 'ideas:link-workflow',
 
   // Outlook/Email Integration
   OUTLOOK_CONFIGURE: 'outlook:configure',

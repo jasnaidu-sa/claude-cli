@@ -28,10 +28,13 @@ import {
   FileText,
   AlertTriangle,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Loader2
 } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import { Button } from '../ui/button'
+import { useAutonomousStore } from '@renderer/stores/autonomous-store'
+import { useNavigate } from 'react-router-dom'
 import type { Idea, IdeaStage, ProjectType, IdeaDiscussionMessage } from '@shared/types'
 
 interface IdeaReviewModalProps {
@@ -86,11 +89,15 @@ export function IdeaReviewModal({
   onSetProjectType,
   onStartProject
 }: IdeaReviewModalProps) {
+  const navigate = useNavigate()
+  const { createWorkflow, setPhase, setSelectedProject } = useAutonomousStore()
+
   const [newMessage, setNewMessage] = useState('')
   const [showEmailDetails, setShowEmailDetails] = useState(false)
   const [selectedProjectType, setSelectedProjectType] = useState<ProjectType>(idea.projectType)
   const [projectPath, setProjectPath] = useState(idea.associatedProjectPath || '')
   const [projectName, setProjectName] = useState(idea.associatedProjectName || '')
+  const [isStarting, setIsStarting] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Scroll to bottom when new messages are added
@@ -135,6 +142,147 @@ export function IdeaReviewModal({
       const name = result.path.split(/[/\\]/).pop() || 'Unknown Project'
       setProjectName(name)
     }
+  }
+
+  const handleStartAutonomousWorkflow = async () => {
+    if (!idea) return
+
+    setIsStarting(true)
+
+    try {
+      // Determine project path based on type
+      let workflowProjectPath: string
+      let workflowProjectName: string
+
+      if (selectedProjectType === 'brownfield') {
+        // Use existing project
+        if (!projectPath || !projectName) {
+          console.error('[IdeaReviewModal] Brownfield project selected but no path/name')
+          setIsStarting(false)
+          return
+        }
+        workflowProjectPath = projectPath
+        workflowProjectName = projectName
+      } else {
+        // Greenfield - user will be prompted to select/create folder in autonomous flow
+        // For now, use a temp identifier - the autonomous flow will handle project creation
+        workflowProjectPath = '' // Will be set in project_select phase
+        workflowProjectName = idea.title || 'New Project from Idea'
+      }
+
+      // Build spec content from idea
+      const specContent = buildSpecFromIdea(idea)
+
+      // Create workflow with idea context
+      const workflow = await createWorkflow({
+        projectPath: workflowProjectPath || '/tmp/idea-project',
+        name: `Idea: ${idea.title}`,
+        description: `Autonomous workflow from idea: ${idea.title}`,
+        specContent,
+        status: 'draft',
+        ideaId: idea.id // Link to idea
+      })
+
+      if (!workflow) {
+        console.error('[IdeaReviewModal] Failed to create workflow')
+        setIsStarting(false)
+        return
+      }
+
+      // Link workflow ID to idea (bidirectional linking)
+      const linkResult = await window.electron.ideas.linkWorkflow(idea.id, workflow.id)
+      if (!linkResult.success) {
+        console.error('[IdeaReviewModal] Failed to link workflow to idea:', linkResult.error)
+      }
+
+      // Call the existing onStartProject to update idea stage to in_progress
+      await onStartProject()
+
+      // Navigate to autonomous workflow view
+      navigate('/autonomous')
+
+      // Set autonomous store to discovery_chat phase with pre-filled spec
+      setPhase('spec_review')
+      setSelectedProject({
+        path: workflowProjectPath || '',
+        name: workflowProjectName,
+        isNew: selectedProjectType === 'greenfield'
+      })
+
+      // Close modal
+      onClose()
+    } catch (error) {
+      console.error('[IdeaReviewModal] Error starting autonomous workflow:', error)
+      setIsStarting(false)
+    }
+  }
+
+  /**
+   * Build specification content from idea
+   */
+  function buildSpecFromIdea(idea: Idea): string {
+    const sections: string[] = []
+
+    // Header
+    sections.push(`# ${idea.title}`)
+    sections.push('')
+
+    // Overview from email
+    sections.push('## Overview')
+    sections.push(idea.description || idea.emailSource.body)
+    sections.push('')
+
+    // Email source context
+    sections.push('## Original Request')
+    sections.push(`From: ${idea.emailSource.from}`)
+    sections.push(`Subject: ${idea.emailSource.subject}`)
+    sections.push(`Received: ${new Date(idea.emailSource.receivedAt).toLocaleDateString()}`)
+    sections.push('')
+    sections.push('```')
+    sections.push(idea.emailSource.body)
+    sections.push('```')
+    sections.push('')
+
+    // Discussion insights if any
+    if (idea.discussionMessages && idea.discussionMessages.length > 0) {
+      sections.push('## Discussion Notes')
+      idea.discussionMessages.forEach((msg) => {
+        const author = msg.role === 'user' ? 'You' : 'AI Assistant'
+        sections.push(`**${author}**: ${msg.content}`)
+        sections.push('')
+      })
+    }
+
+    // Project type context
+    sections.push('## Project Type')
+    sections.push(`Type: ${selectedProjectType}`)
+    if (selectedProjectType === 'brownfield' && projectPath) {
+      sections.push(`Existing Project: ${projectPath}`)
+      sections.push(`Project Name: ${projectName}`)
+    }
+    sections.push('')
+
+    // Tags if any
+    if (idea.tags && idea.tags.length > 0) {
+      sections.push('## Tags')
+      sections.push(idea.tags.map((t) => `- ${t}`).join('\n'))
+      sections.push('')
+    }
+
+    // Placeholder sections for AI to fill in
+    sections.push('## Features & Requirements')
+    sections.push('[TODO: AI will analyze email and extract specific requirements]')
+    sections.push('')
+
+    sections.push('## Technical Architecture')
+    sections.push('[TODO: AI will research codebase patterns and propose architecture]')
+    sections.push('')
+
+    sections.push('## Testing Strategy')
+    sections.push('[TODO: AI will define test cases based on requirements]')
+    sections.push('')
+
+    return sections.join('\n')
   }
 
   const canApprove = idea.stage === 'review'
@@ -396,18 +544,28 @@ export function IdeaReviewModal({
 
             {canStart && (
               <Button
-                onClick={onStartProject}
+                onClick={handleStartAutonomousWorkflow}
+                disabled={isStarting || selectedProjectType === 'undetermined'}
                 className="bg-purple-600 hover:bg-purple-700"
               >
-                <PlayCircle className="h-4 w-4 mr-2" />
-                Start Project
+                {isStarting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Starting Workflow...
+                  </>
+                ) : (
+                  <>
+                    <PlayCircle className="h-4 w-4 mr-2" />
+                    Start Autonomous Workflow
+                  </>
+                )}
               </Button>
             )}
 
             {isInProgress && (
               <div className="flex items-center gap-2 text-purple-400">
-                <PlayCircle className="h-4 w-4" />
-                Project in progress
+                <PlayCircle className="h-4 w-4 animate-pulse" />
+                Autonomous workflow in progress
               </div>
             )}
           </div>

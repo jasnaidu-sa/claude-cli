@@ -270,6 +270,7 @@ export interface ElectronAPI {
     moveStage: (ideaId: string, newStage: IdeaStage) => Promise<{ success: boolean; idea?: Idea; error?: string }>
     addDiscussion: (ideaId: string, role: 'user' | 'assistant', content: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
     startProject: (ideaId: string, projectType: ProjectType, projectPath?: string, projectName?: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    linkWorkflow: (ideaId: string, workflowId: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
   }
 
   // Outlook Email Integration
@@ -747,7 +748,9 @@ const electronAPI: ElectronAPI = {
     addDiscussion: (ideaId: string, role: 'user' | 'assistant', content: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.IDEAS_ADD_DISCUSSION, ideaId, role, content),
     startProject: (ideaId: string, projectType: ProjectType, projectPath?: string, projectName?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_START_PROJECT, ideaId, projectType, projectPath, projectName)
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_START_PROJECT, ideaId, projectType, projectPath, projectName),
+    linkWorkflow: (ideaId: string, workflowId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_LINK_WORKFLOW, ideaId, workflowId)
   },
 
   // Outlook Email Integration

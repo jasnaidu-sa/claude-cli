@@ -5,8 +5,8 @@
  * Routes between phases: project_select → discovery_chat → spec_review → executing → completed
  */
 
-import React, { useEffect, useState } from 'react'
-import { X, FolderOpen, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
+import React, { useEffect } from 'react'
+import { X, FolderOpen, ChevronLeft, RotateCcw, History, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/button'
 import { WorkflowList } from './WorkflowList'
 import { ProgressPanel } from './ProgressPanel'
@@ -22,6 +22,12 @@ import { CompletionSummary } from './CompletionSummary'
 import { PreflightCheck } from './PreflightCheck'
 import { JourneyAnalysis } from './JourneyAnalysis'
 import { SpecGenerating } from './SpecGenerating'
+import { AutocoderEmbedded } from './AutocoderEmbedded'
+import { InitiatorChat } from './InitiatorChat'
+import { RequirementsSummary } from './RequirementsSummary'
+import { PromptReview } from './PromptReview'
+import { RalphExecutionDashboard } from './RalphExecutionDashboard'
+import { RalphSessionHistory } from './RalphSessionHistory'
 import { useAutonomousStore, type AutonomousPhase } from '@renderer/stores/autonomous-store'
 import { useSessionStore } from '@renderer/stores/session-store'
 import { cn } from '@renderer/lib/utils'
@@ -42,8 +48,16 @@ interface AutonomousViewProps {
   onClose?: () => void
 }
 
+// Mode type for autonomous view
+type AutonomousMode = 'autocoder' | 'ralph' | 'legacy'
+
+// Ralph phase type
+type RalphPhase = 'initiator' | 'requirements' | 'prompt_review' | 'executing' | 'completed'
+
 export function AutonomousView({ onClose }: AutonomousViewProps) {
   const { sessions } = useSessionStore()
+  const [mode, setMode] = React.useState<AutonomousMode>('autocoder') // Default to autocoder
+  const [ralphPhase, setRalphPhase] = React.useState<RalphPhase>('initiator')
 
   const {
     // Phase state
@@ -64,7 +78,23 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
     ensureVenv,
     venvStatus,
     validateSchema,
-    getActiveWorkflow
+    getActiveWorkflow,
+    // Ralph state
+    ralphSession,
+    ralphInitiatorSession,
+    ralphRequirements,
+    ralphPromptConfig,
+    setRalphRequirements,
+    setRalphPromptConfig,
+    resetRalphState,
+    // Ralph session history
+    ralphSessionHistory,
+    currentRalphSessionId,
+    showSessionHistory,
+    loadSessionHistory,
+    resumeSession,
+    deleteSession,
+    setShowSessionHistory
   } = useAutonomousStore()
 
   // Initialize subscriptions on mount
@@ -91,6 +121,13 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
       refreshWorkflows(selectedProject.path)
     }
   }, [selectedProject?.path, refreshWorkflows])
+
+  // Load Ralph session history when entering Ralph mode
+  useEffect(() => {
+    if (mode === 'ralph') {
+      loadSessionHistory(selectedProject?.path)
+    }
+  }, [mode, selectedProject?.path, loadSessionHistory])
 
   // Get active workflow and session
   const activeWorkflow = getActiveWorkflow()
@@ -128,6 +165,255 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
 
   // Get unique project paths from sessions (for backwards compat)
   const projectPaths = [...new Set(sessions.map(s => s.projectPath))]
+
+  // Render Ralph phase content
+  const renderRalphContent = () => {
+    switch (ralphPhase) {
+      case 'initiator':
+        return (
+          <InitiatorChat
+            projectPath={selectedProject?.path || ''}
+            onRequirementsReady={(requirements) => {
+              setRalphRequirements(requirements)
+              setRalphPhase('requirements')
+            }}
+          />
+        )
+      case 'requirements':
+        return ralphRequirements ? (
+          <div className="flex flex-col h-full">
+            <RequirementsSummary
+              requirements={ralphRequirements}
+              onEdit={(field, value) => setRalphRequirements({ ...ralphRequirements, [field]: value })}
+              editable={true}
+            />
+            <div className="flex justify-end gap-2 p-4 border-t">
+              <Button variant="outline" onClick={() => setRalphPhase('initiator')}>
+                Back to Chat
+              </Button>
+              <Button onClick={() => setRalphPhase('prompt_review')}>
+                Generate Prompt
+              </Button>
+            </div>
+          </div>
+        ) : null
+      case 'prompt_review':
+        return ralphPromptConfig ? (
+          <div className="flex flex-col h-full">
+            <PromptReview
+              promptConfig={ralphPromptConfig}
+              onUpdate={(updates) => setRalphPromptConfig({ ...ralphPromptConfig, ...updates })}
+              onApprove={() => setRalphPhase('executing')}
+              onRegenerate={() => setRalphPhase('initiator')}
+            />
+          </div>
+        ) : null
+      case 'executing':
+        return ralphPromptConfig && selectedProject ? (
+          <RalphExecutionDashboard
+            projectPath={selectedProject.path}
+            promptConfig={ralphPromptConfig}
+            onBack={() => setRalphPhase('prompt_review')}
+            onComplete={() => setRalphPhase('completed')}
+          />
+        ) : null
+      case 'completed':
+        return <CompletionSummary />
+      default:
+        return null
+    }
+  }
+
+  // Ralph phase labels for display
+  const RALPH_PHASE_INFO: Record<RalphPhase, { title: string; step: number }> = {
+    initiator: { title: 'Describe Task', step: 1 },
+    requirements: { title: 'Review Requirements', step: 2 },
+    prompt_review: { title: 'Review Prompt', step: 3 },
+    executing: { title: 'Executing', step: 4 },
+    completed: { title: 'Complete', step: 5 }
+  }
+
+  // Handle changing project in Ralph mode
+  const handleChangeProject = () => {
+    resetRalphState()
+    resetPhaseState() // This resets selectedProject to null
+    setRalphPhase('initiator')
+  }
+
+  // Handle starting new Ralph session (keep same project)
+  const handleNewRalphSession = () => {
+    resetRalphState()
+    setRalphPhase('initiator')
+  }
+
+  // Render mode selector header
+  const renderModeHeader = () => (
+    <div className="h-12 px-4 flex items-center justify-between border-b border-border bg-card shrink-0">
+      <div className="flex items-center gap-3">
+        <span className="font-medium text-sm">Autonomous Coding</span>
+        <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
+          <Button
+            variant={mode === 'autocoder' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setMode('autocoder')}
+            className="text-xs h-7"
+          >
+            Autocoder
+          </Button>
+          <Button
+            variant={mode === 'ralph' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => {
+              setMode('ralph')
+              resetRalphState()
+              setRalphPhase('initiator')
+            }}
+            className="text-xs h-7"
+          >
+            Ralph Loop
+          </Button>
+          <Button
+            variant={mode === 'legacy' ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setMode('legacy')}
+            className="text-xs h-7"
+          >
+            Legacy
+          </Button>
+        </div>
+      </div>
+
+      {/* Right side - project info and controls for Ralph mode */}
+      <div className="flex items-center gap-2">
+        {mode === 'ralph' && selectedProject && (
+          <>
+            {/* Phase indicator */}
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span>Step {RALPH_PHASE_INFO[ralphPhase].step}/5:</span>
+              <span className="text-foreground font-medium">{RALPH_PHASE_INFO[ralphPhase].title}</span>
+            </div>
+
+            <div className="w-px h-4 bg-border" />
+
+            {/* Project indicator */}
+            <div className="flex items-center gap-2 px-2 py-1 bg-secondary rounded text-xs">
+              <FolderOpen className="h-3 w-3" />
+              <span className="max-w-[150px] truncate" title={selectedProject.path}>
+                {selectedProject.name}
+              </span>
+            </div>
+
+            {/* Change project button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleChangeProject}
+              className="h-7 text-xs gap-1"
+              title="Change project"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Change
+            </Button>
+
+            {/* New session button (only if past initiator phase) */}
+            {ralphPhase !== 'initiator' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleNewRalphSession}
+                className="h-7 text-xs gap-1"
+                title="Start new task in same project"
+              >
+                <RotateCcw className="h-3 w-3" />
+                New Task
+              </Button>
+            )}
+
+            {/* History button */}
+            <Button
+              variant={showSessionHistory ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setShowSessionHistory(!showSessionHistory)}
+              className="h-7 text-xs gap-1"
+              title="View session history"
+            >
+              <History className="h-3 w-3" />
+              {ralphSessionHistory.length > 0 && (
+                <span className="text-muted-foreground">({ralphSessionHistory.length})</span>
+              )}
+            </Button>
+          </>
+        )}
+
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-8 w-8"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+
+  // Autocoder mode
+  if (mode === 'autocoder') {
+    return (
+      <div className="h-full flex flex-col bg-card rounded-lg border border-border overflow-hidden">
+        {renderModeHeader()}
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <AutocoderEmbedded />
+        </div>
+      </div>
+    )
+  }
+
+  // Ralph Loop mode
+  if (mode === 'ralph') {
+    return (
+      <div className="h-full flex flex-col bg-card rounded-lg border border-border overflow-hidden">
+        {renderModeHeader()}
+        <div className="flex-1 min-h-0 overflow-hidden flex">
+          {/* Main content */}
+          <div className={cn(
+            'flex-1 min-w-0 overflow-hidden',
+            showSessionHistory && 'border-r'
+          )}>
+            {selectedProject ? (
+              renderRalphContent()
+            ) : (
+              <ProjectPicker />
+            )}
+          </div>
+
+          {/* Session history panel (slide-in from right) */}
+          {showSessionHistory && (
+            <div className="w-80 shrink-0 bg-background overflow-hidden">
+              <RalphSessionHistory
+                sessions={ralphSessionHistory}
+                currentSessionId={currentRalphSessionId}
+                onResume={async (sessionId) => {
+                  const success = await resumeSession(sessionId)
+                  if (success) {
+                    // Session restored, update phase based on session state
+                    const session = ralphSessionHistory.find(s => s.id === sessionId)
+                    if (session) {
+                      setRalphPhase(session.phase)
+                    }
+                  }
+                }}
+                onDelete={deleteSession}
+                onClose={() => setShowSessionHistory(false)}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="h-full flex flex-col bg-card rounded-lg border border-border overflow-hidden">
@@ -190,6 +476,16 @@ export function AutonomousView({ onClose }: AutonomousViewProps) {
               <RotateCcw className="h-4 w-4" />
             </Button>
           )}
+
+          {/* Switch to embedded autocoder */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setMode('autocoder')}
+            className="text-xs"
+          >
+            Use Autocoder UI
+          </Button>
 
           {/* Close button */}
           {onClose && (

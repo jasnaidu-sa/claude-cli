@@ -276,11 +276,13 @@ export class OutlookIntegrationService extends EventEmitter {
 
   /**
    * Fetch emails from the configured source address
+   * @param options.updateLastSync - Set to false to skip updating lastSyncAt (for full refresh)
    */
   async fetchEmails(options?: {
     maxResults?: number
     sinceDate?: Date
     onlySinceLastSync?: boolean
+    updateLastSync?: boolean
   }): Promise<IdeaEmailSource[]> {
     await this.ensureValidToken()
 
@@ -288,13 +290,17 @@ export class OutlookIntegrationService extends EventEmitter {
       throw new Error('Source email address not configured')
     }
 
-    const maxResults = options?.maxResults || 50
+    // maxResults is the desired number of FILTERED emails (after matching source)
+    // We fetch more from mailbox since only a portion will match the source filter
+    // Fetch 4x the requested amount to ensure we get enough matching emails
+    const desiredResults = options?.maxResults || 50
+    const fetchLimit = Math.min(desiredResults * 4, 500) // Cap at 500 to avoid excessive fetches
 
     // Simplified query - just get recent messages and filter client-side
     // Microsoft Graph doesn't support complex filters with orderby on receivedDateTime
     const params = new URLSearchParams({
       '$orderby': 'receivedDateTime desc',
-      '$top': maxResults.toString(),
+      '$top': fetchLimit.toString(),
       '$select': 'id,subject,from,receivedDateTime,bodyPreview,body'
     })
 
@@ -331,16 +337,28 @@ export class OutlookIntegrationService extends EventEmitter {
     console.log(`[OutlookSync] Fetched ${data.value.length} emails from mailbox`)
     console.log(`[OutlookSync] Filtering for emails from: ${sourceEmails.join(', ')}`)
 
-    // Update last sync time
-    this.config.lastSyncAt = Date.now()
-    this.saveConfig()
+    // Update last sync time (skip for full refresh to preserve sync point)
+    const shouldUpdateSync = options?.updateLastSync !== false
+    if (shouldUpdateSync) {
+      this.config.lastSyncAt = Date.now()
+      this.saveConfig()
+      console.log(`[OutlookSync] Updated lastSyncAt to: ${new Date(this.config.lastSyncAt).toISOString()}`)
+    } else {
+      console.log(`[OutlookSync] Skipping lastSyncAt update (full refresh mode)`)
+    }
 
     // Filter and transform to IdeaEmailSource format
     const emails: IdeaEmailSource[] = data.value
       .filter((email: {
-        from: { emailAddress: { address: string } }
+        from?: { emailAddress?: { address?: string } }
         receivedDateTime: string
       }) => {
+        // Skip emails without a from field (drafts, sent items, system messages)
+        if (!email.from?.emailAddress?.address) {
+          console.log(`[OutlookSync] Skipping - no from address`)
+          return false
+        }
+
         // Filter by source email address (check if from any of the allowed addresses)
         const fromEmail = email.from.emailAddress.address.toLowerCase()
 
@@ -356,11 +374,14 @@ export class OutlookIntegrationService extends EventEmitter {
         // Filter by date if specified
         if (sinceTimestamp) {
           const emailTimestamp = new Date(email.receivedDateTime).getTime()
+          console.log(`[OutlookSync] Date check: email=${new Date(emailTimestamp).toISOString()} vs lastSync=${new Date(sinceTimestamp).toISOString()}`)
           if (emailTimestamp < sinceTimestamp) {
+            console.log(`[OutlookSync] Skipping - email is older than last sync`)
             return false
           }
         }
 
+        console.log(`[OutlookSync] ✓ Email passed all filters`)
         return true
       })
       .map((email: {
@@ -379,10 +400,12 @@ export class OutlookIntegrationService extends EventEmitter {
         snippet: email.bodyPreview
       }))
 
-    console.log(`[OutlookSync] Filtered to ${emails.length} emails from allowed addresses`)
+    // Cap at desired results
+    const cappedEmails = emails.slice(0, desiredResults)
+    console.log(`[OutlookSync] Filtered to ${emails.length} emails, returning ${cappedEmails.length} (max ${desiredResults})`)
 
-    this.emit('emails-fetched', emails)
-    return emails
+    this.emit('emails-fetched', cappedEmails)
+    return cappedEmails
   }
 
   /**
@@ -411,6 +434,22 @@ export class OutlookIntegrationService extends EventEmitter {
       this.saveConfig()
     }
     this.emit('credentials-cleared')
+  }
+
+  /**
+   * Reset lastSyncAt timestamp to 24 hours ago
+   * Use this when the sync timestamp gets out of sync with actual email dates
+   * Sets to 24 hours ago instead of clearing completely to avoid fetching all historical emails
+   */
+  resetLastSyncAt(): void {
+    if (this.config) {
+      // Set to 24 hours ago instead of clearing - this fetches recent emails without getting ALL history
+      const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000)
+      this.config.lastSyncAt = twentyFourHoursAgo
+      this.saveConfig()
+      console.log(`[OutlookSync] Reset lastSyncAt to 24 hours ago: ${new Date(twentyFourHoursAgo).toISOString()}`)
+    }
+    this.emit('sync-reset')
   }
 }
 

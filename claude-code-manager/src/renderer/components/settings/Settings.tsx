@@ -3,6 +3,7 @@ import { X, Grid2X2, Grid3X3, Square, Columns2, Moon, Sun, Monitor } from 'lucid
 import { Button } from '../ui/button'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { cn } from '@renderer/lib/utils'
+import { ConnectionSettings } from './ConnectionSettings'
 
 interface SettingsProps {
   onClose: () => void
@@ -127,6 +128,11 @@ export function Settings({ onClose }: SettingsProps) {
               <kbd className="px-2 py-0.5 bg-muted rounded text-xs">Ctrl+Tab</kbd>
             </div>
           </div>
+        </div>
+
+        {/* Connection Settings (Remote Access) */}
+        <div className="border-t border-border pt-6">
+          <ConnectionSettings />
         </div>
       </div>
     </div>

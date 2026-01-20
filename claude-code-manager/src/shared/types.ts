@@ -305,6 +305,15 @@ export interface AppConfig {
   recentProjects: string[]
   // Autonomous coding configuration
   autonomous: AutonomousConfig
+  // API Server configuration (for remote access / thin client mode)
+  apiServer?: ApiServerConfig
+}
+
+// API Server configuration
+export interface ApiServerConfig {
+  enabled: boolean
+  port: number
+  authEnabled: boolean
 }
 
 export interface AutonomousConfig {
@@ -486,7 +495,40 @@ export const IPC_CHANNELS = {
   OUTLOOK_AUTHENTICATE: 'outlook:authenticate',
   OUTLOOK_FETCH_EMAILS: 'outlook:fetch-emails',
   OUTLOOK_SYNC: 'outlook:sync',
+  OUTLOOK_SYNC_STREAM: 'outlook:sync-stream',  // Progressive sync - emits ideas as they complete
+  OUTLOOK_SYNC_PROGRESS: 'outlook:sync-progress',  // Progress updates from main to renderer
   OUTLOOK_STATUS: 'outlook:status',
+
+  // Idea Discussion with Claude
+  IDEAS_DISCUSS: 'ideas:discuss',  // Send message and get Claude response
+  IDEAS_DISCUSS_STREAM: 'ideas:discuss-stream',  // Streaming response chunks
+
+  // Ralph Loop Initiator (Requirements Gathering)
+  INITIATOR_START: 'initiator:start',
+  INITIATOR_GET_SESSION: 'initiator:get-session',
+  INITIATOR_SEND_MESSAGE: 'initiator:send-message',
+  INITIATOR_SUMMARIZE: 'initiator:summarize',
+  INITIATOR_GENERATE_PROMPT: 'initiator:generate-prompt',
+  INITIATOR_UPDATE_PROMPT: 'initiator:update-prompt',
+  INITIATOR_APPROVE_PROMPT: 'initiator:approve-prompt',
+  INITIATOR_CANCEL: 'initiator:cancel',
+  // Initiator Events (main -> renderer)
+  INITIATOR_RESPONSE_CHUNK: 'initiator:response-chunk',
+  INITIATOR_RESPONSE_COMPLETE: 'initiator:response-complete',
+  INITIATOR_REQUIREMENTS_READY: 'initiator:requirements-ready',
+  INITIATOR_PROMPT_READY: 'initiator:prompt-ready',
+  INITIATOR_ERROR: 'initiator:error',
+
+  // Ralph Loop Orchestrator (Execution)
+  RALPH_START: 'ralph:start',
+  RALPH_STOP: 'ralph:stop',
+  RALPH_PAUSE: 'ralph:pause',
+  RALPH_RESUME: 'ralph:resume',
+  RALPH_STATUS: 'ralph:status',
+  RALPH_STREAM_CHUNK: 'ralph:stream-chunk',
+  RALPH_PROGRESS: 'ralph:progress',
+  RALPH_CHECKPOINT: 'ralph:checkpoint',
+  RALPH_ERROR: 'ralph:error',
 } as const
 
 export type IpcChannel = typeof IPC_CHANNELS[keyof typeof IPC_CHANNELS]
@@ -621,11 +663,11 @@ export const READINESS_CHECKS_CONFIG = [
 // Idea stages in the Kanban workflow
 export type IdeaStage =
   | 'inbox'       // Just fetched from email, not yet reviewed
-  | 'pending'     // Acknowledged, waiting for review
   | 'review'      // In active discussion/review
   | 'approved'    // Discussed and approved, ready to start
   | 'in_progress' // Project started
   | 'completed'   // Project finished
+  | 'declined'    // Reviewed but decided not to pursue
 
 // Project type determination
 export type ProjectType = 'greenfield' | 'brownfield' | 'undetermined'
@@ -640,6 +682,22 @@ export interface IdeaEmailSource {
   snippet?: string
 }
 
+// Extracted content from URLs found in email
+export interface IdeaExtractedUrl {
+  url: string
+  title: string | null
+  description: string | null
+  siteName: string | null
+  fetchedAt: number
+  error?: string
+  // Full article content (extracted from page)
+  articleContent?: string
+  // AI-generated summary of the article
+  summary?: string
+  // Whether summary generation was attempted
+  summaryGenerated?: boolean
+}
+
 // Main Idea interface
 export interface Idea {
   id: string
@@ -651,13 +709,21 @@ export interface Idea {
   // Email source
   emailSource: IdeaEmailSource
 
-  // Project association (for brownfield)
+  // Extracted URLs from email content
+  extractedUrls?: IdeaExtractedUrl[]
+
+  // Project association (for brownfield - existing project)
   associatedProjectPath?: string
   associatedProjectName?: string
+
+  // Project association (for greenfield - new project name)
+  // Also used to group ideas by project
+  projectName?: string
 
   // Review/discussion data
   reviewNotes?: string
   discussionMessages?: IdeaDiscussionMessage[]
+  sessionId?: string // Agent SDK session ID for maintaining conversation context
 
   // Workflow tracking
   createdAt: number
@@ -706,4 +772,220 @@ export interface ProjectDiscoveryResult {
     reason: string
   }>
   analysis: string
+}
+
+// ============================================================================
+// Ralph Loop System (Autonomous Orchestrator)
+// ============================================================================
+
+// Initiator Phase Types
+export type InitiatorPhase = 'gathering' | 'summarizing' | 'generating' | 'reviewing' | 'approved'
+
+export type QuestionCategory =
+  | 'objective'
+  | 'scope'
+  | 'success_criteria'
+  | 'constraints'
+  | 'project_context'
+  | 'complexity'
+
+/** Attachment types supported in initiator chat */
+export type AttachmentType = 'text' | 'pdf' | 'image' | 'code' | 'markdown' | 'json' | 'unknown'
+
+/** File attachment for context in initiator chat */
+export interface InitiatorAttachment {
+  id: string
+  fileName: string
+  filePath: string
+  fileSize: number
+  mimeType: string
+  attachmentType: AttachmentType
+  /** Extracted text content (for text-based files) */
+  textContent?: string
+  /** Base64 encoded data (for images/binary) */
+  base64Data?: string
+  /** Error if file couldn't be processed */
+  error?: string
+}
+
+export interface InitiatorMessage {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: number
+  category?: QuestionCategory
+  /** Attachments included with this message */
+  attachments?: InitiatorAttachment[]
+}
+
+export interface RequirementsDoc {
+  objective: string
+  scope: string[]
+  successCriteria: string[]
+  constraints: string[]
+  outOfScope: string[]
+  projectType: 'greenfield' | 'brownfield' | 'undetermined'
+  complexity: 'quick' | 'standard' | 'enterprise'
+  estimatedFeatures: number
+  gatheredAt: number
+}
+
+export interface RalphPromptConfig {
+  prompt: string
+  completionPromise: string
+  maxIterations: number
+  checkpointThreshold: number
+  successIndicators: string[]
+  generatedAt: number
+}
+
+export interface InitiatorSession {
+  id: string
+  projectPath: string
+  messages: InitiatorMessage[]
+  phase: InitiatorPhase
+  requirements: RequirementsDoc | null
+  generatedPrompt: RalphPromptConfig | null
+  createdAt: number
+  updatedAt: number
+  totalCostUsd: number
+}
+
+// Ralph Loop Execution Types
+export type RalphPhase = 'validation' | 'generation' | 'implementation'
+export type RalphStatus = 'idle' | 'starting' | 'running' | 'paused' | 'completed' | 'error'
+export type RalphCheckpointType = 'soft' | 'hard'
+
+export interface RalphFeature {
+  id: string
+  name: string
+  description?: string
+  category: string
+  status: 'pending' | 'in_progress' | 'passed' | 'failed' | 'skipped'
+  riskScore?: number
+  error?: string
+  startedAt?: number
+  completedAt?: number
+}
+
+export interface RalphExecutionState {
+  sessionId: string
+  projectPath: string
+  phase: RalphPhase
+  status: RalphStatus
+  features: RalphFeature[]
+  iteration: number
+  maxIterations: number
+  testsTotal: number
+  testsPassing: number
+  currentFeature?: string
+  startedAt: number
+  pausedAt?: number
+  completedAt?: number
+  error?: string
+}
+
+export interface RalphCheckpoint {
+  id: string
+  type: RalphCheckpointType
+  featureId: string
+  featureName: string
+  riskScore: number
+  reason: string
+  riskFactors: {
+    category: string
+    score: number
+    details: string
+  }[]
+  affectedFiles: string[]
+  blastRadius: number
+  createdAt: number
+  resolvedAt?: number
+  resolution?: 'approved' | 'skipped' | 'rejected'
+  feedback?: string
+}
+
+export interface RalphProgressEvent {
+  type: 'progress'
+  phase: RalphPhase
+  iteration: number
+  testsTotal: number
+  testsPassing: number
+  currentTest?: string
+  message: string
+  timestamp: number
+}
+
+export interface RalphCheckpointEvent {
+  type: 'checkpoint'
+  data: RalphCheckpoint
+}
+
+export interface RalphStatusEvent {
+  type: 'status'
+  status: RalphStatus
+  phase: RalphPhase
+  iteration: number
+}
+
+export interface RalphContext {
+  runningSummary: string
+  keyDecisions: Array<{
+    id: string
+    decision: string
+    reasoning: string
+    timestamp: number
+  }>
+  failureMemory: Array<{
+    id: string
+    feature: string
+    error: string
+    rootCause?: string
+    resolution?: string
+    timestamp: number
+  }>
+  activeConstraints: string[]
+}
+
+// Ralph Session History - for tracking past sessions
+export type RalphSessionPhase = 'initiator' | 'requirements' | 'prompt_review' | 'executing' | 'completed'
+
+export interface RalphSessionSummary {
+  id: string
+  projectPath: string
+  projectName: string
+  phase: RalphSessionPhase
+  status: RalphStatus
+  taskDescription: string  // Brief description of what was requested
+  createdAt: number
+  updatedAt: number
+  completedAt?: number
+  // Stats
+  featuresTotal: number
+  featuresPassed: number
+  featuresFailed: number
+  // Optional prompt config reference
+  promptConfig?: RalphPromptConfig
+}
+
+export interface RalphPromptConfig {
+  prompt: string
+  completionPromise: string
+  maxIterations: number
+  checkpointThreshold: number
+  successIndicators: string[]
+}
+
+export interface RalphSessionHistoryEntry extends RalphSessionSummary {
+  // Extended data for full session details
+  requirements?: {
+    objective: string
+    scope: string[]
+    successCriteria: string[]
+    constraints: string[]
+    outOfScope: string[]
+  }
+  features?: RalphFeature[]
+  checkpoints?: RalphCheckpoint[]
+  context?: RalphContext
 }

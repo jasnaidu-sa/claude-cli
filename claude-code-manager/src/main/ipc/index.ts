@@ -14,6 +14,9 @@ import { registerPreflightHandlers } from './preflight-handlers'
 import { setupJourneyHandlers } from './journey-handlers'
 import { setupSpecBuilderHandlers } from './spec-builder-handlers'
 import { registerIdeasHandlers } from './ideas-handlers'
+import { registerAutocoderHandlers } from './autocoder-handlers'
+import { registerInitiatorHandlers } from './initiator-handlers'
+import { registerRalphHandlers } from './ralph-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -63,6 +66,15 @@ export function registerIpcHandlers(): void {
 
   // Ideas Kanban handlers (email integration + ideas management)
   registerIdeasHandlers()
+
+  // Autocoder UI handlers
+  registerAutocoderHandlers()
+
+  // Ralph Loop initiator handlers
+  registerInitiatorHandlers()
+
+  // Ralph Loop orchestrator handlers
+  registerRalphHandlers()
 }
 
 function registerSessionHandlers(): void {

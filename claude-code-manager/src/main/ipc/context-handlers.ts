@@ -5,7 +5,7 @@
  * Provides bridge between renderer and Context Agent service.
  */
 
-import { ipcMain, IpcMainInvokeEvent } from 'electron'
+import { ipcMain, IpcMainInvokeEvent, BrowserWindow } from 'electron'
 import { ContextAgentRunner } from '../services/context-agent-runner'
 import type {
   ContextSummarizationRequest,
@@ -28,22 +28,22 @@ export function registerContextHandlers(pythonPath: string = 'python'): void {
   // Set up event forwarding
   contextAgentRunner.on('progress', (data) => {
     // Forward progress to all renderer windows
-    const windows = require('electron').BrowserWindow.getAllWindows()
-    windows.forEach((win) => {
+    const windows = BrowserWindow.getAllWindows()
+    windows.forEach((win: BrowserWindow) => {
       win.webContents.send('context:progress', data)
     })
   })
 
   contextAgentRunner.on('complete', (data) => {
-    const windows = require('electron').BrowserWindow.getAllWindows()
-    windows.forEach((win) => {
+    const windows = BrowserWindow.getAllWindows()
+    windows.forEach((win: BrowserWindow) => {
       win.webContents.send('context:complete', data)
     })
   })
 
   contextAgentRunner.on('error', (data) => {
-    const windows = require('electron').BrowserWindow.getAllWindows()
-    windows.forEach((win) => {
+    const windows = BrowserWindow.getAllWindows()
+    windows.forEach((win: BrowserWindow) => {
       win.webContents.send('context:error', data)
     })
   })

@@ -95,7 +95,7 @@ export function WorktreeToolbar({ worktree, onMerge, onDelete }: WorktreeToolbar
           <span className="text-xs">Merge</span>
           {status?.hasConflicts && (
             <span className="ml-1 text-[10px] bg-red-500/20 text-red-500 px-1 rounded">
-              {status.conflictCount || '!'}
+              !
             </span>
           )}
         </Button>

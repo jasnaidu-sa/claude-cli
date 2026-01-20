@@ -1,6 +1,6 @@
 # Troubleshooting: node-pty on Windows with Electron
 
-**Last Updated**: 2025-12-21
+**Last Updated**: 2026-01-20
 
 ## Overview
 

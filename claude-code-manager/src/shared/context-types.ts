@@ -198,3 +198,30 @@ export interface ContextStoragePaths {
   /** active-constraints.json */
   constraintsFile: string
 }
+
+/**
+ * Context Agent Task
+ * Represents a running or completed context summarization task
+ */
+export interface ContextAgentTask {
+  /** Unique task ID */
+  id: string
+  /** Project path */
+  projectPath: string
+  /** Current status */
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  /** Trigger that started this task */
+  trigger: 'feature_count' | 'category_complete' | 'manual'
+  /** Features being summarized */
+  completedFeatures: string[]
+  /** When task was created */
+  createdAt: number
+  /** When task started running */
+  startedAt?: number
+  /** When task completed */
+  completedAt?: number
+  /** Error message if failed */
+  error?: string
+  /** Result if completed */
+  result?: ContextSummarizationResult
+}

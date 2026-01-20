@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
-import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck, Idea, IdeaStage, IdeaEmailSource, OutlookConfig, ProjectType } from '../shared/types'
+import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck, Idea, IdeaStage, IdeaEmailSource, OutlookConfig, ProjectType, InitiatorSession, RequirementsDoc, RalphPromptConfig, RalphPhase, RalphProgressEvent, RalphCheckpointEvent, RalphStatusEvent, RalphCheckpoint, RalphSessionSummary } from '../shared/types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy, ConflictResolutionResult, WorktreeLifecycle } from '../shared/types/git'
-import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection } from '../shared/context-types'
+import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection, ContextAgentTask } from '../shared/context-types'
 
 // Venv types (matching venv-manager.ts)
 export interface VenvStatus {
@@ -281,6 +281,76 @@ export interface ElectronAPI {
     addDiscussion: (ideaId: string, role: 'user' | 'assistant', content: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
     startProject: (ideaId: string, projectType: ProjectType, projectPath?: string, projectName?: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
     linkWorkflow: (ideaId: string, workflowId: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    // Bulk operations
+    clearAll: () => Promise<{ success: boolean; count?: number; error?: string }>
+    reprocessAll: () => Promise<{ success: boolean; processed?: number; updated?: number; error?: string }>
+    reprocess: (ideaId: string) => Promise<{ success: boolean; idea?: Idea; error?: string }>
+    // AI Discussion with streaming
+    // Mode: 'chat' (default), 'plan' (structured planning with file reading), or 'execute' (can write files)
+    discuss: (ideaId: string, userMessage: string, mode?: 'chat' | 'plan' | 'execute') => Promise<{ success: boolean; error?: string }>
+    onDiscussStream: (callback: (data: IdeaDiscussStreamData) => void) => () => void
+    // Browser login for paywalled sites
+    browserLogin: (url?: string) => Promise<{ success: boolean; error?: string }>
+    hasSession: (domain: string) => Promise<{ success: boolean; hasSession?: boolean; error?: string }>
+    clearCookies: () => Promise<{ success: boolean; error?: string }>
+  }
+
+  // Autocoder Autonomous Coding UI
+  autocoder: {
+    start: (projectPath: string) => Promise<{ success: boolean; message?: string; error?: string }>
+    stop: () => Promise<{ success: boolean; message?: string; error?: string }>
+    show: () => Promise<{ success: boolean; message?: string; error?: string }>
+    hide: () => Promise<{ success: boolean; message?: string; error?: string }>
+    status: () => Promise<{ success: boolean; isRunning: boolean; projectPath: string | null; error?: string }>
+    setupPython: () => Promise<{ success: boolean; message?: string; pythonVersion?: string; error?: string }>
+    updateDependencies: () => Promise<{ success: boolean; message?: string; error?: string }>
+    onLog: (callback: (data: { type: 'stdout' | 'stderr'; message: string }) => void) => () => void
+    onError: (callback: (data: { message: string }) => void) => () => void
+    onStopped: (callback: (data: { code: number | null; signal: string | null }) => void) => () => void
+  }
+
+  // Ralph Loop Orchestrator (Execution)
+  ralph: {
+    start: (config: RalphOrchestratorConfig) => Promise<{ success: boolean; session?: RalphSession; error?: string }>
+    stop: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    pause: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    resume: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    getStatus: (sessionId: string) => Promise<{ success: boolean; session?: RalphSession; error?: string }>
+    getAllSessions: () => Promise<{ success: boolean; sessions?: RalphSession[]; error?: string }>
+    getProjectSessions: (projectPath: string) => Promise<{ success: boolean; sessions?: RalphSession[]; error?: string }>
+    cleanup: () => Promise<{ success: boolean; error?: string }>
+    // Checkpoint responses
+    approveCheckpoint: (sessionId: string, checkpointId: string, comment?: string) => Promise<{ success: boolean; error?: string }>
+    skipCheckpoint: (sessionId: string, checkpointId: string, comment?: string) => Promise<{ success: boolean; error?: string }>
+    rejectCheckpoint: (sessionId: string, checkpointId: string, comment?: string) => Promise<{ success: boolean; error?: string }>
+    // Event listeners
+    onProgress: (callback: (data: RalphProgressData) => void) => () => void
+    onCheckpoint: (callback: (data: RalphCheckpointData) => void) => () => void
+    onStatus: (callback: (data: RalphStatusData) => void) => () => void
+    onStreamChunk: (callback: (data: RalphStreamChunkData) => void) => () => void
+    onError: (callback: (data: RalphErrorData) => void) => () => void
+    // Session History
+    listSessions: (projectPath?: string) => Promise<{ success: boolean; sessions?: RalphSessionSummary[]; error?: string }>
+    saveSession: (session: RalphSessionSummary) => Promise<{ success: boolean; error?: string }>
+    getSessionHistory: (sessionId: string) => Promise<{ success: boolean; session?: RalphSessionSummary; error?: string }>
+    deleteSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+  }
+
+  // Ralph Loop Initiator (Requirements Gathering)
+  initiator: {
+    start: (projectPath: string, options?: { forceNew?: boolean }) => Promise<{ success: boolean; data?: InitiatorSession; error?: string }>
+    getSession: (sessionId: string) => Promise<{ success: boolean; data?: InitiatorSession | null; error?: string }>
+    sendMessage: (sessionId: string, content: string, attachmentPaths?: string[]) => Promise<{ success: boolean; error?: string }>
+    summarize: (sessionId: string) => Promise<{ success: boolean; data?: RequirementsDoc; error?: string }>
+    generatePrompt: (sessionId: string) => Promise<{ success: boolean; data?: RalphPromptConfig; error?: string }>
+    updatePrompt: (sessionId: string, updates: Partial<RalphPromptConfig>) => Promise<{ success: boolean; data?: RalphPromptConfig; error?: string }>
+    approvePrompt: (sessionId: string) => Promise<{ success: boolean; data?: { session: InitiatorSession; promptPath: string }; error?: string }>
+    cancel: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    onResponseChunk: (callback: (data: InitiatorChunkData) => void) => () => void
+    onResponseComplete: (callback: (data: InitiatorCompleteData) => void) => () => void
+    onRequirementsReady: (callback: (data: InitiatorRequirementsData) => void) => () => void
+    onPromptReady: (callback: (data: InitiatorPromptData) => void) => () => void
+    onError: (callback: (data: InitiatorErrorData) => void) => () => void
   }
 
   // Outlook Email Integration
@@ -290,8 +360,180 @@ export interface ElectronAPI {
     authenticate: () => Promise<{ success: boolean; error?: string }>
     fetchEmails: (options?: { maxResults?: number; sinceDate?: string; onlySinceLastSync?: boolean }) => Promise<{ success: boolean; count?: number; ideas?: Idea[]; error?: string }>
     sync: () => Promise<{ success: boolean; count?: number; ideas?: Idea[]; error?: string }>
+    syncStream: (options?: { fullRefresh?: boolean }) => Promise<{ success: boolean; error?: string }>
+    onSyncProgress: (callback: (data: SyncProgressData) => void) => () => void
     getStatus: () => Promise<{ success: boolean; status?: { configured: boolean; authenticated: boolean; sourceEmail: string | null; lastSyncAt: number | null }; error?: string }>
+    // Reset sync timestamp when it gets out of sync
+    resetSync: () => Promise<{ success: boolean; error?: string }>
   }
+
+  // API Server (for remote access / thin client mode)
+  apiServer: {
+    start: (config: ApiServerConfig) => Promise<ApiServerStartResult>
+    stop: () => Promise<{ success: boolean; error?: string }>
+    status: () => Promise<ApiServerStatusResult>
+  }
+}
+
+// API Server types
+export interface ApiServerConfig {
+  port: number
+  enableAuth?: boolean
+}
+
+export interface ApiServerStartResult {
+  success: boolean
+  data?: {
+    port: number
+    authToken: string
+    status: { running: boolean; port: number; connectedClients: number }
+  }
+  error?: string
+}
+
+export interface ApiServerStatusResult {
+  success: boolean
+  data?: {
+    running: boolean
+    port?: number
+    connectedClients?: number
+    authToken?: string
+  }
+  error?: string
+}
+
+// Sync progress data types
+export interface SyncProgressData {
+  type: 'start' | 'idea' | 'complete' | 'error'
+  idea?: Idea
+  current?: number
+  total?: number
+  count?: number
+  error?: string
+}
+
+// Ideas Discussion streaming data
+export interface IdeaDiscussStreamData {
+  type: 'chunk' | 'complete' | 'error'
+  ideaId: string
+  chunk?: string
+  fullResponse?: string
+  error?: string
+}
+
+// Initiator event data types
+export interface InitiatorChunkData {
+  sessionId: string
+  messageId: string
+  chunk: string
+  fullContent: string
+  eventType: 'text' | 'system'
+  timestamp: number
+}
+
+export interface InitiatorCompleteData {
+  sessionId: string
+  messageId: string
+  content: string
+  isReadyToSummarize: boolean
+  timestamp: number
+}
+
+export interface InitiatorRequirementsData {
+  sessionId: string
+  requirements: RequirementsDoc
+  timestamp: number
+}
+
+export interface InitiatorPromptData {
+  sessionId: string
+  promptConfig: RalphPromptConfig
+  timestamp: number
+}
+
+export interface InitiatorErrorData {
+  sessionId: string
+  error: string
+  timestamp: number
+}
+
+// Alias for preload to avoid conflicts
+export type InitiatorRalphPromptConfig = RalphPromptConfig
+
+// Ralph Orchestrator types
+export interface RalphOrchestratorConfig {
+  projectPath: string
+  promptConfig: RalphPromptConfig
+  phase?: RalphPhase
+  resumeFromCheckpoint?: string
+}
+
+export interface RalphSession {
+  id: string
+  projectPath: string
+  config: RalphOrchestratorConfig
+  status: 'idle' | 'starting' | 'running' | 'paused' | 'completed' | 'error'
+  phase: RalphPhase
+  iteration: number
+  features: RalphFeature[]
+  currentFeatureId: string | null
+  startedAt: number
+  pausedAt: number | null
+  completedAt: number | null
+  error: string | null
+  totalCostUsd: number
+}
+
+export interface RalphFeature {
+  id: string
+  name: string
+  description: string
+  category: string
+  status: 'pending' | 'in_progress' | 'passed' | 'failed' | 'skipped'
+  attempts: number
+  completedAt: number | null
+}
+
+export interface RalphProgressData {
+  sessionId: string
+  type: 'progress' | 'feature_update'
+  phase?: RalphPhase
+  iteration?: number
+  testsTotal?: number
+  testsPassing?: number
+  currentTest?: string
+  message?: string
+  featureId?: string
+  status?: string
+  timestamp: number
+}
+
+export interface RalphCheckpointData {
+  sessionId: string
+  type: 'checkpoint'
+  data: RalphCheckpoint
+}
+
+export interface RalphStatusData {
+  sessionId: string
+  type: 'status'
+  status: 'idle' | 'starting' | 'running' | 'paused' | 'completed' | 'error'
+  phase: RalphPhase
+  iteration: number
+  timestamp: number
+}
+
+export interface RalphStreamChunkData {
+  sessionId: string
+  type: 'stdout' | 'stderr' | 'event'
+  data: string | Record<string, unknown>
+  timestamp: number
+}
+
+export interface RalphErrorData {
+  sessionId: string
+  error: string
+  timestamp: number
 }
 
 // Journey Analysis types
@@ -770,7 +1012,171 @@ const electronAPI: ElectronAPI = {
     startProject: (ideaId: string, projectType: ProjectType, projectPath?: string, projectName?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.IDEAS_START_PROJECT, ideaId, projectType, projectPath, projectName),
     linkWorkflow: (ideaId: string, workflowId: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_LINK_WORKFLOW, ideaId, workflowId)
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_LINK_WORKFLOW, ideaId, workflowId),
+    // Bulk operations
+    clearAll: () =>
+      ipcRenderer.invoke('ideas:clear-all'),
+    reprocessAll: () =>
+      ipcRenderer.invoke('ideas:reprocess-all'),
+    reprocess: (ideaId: string) =>
+      ipcRenderer.invoke('ideas:reprocess', ideaId),
+    // AI Discussion with streaming
+    // Mode: 'chat' (default), 'plan' (structured planning mode), or 'execute' (can write files)
+    discuss: (ideaId: string, userMessage: string, mode: 'chat' | 'plan' | 'execute' = 'chat') =>
+      ipcRenderer.invoke(IPC_CHANNELS.IDEAS_DISCUSS, ideaId, userMessage, mode),
+    onDiscussStream: (callback: (data: IdeaDiscussStreamData) => void) => {
+      const handler = (_event: unknown, data: IdeaDiscussStreamData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, handler)
+    },
+    // Browser login for paywalled sites (Medium, Substack, etc.)
+    browserLogin: (url?: string) =>
+      ipcRenderer.invoke('ideas:browser-login', url),
+    hasSession: (domain: string) =>
+      ipcRenderer.invoke('ideas:has-session', domain),
+    clearCookies: () =>
+      ipcRenderer.invoke('ideas:clear-cookies')
+  },
+
+  // Autocoder Autonomous Coding UI
+  autocoder: {
+    start: (projectPath: string) =>
+      ipcRenderer.invoke('autocoder:start', projectPath),
+    stop: () =>
+      ipcRenderer.invoke('autocoder:stop'),
+    show: () =>
+      ipcRenderer.invoke('autocoder:show'),
+    hide: () =>
+      ipcRenderer.invoke('autocoder:hide'),
+    status: () =>
+      ipcRenderer.invoke('autocoder:status'),
+    setupPython: () =>
+      ipcRenderer.invoke('autocoder:setup-python'),
+    updateDependencies: () =>
+      ipcRenderer.invoke('autocoder:update-dependencies'),
+    onLog: (callback: (data: { type: 'stdout' | 'stderr'; message: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { type: 'stdout' | 'stderr'; message: string }) => callback(data)
+      ipcRenderer.on('autocoder:log', handler)
+      return () => ipcRenderer.removeListener('autocoder:log', handler)
+    },
+    onError: (callback: (data: { message: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { message: string }) => callback(data)
+      ipcRenderer.on('autocoder:error', handler)
+      return () => ipcRenderer.removeListener('autocoder:error', handler)
+    },
+    onStopped: (callback: (data: { code: number | null; signal: string | null }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { code: number | null; signal: string | null }) => callback(data)
+      ipcRenderer.on('autocoder:stopped', handler)
+      return () => ipcRenderer.removeListener('autocoder:stopped', handler)
+    }
+  },
+
+  // Ralph Loop Orchestrator (Execution)
+  ralph: {
+    start: (config: RalphOrchestratorConfig) =>
+      ipcRenderer.invoke(IPC_CHANNELS.RALPH_START, config),
+    stop: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.RALPH_STOP, sessionId),
+    pause: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.RALPH_PAUSE, sessionId),
+    resume: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.RALPH_RESUME, sessionId),
+    getStatus: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.RALPH_STATUS, sessionId),
+    getAllSessions: () =>
+      ipcRenderer.invoke('ralph:get-all-sessions'),
+    getProjectSessions: (projectPath: string) =>
+      ipcRenderer.invoke('ralph:get-project-sessions', projectPath),
+    cleanup: () =>
+      ipcRenderer.invoke('ralph:cleanup'),
+    // Checkpoint responses
+    approveCheckpoint: (sessionId: string, checkpointId: string, comment?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHECKPOINT_APPROVE, sessionId, checkpointId, comment),
+    skipCheckpoint: (sessionId: string, checkpointId: string, comment?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHECKPOINT_SKIP, sessionId, checkpointId, comment),
+    rejectCheckpoint: (sessionId: string, checkpointId: string, comment?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHECKPOINT_REJECT, sessionId, checkpointId, comment),
+    // Event listeners
+    onProgress: (callback: (data: RalphProgressData) => void) => {
+      const handler = (_event: unknown, data: RalphProgressData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.RALPH_PROGRESS, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.RALPH_PROGRESS, handler)
+    },
+    onCheckpoint: (callback: (data: RalphCheckpointData) => void) => {
+      const handler = (_event: unknown, data: RalphCheckpointData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.RALPH_CHECKPOINT, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.RALPH_CHECKPOINT, handler)
+    },
+    onStatus: (callback: (data: RalphStatusData) => void) => {
+      const handler = (_event: unknown, data: RalphStatusData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.RALPH_STATUS, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.RALPH_STATUS, handler)
+    },
+    onStreamChunk: (callback: (data: RalphStreamChunkData) => void) => {
+      const handler = (_event: unknown, data: RalphStreamChunkData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.RALPH_STREAM_CHUNK, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.RALPH_STREAM_CHUNK, handler)
+    },
+    onError: (callback: (data: RalphErrorData) => void) => {
+      const handler = (_event: unknown, data: RalphErrorData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.RALPH_ERROR, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.RALPH_ERROR, handler)
+    },
+    // Session History
+    listSessions: (projectPath?: string) =>
+      ipcRenderer.invoke('ralph:list-sessions', projectPath),
+    saveSession: (session: RalphSessionSummary) =>
+      ipcRenderer.invoke('ralph:save-session', session),
+    getSessionHistory: (sessionId: string) =>
+      ipcRenderer.invoke('ralph:get-session-history', sessionId),
+    deleteSession: (sessionId: string) =>
+      ipcRenderer.invoke('ralph:delete-session', sessionId)
+  },
+
+  // Ralph Loop Initiator (Requirements Gathering)
+  initiator: {
+    start: (projectPath: string, options?: { forceNew?: boolean }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_START, projectPath, options),
+    getSession: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_GET_SESSION, sessionId),
+    sendMessage: (sessionId: string, content: string, attachmentPaths?: string[]) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_SEND_MESSAGE, sessionId, content, attachmentPaths),
+    summarize: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_SUMMARIZE, sessionId),
+    generatePrompt: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_GENERATE_PROMPT, sessionId),
+    updatePrompt: (sessionId: string, updates: Partial<InitiatorRalphPromptConfig>) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_UPDATE_PROMPT, sessionId, updates),
+    approvePrompt: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_APPROVE_PROMPT, sessionId),
+    cancel: (sessionId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.INITIATOR_CANCEL, sessionId),
+    // Event listeners
+    onResponseChunk: (callback: (data: InitiatorChunkData) => void) => {
+      const handler = (_event: unknown, data: InitiatorChunkData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.INITIATOR_RESPONSE_CHUNK, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.INITIATOR_RESPONSE_CHUNK, handler)
+    },
+    onResponseComplete: (callback: (data: InitiatorCompleteData) => void) => {
+      const handler = (_event: unknown, data: InitiatorCompleteData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.INITIATOR_RESPONSE_COMPLETE, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.INITIATOR_RESPONSE_COMPLETE, handler)
+    },
+    onRequirementsReady: (callback: (data: InitiatorRequirementsData) => void) => {
+      const handler = (_event: unknown, data: InitiatorRequirementsData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.INITIATOR_REQUIREMENTS_READY, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.INITIATOR_REQUIREMENTS_READY, handler)
+    },
+    onPromptReady: (callback: (data: InitiatorPromptData) => void) => {
+      const handler = (_event: unknown, data: InitiatorPromptData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.INITIATOR_PROMPT_READY, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.INITIATOR_PROMPT_READY, handler)
+    },
+    onError: (callback: (data: InitiatorErrorData) => void) => {
+      const handler = (_event: unknown, data: InitiatorErrorData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.INITIATOR_ERROR, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.INITIATOR_ERROR, handler)
+    }
   },
 
   // Outlook Email Integration
@@ -785,8 +1191,29 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_FETCH_EMAILS, options),
     sync: () =>
       ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_SYNC),
+    syncStream: (options?: { fullRefresh?: boolean }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_SYNC_STREAM, options),
+    onSyncProgress: (callback: (data: SyncProgressData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: SyncProgressData) => callback(data)
+      ipcRenderer.on(IPC_CHANNELS.OUTLOOK_SYNC_PROGRESS, handler)
+      // Return cleanup function
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.OUTLOOK_SYNC_PROGRESS, handler)
+    },
     getStatus: () =>
-      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_STATUS)
+      ipcRenderer.invoke(IPC_CHANNELS.OUTLOOK_STATUS),
+    // Reset sync timestamp when it gets out of sync
+    resetSync: () =>
+      ipcRenderer.invoke('outlook:reset-sync')
+  },
+
+  // API Server (for remote access / thin client mode)
+  apiServer: {
+    start: (config: ApiServerConfig) =>
+      ipcRenderer.invoke('api-server:start', config),
+    stop: () =>
+      ipcRenderer.invoke('api-server:stop'),
+    status: () =>
+      ipcRenderer.invoke('api-server:status')
   }
 }
 

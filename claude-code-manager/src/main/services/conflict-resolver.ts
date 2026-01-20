@@ -22,6 +22,7 @@ function isErrorObject(error: unknown): error is Error {
 
 /**
  * Process items in parallel with concurrency limit
+ * P0 FIX: Use Set to track executing promises and proper cleanup via finally
  *
  * @param items - Array of items to process
  * @param processor - Async function to process each item
@@ -34,24 +35,27 @@ async function parallelProcess<T, R>(
   maxConcurrency: number
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
-  const executing: Promise<void>[] = [];
+  const executing = new Set<Promise<void>>();
 
   for (let i = 0; i < items.length; i++) {
-    const promise = processor(items[i], i).then((result) => {
-      results[i] = result;
-    });
+    const promise = processor(items[i], i)
+      .then((result) => {
+        results[i] = result;
+      })
+      .finally(() => {
+        // P0 FIX: Remove completed promise in finally to ensure proper cleanup
+        executing.delete(promise);
+      });
 
-    executing.push(promise);
+    executing.add(promise);
 
-    if (executing.length >= maxConcurrency) {
+    if (executing.size >= maxConcurrency) {
+      // Wait for any promise to complete
       await Promise.race(executing);
-      executing.splice(
-        executing.findIndex((p) => p === promise),
-        1
-      );
     }
   }
 
+  // Wait for all remaining promises
   await Promise.all(executing);
   return results;
 }
@@ -86,23 +90,32 @@ class ConflictResolver {
 
   /**
    * Validate and normalize a repository path
+   * P0 FIX: Check raw input BEFORE normalization to prevent bypass
    *
    * @param repoPath - Path to validate
    * @returns Normalized path if valid
    * @throws Error if path is invalid or not a git repository
    */
   private async validateRepoPath(repoPath: string): Promise<string> {
-    // Normalize and resolve to absolute path
-    const normalizedPath = path.normalize(path.resolve(repoPath));
-
-    // Prevent path traversal
-    if (repoPath.includes('..') || normalizedPath.includes('..')) {
+    // P0 FIX: Check raw input FIRST before any normalization
+    if (repoPath.includes('..') || repoPath.includes('%2e') || repoPath.includes('\0')) {
       throw new Error('Invalid repository path: path traversal not allowed');
     }
 
-    // Verify directory exists
+    // Normalize and resolve to absolute path
+    const normalizedPath = path.normalize(path.resolve(repoPath));
+
+    // Double-check after normalization (defense in depth)
+    if (normalizedPath.includes('..')) {
+      throw new Error('Invalid repository path: path traversal not allowed');
+    }
+
+    // Verify directory exists and is not a symlink (P1 FIX: TOCTOU mitigation)
     try {
-      const stats = await fs.stat(normalizedPath);
+      const stats = await fs.lstat(normalizedPath);
+      if (stats.isSymbolicLink()) {
+        throw new Error('Repository path cannot be a symlink');
+      }
       if (!stats.isDirectory()) {
         throw new Error('Repository path must be a directory');
       }
@@ -123,24 +136,36 @@ class ConflictResolver {
 
   /**
    * Validate a file path is within an allowed repository
+   * P0 FIX: Check raw input before normalization, P1 FIX: Require allowlist
    *
    * @param filePath - Path to validate
    * @returns Normalized path if valid
    * @throws Error if path is invalid or outside allowed repositories
    */
   private async validateFilePath(filePath: string): Promise<string> {
+    // P1 FIX: Require allowlist to be populated
+    if (this.allowedRepositories.size === 0) {
+      throw new Error('No repositories registered. Call registerRepository() first.');
+    }
+
+    // P0 FIX: Check raw input FIRST before any normalization
+    if (filePath.includes('..') || filePath.includes('%2e') || filePath.includes('\0')) {
+      throw new Error('Invalid file path: path traversal not allowed');
+    }
+
     // Resolve to absolute path
     const absolutePath = path.resolve(filePath);
     const normalizedPath = path.normalize(absolutePath);
 
-    // Prevent path traversal sequences
-    if (filePath.includes('..') || normalizedPath.includes('..')) {
+    // Double-check after normalization (defense in depth)
+    if (normalizedPath.includes('..')) {
       throw new Error('Invalid file path: path traversal not allowed');
     }
 
     // Verify file is within an allowed repository
+    // Use Array.from for compatibility with older TypeScript targets
     let isAllowed = false;
-    for (const basePath of this.allowedRepositories) {
+    for (const basePath of Array.from(this.allowedRepositories)) {
       if (normalizedPath.startsWith(basePath + path.sep) || normalizedPath === basePath) {
         isAllowed = true;
         break;
@@ -151,9 +176,12 @@ class ConflictResolver {
       throw new Error('File path is not within a registered repository');
     }
 
-    // Verify file exists and is a regular file
+    // P1 FIX: Use lstat to detect symlinks (TOCTOU mitigation)
     try {
-      const stats = await fs.stat(normalizedPath);
+      const stats = await fs.lstat(normalizedPath);
+      if (stats.isSymbolicLink()) {
+        throw new Error('Symlinks are not allowed');
+      }
       if (!stats.isFile()) {
         throw new Error('Path must be a regular file');
       }
@@ -283,6 +311,7 @@ class ConflictResolver {
 
   /**
    * Get all files with merge conflicts in a repository
+   * P1 FIX: Use -z flag for null-terminated output, validate filenames
    *
    * @param repoPath - Path to git repository
    * @returns Array of file paths with unmerged conflicts
@@ -292,14 +321,40 @@ class ConflictResolver {
     const validatedPath = await this.validateRepoPath(repoPath);
 
     try {
-      // P0-1 & P1-2: Use execFile instead of exec to prevent shell injection
-      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], {
+      // P1 FIX: Use -z flag for null-terminated output (handles newlines in filenames)
+      const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U', '-z'], {
         cwd: validatedPath,
       });
 
-      return stdout.trim().split('\n').filter((f): f is string => f.length > 0);
+      // P0 FIX: Handle empty output explicitly
+      const trimmed = stdout.trim();
+      if (!trimmed) {
+        return [];
+      }
+
+      // P1 FIX: Split on null bytes, validate each filename
+      const files = trimmed.split('\0').filter(f => f.length > 0);
+      const validatedFiles: string[] = [];
+
+      for (const file of files) {
+        // P1 FIX: Validate filenames from git output
+        if (
+          file.includes('\0') ||
+          file.includes('\n') ||
+          file.includes('\r') ||
+          file.includes('..') ||
+          path.isAbsolute(file) ||
+          file.startsWith('-') || // Prevent flag injection
+          /[\x00-\x1F\x7F]/.test(file) // Control characters
+        ) {
+          // Skip suspicious filenames
+          continue;
+        }
+        validatedFiles.push(file);
+      }
+
+      return validatedFiles;
     } catch (error) {
-      // P1-1: Fix unsafe error type assertion
       const message = isErrorObject(error) ? error.message : String(error);
       throw new Error(`Failed to get conflicted files: ${message}`);
     }
@@ -349,6 +404,7 @@ class ConflictResolver {
 
   /**
    * Resolve a conflict using AI (Tier 2: conflict-only resolution)
+   * P1 FIX: Ensure all required properties are present in returned object
    *
    * @param conflict - Conflict region to resolve
    * @returns Resolution result with syntax validation
@@ -360,20 +416,26 @@ class ConflictResolver {
     // Delegate to Claude API service
     const result = await claudeAPIService.resolveConflict(conflict);
 
-    // If resolution failed, return as-is
+    // P1 FIX: If resolution failed, ensure all required properties are present
     if (result.error || !result.resolvedContent) {
-      return result;
+      return {
+        ...result,
+        syntaxValid: result.syntaxValid ?? false,
+        confidence: result.confidence ?? 0
+      };
     }
 
     // Validate syntax of resolved content
     const language = syntaxValidator.detectLanguage(conflict.filePath);
     const validation = await syntaxValidator.validateContent(result.resolvedContent, language);
 
-    // Update result with validation status
+    // P1 FIX: Use nullish coalescing for validation.errors to prevent "undefined" string
     return {
       ...result,
       syntaxValid: validation.valid,
-      error: validation.valid ? undefined : `Syntax validation failed: ${validation.errors?.map(e => e.message).join('; ')}`
+      error: validation.valid
+        ? undefined
+        : `Syntax validation failed: ${validation.errors?.map(e => e.message).join('; ') ?? 'Unknown error'}`
     };
   }
 
@@ -410,12 +472,12 @@ class ConflictResolver {
       maxConcurrency
     );
 
-    // Check if we need Tier 3 fallback
+    // P1 FIX: Use nullish coalescing for confidence to handle undefined values
     const needsFallback = tier2Results.some(
       (result) =>
         result.error !== undefined ||
         !result.syntaxValid ||
-        result.confidence < confidenceThreshold
+        (result.confidence ?? 0) < confidenceThreshold
     );
 
     if (needsFallback) {
@@ -434,10 +496,10 @@ class ConflictResolver {
         language
       );
 
-      // Update validation status
+      // P1 FIX: Update validation status with nullish coalescing for errors
       fullFileResult.syntaxValid = validation.valid;
       if (!validation.valid) {
-        fullFileResult.error = `Syntax validation failed: ${validation.errors?.map(e => e.message).join('; ')}`;
+        fullFileResult.error = `Syntax validation failed: ${validation.errors?.map(e => e.message).join('; ') ?? 'Unknown error'}`;
       }
 
       // Return a single result for the entire file

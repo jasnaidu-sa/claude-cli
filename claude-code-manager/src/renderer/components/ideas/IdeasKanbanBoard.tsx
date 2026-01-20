@@ -2,8 +2,8 @@
  * IdeasKanbanBoard Component
  *
  * Visual Kanban board for project ideas from email.
- * Shows ideas in 5 columns: Inbox, Pending, Review, Approved, In Progress
- * (Completed ideas are shown in a separate archive view)
+ * Shows ideas in 4 columns: Inbox, Review, Approved, In Progress
+ * (Completed and Declined ideas are shown in a separate archive view)
  *
  * Features:
  * - Drag and drop between stages (with validation)
@@ -24,7 +24,11 @@ import {
   AlertCircle,
   Lightbulb,
   Building2,
-  Sparkles
+  Sparkles,
+  Trash2,
+  RefreshCw,
+  FolderOpen,
+  X
 } from 'lucide-react'
 import { cn } from '@renderer/lib/utils'
 import type { Idea, IdeaStage } from '@shared/types'
@@ -33,7 +37,32 @@ interface IdeasKanbanBoardProps {
   ideas: Idea[]
   onIdeaClick: (idea: Idea) => void
   onMoveStage: (ideaId: string, newStage: IdeaStage) => void
+  onDelete?: (ideaId: string) => void
+  onRetry?: (ideaId: string) => void
+  onError?: (message: string) => void
   className?: string
+}
+
+// Valid stage transitions (must match backend)
+const VALID_TRANSITIONS: Record<IdeaStage, IdeaStage[]> = {
+  inbox: ['review', 'declined'],
+  review: ['approved', 'declined'],
+  approved: ['in_progress', 'review'],
+  in_progress: ['completed', 'approved'],
+  completed: [],
+  declined: ['inbox', 'review']
+}
+
+function isValidTransition(fromStage: IdeaStage, toStage: IdeaStage): boolean {
+  return VALID_TRANSITIONS[fromStage]?.includes(toStage) ?? false
+}
+
+function getTransitionError(fromStage: IdeaStage, toStage: IdeaStage): string {
+  const allowed = VALID_TRANSITIONS[fromStage]
+  if (allowed.length === 0) {
+    return `Items in "${STAGE_CONFIG[fromStage].title}" cannot be moved`
+  }
+  return `Cannot move from "${STAGE_CONFIG[fromStage].title}" to "${STAGE_CONFIG[toStage].title}". Allowed: ${allowed.map(s => STAGE_CONFIG[s].title).join(', ')}`
 }
 
 // Stage configuration
@@ -50,13 +79,6 @@ const STAGE_CONFIG: Record<IdeaStage, {
     color: 'text-gray-400',
     bgColor: 'bg-gray-500/10 border-gray-500/20',
     description: 'New ideas from email'
-  },
-  pending: {
-    title: 'Pending',
-    icon: <Clock className="h-4 w-4" />,
-    color: 'text-yellow-400',
-    bgColor: 'bg-yellow-500/10 border-yellow-500/20',
-    description: 'Waiting to be reviewed'
   },
   review: {
     title: 'Review',
@@ -85,11 +107,18 @@ const STAGE_CONFIG: Record<IdeaStage, {
     color: 'text-emerald-400',
     bgColor: 'bg-emerald-500/10 border-emerald-500/20',
     description: 'Project finished'
+  },
+  declined: {
+    title: 'Declined',
+    icon: <X className="h-4 w-4" />,
+    color: 'text-red-400',
+    bgColor: 'bg-red-500/10 border-red-500/20',
+    description: 'Not pursuing'
   }
 }
 
 // Visible columns (excluding completed which is in archive)
-const VISIBLE_STAGES: IdeaStage[] = ['inbox', 'pending', 'review', 'approved', 'in_progress']
+const VISIBLE_STAGES: IdeaStage[] = ['inbox', 'review', 'approved', 'in_progress', 'declined']
 
 function getPriorityColor(priority?: 'low' | 'medium' | 'high' | 'urgent'): string {
   switch (priority) {
@@ -108,60 +137,137 @@ function getPriorityColor(priority?: 'low' | 'medium' | 'high' | 'urgent'): stri
 function getProjectTypeIcon(projectType: 'greenfield' | 'brownfield' | 'undetermined') {
   switch (projectType) {
     case 'greenfield':
-      return <Sparkles className="h-3 w-3 text-green-400" title="Greenfield - New Project" />
+      return <span title="Greenfield - New Project"><Sparkles className="h-3 w-3 text-green-400" /></span>
     case 'brownfield':
-      return <Building2 className="h-3 w-3 text-amber-400" title="Brownfield - Existing Project" />
+      return <span title="Brownfield - Existing Project"><Building2 className="h-3 w-3 text-amber-400" /></span>
     default:
-      return <Lightbulb className="h-3 w-3 text-gray-400" title="Type not determined" />
+      return <span title="Type not determined"><Lightbulb className="h-3 w-3 text-gray-400" /></span>
   }
 }
 
 function IdeaCard({
   idea,
   onClick,
-  onDragStart
+  onDragStart,
+  onDelete,
+  onRetry
 }: {
   idea: Idea
   onClick: () => void
   onDragStart: (e: React.DragEvent) => void
+  onDelete?: () => void
+  onRetry?: () => void
 }) {
   const stageConfig = STAGE_CONFIG[idea.stage]
+  const [isRetrying, setIsRetrying] = React.useState(false)
+
+  // Check if this idea needs retry (untitled or no summaries)
+  const needsRetry = idea.title === 'Untitled Idea' ||
+    (idea.extractedUrls && idea.extractedUrls.length > 0 && !idea.extractedUrls.some(u => u.summary))
+
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent card click
+    if (onDelete && window.confirm('Are you sure you want to delete this idea?')) {
+      onDelete()
+    }
+  }
+
+  const handleRetry = (e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent card click
+    e.preventDefault()  // Prevent default behavior
+    console.log('[IdeaCard] Retry clicked for idea:', idea.id)
+    if (onRetry && !isRetrying) {
+      setIsRetrying(true)
+      onRetry()
+      // Reset after a delay (the actual refresh will update the card)
+      setTimeout(() => setIsRetrying(false), 10000)
+    }
+  }
 
   return (
     <div
-      draggable
+      draggable={!isRetrying}
       onDragStart={onDragStart}
-      onClick={onClick}
+      onClick={isRetrying ? undefined : onClick}
       className={cn(
-        'p-3 rounded-lg border bg-card transition-all hover:shadow-md cursor-pointer',
+        'p-3 rounded-lg border bg-card transition-all hover:shadow-md cursor-pointer group relative',
         'hover:border-primary/30 active:scale-[0.98]',
-        stageConfig.bgColor
+        stageConfig.bgColor,
+        needsRetry && 'border-amber-500/30',
+        isRetrying && 'opacity-70 pointer-events-none'
       )}
     >
+      {/* Loading overlay when retrying */}
+      {isRetrying && (
+        <div className="absolute inset-0 bg-background/50 rounded-lg flex items-center justify-center z-10">
+          <div className="flex items-center gap-2 text-amber-400 text-xs font-medium">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            <span>Retrying...</span>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm truncate" title={idea.title}>
+          <div className={cn(
+            "font-semibold text-sm truncate",
+            needsRetry && "text-amber-400"
+          )} title={idea.title}>
             {idea.title}
           </div>
           <div className="flex items-center gap-2 mt-1">
             {/* Project type indicator */}
             {getProjectTypeIcon(idea.projectType)}
 
-            {/* Priority badge */}
-            {idea.priority && (
-              <span className={cn(
-                'text-[10px] px-1.5 py-0.5 rounded border font-medium uppercase',
-                getPriorityColor(idea.priority)
-              )}>
-                {idea.priority}
+            {/* Project name badge (replaces priority) */}
+            <span className={cn(
+              'text-[10px] px-1.5 py-0.5 rounded border font-medium truncate max-w-[120px]',
+              (idea.projectName || idea.associatedProjectName)
+                ? 'bg-primary/20 text-primary border-primary/30'
+                : 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+            )} title={idea.projectName || idea.associatedProjectName || 'No Project'}>
+              {idea.projectName || idea.associatedProjectName || 'No Project'}
+            </span>
+
+            {/* Needs retry indicator */}
+            {needsRetry && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-amber-500/20 text-amber-400 border-amber-500/30">
+                RETRY
               </span>
             )}
           </div>
         </div>
 
-        {/* Email source indicator */}
-        <Mail className="h-3 w-3 text-muted-foreground shrink-0" title={idea.emailSource.from} />
+        {/* Actions */}
+        <div className="flex items-center gap-1 shrink-0">
+          {/* Retry button - visible for ideas that need retry */}
+          {needsRetry && onRetry && (
+            <button
+              onClick={handleRetry}
+              onMouseDown={(e) => e.stopPropagation()}
+              disabled={isRetrying}
+              className={cn(
+                "p-1 rounded hover:bg-amber-500/20 hover:text-amber-400 transition-all",
+                isRetrying ? "opacity-50 cursor-not-allowed" : ""
+              )}
+              title="Retry extracting title and summary"
+            >
+              <RefreshCw className={cn("h-3 w-3", isRetrying && "animate-spin")} />
+            </button>
+          )}
+          {/* Delete button - visible on hover */}
+          {onDelete && (
+            <button
+              onClick={handleDelete}
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-500/20 hover:text-red-500 transition-all"
+              title="Delete idea"
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
+          )}
+          {/* Email source indicator */}
+          <span title={idea.emailSource.from}><Mail className="h-3 w-3 text-muted-foreground" /></span>
+        </div>
       </div>
 
       {/* Description preview */}
@@ -184,17 +290,20 @@ function IdeaCard({
           </div>
         )}
 
-        {/* Discussion count */}
+        {/* Discussion count with last amended date */}
         {idea.discussionMessages && idea.discussionMessages.length > 0 && (
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground" title={`Last message: ${new Date(Math.max(...idea.discussionMessages.map(m => m.timestamp))).toLocaleString()}`}>
             <MessageSquare className="h-3 w-3" />
             {idea.discussionMessages.length}
+            <span className="text-[10px] opacity-70">
+              ({new Date(Math.max(...idea.discussionMessages.map(m => m.timestamp))).toLocaleDateString()})
+            </span>
           </div>
         )}
 
-        {/* Date */}
-        <span className="text-[10px] text-muted-foreground">
-          {new Date(idea.createdAt).toLocaleDateString()}
+        {/* Date - show email received date if available, otherwise created date */}
+        <span className="text-[10px] text-muted-foreground" title={`Received: ${new Date(idea.emailSource?.receivedAt || idea.createdAt).toLocaleString()}`}>
+          {new Date(idea.emailSource?.receivedAt || idea.createdAt).toLocaleDateString()}
         </span>
       </div>
     </div>
@@ -205,39 +314,107 @@ function KanbanColumn({
   stage,
   ideas,
   onIdeaClick,
-  onDrop
+  onDrop,
+  onDelete,
+  onRetry,
+  onError
 }: {
   stage: IdeaStage
   ideas: Idea[]
   onIdeaClick: (idea: Idea) => void
-  onDrop: (ideaId: string) => void
+  onDrop: (ideaId: string, fromStage: IdeaStage) => void
+  onDelete?: (ideaId: string) => void
+  onRetry?: (ideaId: string) => void
+  onError?: (message: string) => void
 }) {
   const config = STAGE_CONFIG[stage]
   const [isDragOver, setIsDragOver] = React.useState(false)
+  const [isInvalidDrop, setIsInvalidDrop] = React.useState(false)
+
+  // Group ideas by project
+  const ideasByProject = useMemo(() => {
+    const grouped: Record<string, Idea[]> = {}
+
+    for (const idea of ideas) {
+      const projectName = idea.projectName || idea.associatedProjectName || 'No Project'
+      if (!grouped[projectName]) {
+        grouped[projectName] = []
+      }
+      grouped[projectName].push(idea)
+    }
+
+    // Sort ideas within each project by email received date descending (newest first)
+    for (const projectName of Object.keys(grouped)) {
+      grouped[projectName].sort((a, b) => {
+        const dateA = a.emailSource?.receivedAt || a.createdAt
+        const dateB = b.emailSource?.receivedAt || b.createdAt
+        return dateB - dateA
+      })
+    }
+
+    return grouped
+  }, [ideas])
+
+  // Get sorted project names (alphabetically, with "No Project" last)
+  const sortedProjectNames = useMemo(() => {
+    const names = Object.keys(ideasByProject)
+    return names.sort((a, b) => {
+      if (a === 'No Project') return 1
+      if (b === 'No Project') return -1
+      return a.localeCompare(b)
+    })
+  }, [ideasByProject])
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
-    setIsDragOver(true)
+    const fromStage = e.dataTransfer.types.includes('fromstage')
+      ? e.dataTransfer.getData('fromStage') as IdeaStage
+      : null
+
+    // Check if this would be a valid transition
+    if (fromStage && fromStage !== stage && !isValidTransition(fromStage, stage)) {
+      setIsInvalidDrop(true)
+      setIsDragOver(false)
+    } else {
+      setIsInvalidDrop(false)
+      setIsDragOver(true)
+    }
   }
 
   const handleDragLeave = () => {
     setIsDragOver(false)
+    setIsInvalidDrop(false)
   }
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragOver(false)
+    setIsInvalidDrop(false)
+
     const ideaId = e.dataTransfer.getData('ideaId')
-    if (ideaId) {
-      onDrop(ideaId)
+    const fromStage = e.dataTransfer.getData('fromStage') as IdeaStage
+
+    if (!ideaId || !fromStage) return
+
+    // Same stage - no action needed
+    if (fromStage === stage) return
+
+    // Validate transition
+    if (!isValidTransition(fromStage, stage)) {
+      const errorMessage = getTransitionError(fromStage, stage)
+      onError?.(errorMessage)
+      return
     }
+
+    onDrop(ideaId, fromStage)
   }
 
   return (
     <div
       className={cn(
         'flex flex-col h-full border rounded-lg overflow-hidden bg-card transition-all',
-        isDragOver && 'ring-2 ring-primary/50 border-primary/30'
+        isDragOver && 'ring-2 ring-primary/50 border-primary/30',
+        isInvalidDrop && 'ring-2 ring-red-500/50 border-red-500/30 bg-red-500/5'
       )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -262,23 +439,46 @@ function KanbanColumn({
         {config.description}
       </div>
 
-      {/* Column Content */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      {/* Column Content - Grouped by Project */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-4">
         {ideas.length === 0 ? (
           <div className="text-xs text-muted-foreground text-center py-8 opacity-50">
             Drop ideas here
           </div>
         ) : (
-          ideas.map((idea) => (
-            <IdeaCard
-              key={idea.id}
-              idea={idea}
-              onClick={() => onIdeaClick(idea)}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('ideaId', idea.id)
-                e.dataTransfer.setData('fromStage', idea.stage)
-              }}
-            />
+          sortedProjectNames.map((projectName) => (
+            <div key={projectName} className="space-y-2">
+              {/* Project Header */}
+              <div className={cn(
+                'flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium sticky top-0 z-10',
+                projectName === 'No Project'
+                  ? 'bg-gray-500/20 text-gray-400'
+                  : 'bg-primary/20 text-primary'
+              )}>
+                <FolderOpen className="h-3 w-3" />
+                <span className="truncate">{projectName}</span>
+                <span className="ml-auto text-[10px] opacity-70">
+                  {ideasByProject[projectName].length}
+                </span>
+              </div>
+
+              {/* Ideas in this project */}
+              <div className="space-y-2 pl-1">
+                {ideasByProject[projectName].map((idea) => (
+                  <IdeaCard
+                    key={idea.id}
+                    idea={idea}
+                    onClick={() => onIdeaClick(idea)}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('ideaId', idea.id)
+                      e.dataTransfer.setData('fromStage', idea.stage)
+                    }}
+                    onDelete={onDelete ? () => onDelete(idea.id) : undefined}
+                    onRetry={onRetry ? () => onRetry(idea.id) : undefined}
+                  />
+                ))}
+              </div>
+            </div>
           ))
         )}
       </div>
@@ -290,36 +490,32 @@ export function IdeasKanbanBoard({
   ideas,
   onIdeaClick,
   onMoveStage,
+  onDelete,
+  onRetry,
+  onError,
   className
 }: IdeasKanbanBoardProps) {
   // Organize ideas by stage
   const ideasByStage = useMemo(() => {
     const grouped: Record<IdeaStage, Idea[]> = {
       inbox: [],
-      pending: [],
       review: [],
       approved: [],
       in_progress: [],
-      completed: []
+      completed: [],
+      declined: []
     }
 
     for (const idea of ideas) {
       grouped[idea.stage].push(idea)
     }
 
-    // Sort each group by updatedAt descending
-    for (const stage of Object.keys(grouped) as IdeaStage[]) {
-      grouped[stage].sort((a, b) => b.updatedAt - a.updatedAt)
-    }
-
     return grouped
   }, [ideas])
 
-  const handleDrop = (targetStage: IdeaStage) => (ideaId: string) => {
-    const idea = ideas.find((i) => i.id === ideaId)
-    if (idea && idea.stage !== targetStage) {
-      onMoveStage(ideaId, targetStage)
-    }
+  const handleDrop = (targetStage: IdeaStage) => (ideaId: string, _fromStage: IdeaStage) => {
+    // Validation already done in KanbanColumn, just call the move
+    onMoveStage(ideaId, targetStage)
   }
 
   return (
@@ -331,6 +527,9 @@ export function IdeasKanbanBoard({
           ideas={ideasByStage[stage]}
           onIdeaClick={onIdeaClick}
           onDrop={handleDrop(stage)}
+          onDelete={onDelete}
+          onRetry={onRetry}
+          onError={onError}
         />
       ))}
     </div>

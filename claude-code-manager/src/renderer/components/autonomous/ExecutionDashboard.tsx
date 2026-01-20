@@ -104,10 +104,10 @@ function estimateRemainingTime(
  */
 async function checkFeatureListExists(projectPath: string): Promise<boolean> {
   try {
-    // Use IPC to check if the file exists
+    // Use IPC to check if the file exists by trying to read it
     const featureListPath = `${projectPath}/.autonomous/feature_list.json`
-    const result = await window.electron.fs.exists(featureListPath)
-    return result
+    const result = await window.electron.files.readFile(featureListPath)
+    return result.success
   } catch {
     return false
   }
@@ -599,7 +599,7 @@ export function ExecutionDashboard() {
                 </>
               )}
             </Button>
-          ) : !isReadOnly && activeSession.status === 'running' ? (
+          ) : !isReadOnly && activeSession?.status === 'running' ? (
             <>
               <Button variant="outline" size="sm" onClick={handlePause}>
                 <Pause className="h-4 w-4 mr-1" />
@@ -610,7 +610,7 @@ export function ExecutionDashboard() {
                 Stop
               </Button>
             </>
-          ) : !isReadOnly && activeSession.status === 'paused' ? (
+          ) : !isReadOnly && activeSession?.status === 'paused' ? (
             <>
               <Button size="sm" onClick={handleStart} disabled={isStartingOrchestrator}>
                 {isStartingOrchestrator ? (

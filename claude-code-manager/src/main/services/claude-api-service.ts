@@ -1,5 +1,17 @@
 import type { ConflictRegion, ConflictResolutionResult } from '@shared/types/git';
 import { authManager } from './auth-manager';
+import { spawn } from 'child_process';
+import { platform } from 'os';
+import { ConfigStore } from './config-store';
+
+/**
+ * Article summary result
+ */
+export interface ArticleSummaryResult {
+  summary: string;
+  keyPoints?: string[];
+  error?: string;
+}
 
 /**
  * Claude API Service
@@ -17,9 +29,13 @@ import { authManager } from './auth-manager';
 // Constants
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
-const MAX_TOKENS = 4096;
+const HAIKU_MODEL = 'claude-haiku-4-5'; // Claude Haiku 4.5 - fastest, most cost-efficient model
+const CLI_HAIKU_MODEL = 'claude-haiku-4-5'; // Full model ID for CLI
+const MAX_TOKENS = 16384; // 16K tokens for batch summarization of multiple articles
 const REQUEST_TIMEOUT_MS = 30000; // 30 seconds
-const RATE_LIMIT_REQUESTS_PER_MINUTE = 10;
+const SUMMARIZE_TIMEOUT_MS = 45000; // 45 seconds for summarization (shorter articles)
+const RATE_LIMIT_REQUESTS_PER_MINUTE = 30; // Higher limit for batch summarization
+const CLI_TIMEOUT_MS = 180000; // 180 seconds (3 min) for CLI summarization
 
 /**
  * Type guard for Error objects
@@ -35,6 +51,7 @@ interface ClaudeAPIRequest {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  timeoutMs?: number; // Custom timeout for specific operations
 }
 
 /**
@@ -54,6 +71,41 @@ interface ClaudeAPIResponse {
     input_tokens: number;
     output_tokens: number;
   };
+}
+
+/**
+ * Get spawn options for cross-platform CLI execution
+ * On Windows, .cmd files require shell interpretation
+ */
+function getSpawnConfig(cliPath: string): { command: string; shellOption: boolean } {
+  if (platform() === 'win32') {
+    return { command: cliPath, shellOption: true };
+  }
+  return { command: cliPath, shellOption: false };
+}
+
+/**
+ * Create minimal safe environment for child processes
+ * Includes paths needed for OAuth credential access
+ */
+function createSafeEnv(): NodeJS.ProcessEnv {
+  const allowedVars = [
+    'PATH', 'HOME', 'USERPROFILE', 'TEMP', 'TMP',
+    'APPDATA', 'LOCALAPPDATA',
+    'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+    'LANG', 'LC_ALL', 'SHELL',
+    'ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
+    'NODE_ENV', 'npm_config_prefix',
+    'SystemRoot', 'COMSPEC',
+    'TERM', 'COLORTERM'
+  ];
+  const safeEnv: NodeJS.ProcessEnv = {};
+  for (const key of allowedVars) {
+    if (process.env[key]) {
+      safeEnv[key] = process.env[key];
+    }
+  }
+  return safeEnv;
 }
 
 /**
@@ -105,32 +157,36 @@ class RateLimiter {
 
 class ClaudeAPIService {
   private rateLimiter: RateLimiter;
+  private configStore: ConfigStore;
 
   constructor() {
     this.rateLimiter = new RateLimiter(RATE_LIMIT_REQUESTS_PER_MINUTE);
+    this.configStore = new ConfigStore();
   }
 
   /**
-   * Get authentication token from centralized auth manager
+   * Get API key for Claude Messages API
    *
-   * Uses the same authentication source as orchestrator and other services:
-   * 1. OAuth token from Claude CLI credentials (~/.claude/.credentials.json)
-   * 2. ANTHROPIC_API_KEY environment variable
-   * 3. CLAUDE_API_KEY environment variable
-   * 4. ANTHROPIC_SESSION_KEY environment variable (manual override)
+   * NOTE: The Anthropic Messages API does NOT support OAuth tokens.
+   * Only API keys work with api.anthropic.com.
+   *
+   * Uses:
+   * 1. ANTHROPIC_API_KEY environment variable
+   * 2. CLAUDE_API_KEY environment variable
    */
-  private async getAuthToken(): Promise<string> {
-    const token = await authManager.getAuthToken();
+  private getAuthToken(): string {
+    const apiKey = authManager.getApiKeyForMessagesApi();
 
-    if (!token) {
+    if (!apiKey) {
       throw new Error(
-        'Claude authentication not found. Either:\n' +
-        '1. Run "claude auth login" to set up OAuth (recommended for Max plan)\n' +
-        '2. Set ANTHROPIC_API_KEY environment variable (for API key users)'
+        'Claude API key not found.\n' +
+        'The Anthropic Messages API requires an API key (OAuth is not supported).\n' +
+        'Set ANTHROPIC_API_KEY environment variable to enable AI summaries.\n' +
+        'Get your API key from: https://console.anthropic.com/settings/keys'
       );
     }
 
-    return token;
+    return apiKey;
   }
 
   /**
@@ -141,11 +197,12 @@ class ClaudeAPIService {
     userPrompt: string,
     options: ClaudeAPIRequest = {}
   ): Promise<ClaudeAPIResponse> {
-    const authToken = await this.getAuthToken();
+    const authToken = this.getAuthToken();
     this.rateLimiter.checkLimit();
 
+    const timeout = options.timeoutMs || REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
       const response = await fetch(ANTHROPIC_API_URL, {
@@ -179,7 +236,7 @@ class ClaudeAPIService {
       return data;
     } catch (error) {
       if (isErrorObject(error) && error.name === 'AbortError') {
-        throw new Error(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`);
+        throw new Error(`Request timeout after ${timeout}ms`);
       }
       throw error;
     } finally {
@@ -463,14 +520,396 @@ Provide the complete resolved file:`;
   }
 
   /**
-   * Check if API is properly configured
+   * Check if summarization is available
+   *
+   * Returns true if either:
+   * 1. Claude CLI is configured (for OAuth-based summarization)
+   * 2. API key is available (for direct API calls)
    */
   isConfigured(): boolean {
+    const claudePath = this.configStore.get('claudeCliPath');
+    const hasCliPath = !!claudePath && typeof claudePath === 'string';
+    const hasApiKey = authManager.hasApiKeyForMessagesApi();
+    return hasCliPath || hasApiKey;
+  }
+
+  /**
+   * Summarize an article for idea discussion
+   *
+   * Uses direct API calls with Haiku model for fast, cheap summarization.
+   * Falls back to Claude CLI only if no API key is available.
+   *
+   * @param articleContent - The full text content of the article
+   * @param articleTitle - Optional title of the article
+   * @param options - API request options
+   * @returns Summary result with key points
+   */
+  async summarizeArticle(
+    articleContent: string,
+    articleTitle?: string,
+    options: ClaudeAPIRequest = {}
+  ): Promise<ArticleSummaryResult> {
+    // Truncate content if too long (keep first 8000 chars)
+    const truncatedContent = articleContent.length > 8000
+      ? articleContent.substring(0, 8000) + '... [truncated]'
+      : articleContent;
+
+    const titlePart = articleTitle ? `Title: "${articleTitle}"\n\n` : '';
+
+    const systemPrompt = `You are an expert at summarizing articles and extracting key insights. Your task is to:
+1. Create a concise but comprehensive summary (2-4 paragraphs)
+2. Extract 3-5 key points or takeaways
+3. Identify any actionable insights or ideas
+
+IMPORTANT: Summarize ONLY the content provided. Do NOT ask for more content or URLs. If the content appears truncated or incomplete, summarize what is available. Never refuse to summarize.
+
+Format your response as:
+SUMMARY:
+[Your summary here]
+
+KEY POINTS:
+• [Point 1]
+• [Point 2]
+• [Point 3]
+(etc.)
+
+Keep the summary informative enough that someone can understand the article's main thesis and arguments without reading it, but also brief enough to be quickly scanned.`;
+
+    const userPrompt = `${titlePart}Please summarize this article:
+
+${truncatedContent}`;
+
+    // Try direct API first (much faster - no CLI spawn overhead)
+    if (authManager.hasApiKeyForMessagesApi()) {
+      try {
+        console.log('[ClaudeAPIService] Using direct API for fast summarization (Haiku model)');
+
+        const response = await this.makeRequest(systemPrompt, userPrompt, {
+          model: HAIKU_MODEL, // Use Haiku for speed and cost
+          maxTokens: 1024, // Summaries don't need many tokens
+          temperature: 0.3, // Slightly creative for natural summaries
+          timeoutMs: SUMMARIZE_TIMEOUT_MS,
+          ...options
+        });
+
+        // Extract text from response
+        const result = response.content
+          .filter(block => block.type === 'text')
+          .map(block => block.text)
+          .join('\n');
+
+        // Parse the response
+        const { summary, keyPoints } = this.parseSummaryResponse(result);
+
+        console.log('[ClaudeAPIService] Direct API summarization complete, summary length:', summary.length);
+
+        return { summary, keyPoints };
+      } catch (error) {
+        const message = isErrorObject(error) ? error.message : String(error);
+        console.warn('[ClaudeAPIService] Direct API failed, falling back to CLI:', message);
+        // Fall through to CLI
+      }
+    }
+
+    // Fallback to CLI if no API key or API failed
+    return this.summarizeArticleViaCLI(systemPrompt + '\n\n' + userPrompt);
+  }
+
+  /**
+   * Parse summary response into structured format
+   */
+  private parseSummaryResponse(result: string): { summary: string; keyPoints?: string[] } {
+    const summaryMatch = result.match(/SUMMARY:\s*([\s\S]*?)(?=KEY POINTS:|$)/i);
+    const keyPointsMatch = result.match(/KEY POINTS:\s*([\s\S]*?)$/i);
+
+    const summary = summaryMatch
+      ? summaryMatch[1].trim()
+      : result.trim();
+
+    const keyPoints = keyPointsMatch
+      ? keyPointsMatch[1]
+          .split(/[•\-\*]\s*/)
+          .map(p => p.trim())
+          .filter(p => p.length > 0)
+      : undefined;
+
+    return { summary, keyPoints };
+  }
+
+  /**
+   * Fallback summarization via Claude CLI (slower but works with OAuth)
+   * Uses Haiku model for speed
+   */
+  private async summarizeArticleViaCLI(prompt: string): Promise<ArticleSummaryResult> {
     try {
-      this.validateApiKey();
-      return true;
-    } catch {
-      return false;
+      // Get Claude CLI path
+      const claudePath = this.configStore.get('claudeCliPath');
+      if (!claudePath || typeof claudePath !== 'string') {
+        throw new Error('Claude CLI path not configured and no API key available');
+      }
+
+      const { command, shellOption } = getSpawnConfig(claudePath);
+      const args = [
+        '--print',
+        '--model', CLI_HAIKU_MODEL, // Use Haiku for speed
+        '--output-format', 'text',
+        '--no-session-persistence', // Don't persist sessions for faster execution
+        '-'  // Read from stdin
+      ];
+
+      console.log('[ClaudeAPIService] Spawning Claude CLI for summarization (Haiku model)');
+      console.log('[ClaudeAPIService] CLI command:', command, args.join(' '));
+
+      const result = await new Promise<string>((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+
+        const proc = spawn(command, args, {
+          shell: shellOption,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: createSafeEnv()
+        });
+
+        console.log('[ClaudeAPIService] CLI process spawned, PID:', proc.pid);
+
+        // Set timeout - but capture partial output if we have it
+        const timeout = setTimeout(() => {
+          console.log('[ClaudeAPIService] CLI timeout reached, killing process. stderr so far:', stderr.substring(0, 500));
+          proc.kill('SIGTERM');
+          // If we have partial output, use it instead of failing completely
+          if (stdout.trim().length > 50) {
+            console.log('[ClaudeAPIService] Timeout but have partial output, using it:', stdout.substring(0, 200));
+            resolve(stdout);
+          } else {
+            reject(new Error(`CLI timeout after ${CLI_TIMEOUT_MS}ms`));
+          }
+        }, CLI_TIMEOUT_MS);
+
+        proc.stdout?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          stdout += chunk;
+          console.log('[ClaudeAPIService] CLI stdout chunk:', chunk.substring(0, 100));
+        });
+
+        proc.stderr?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          stderr += chunk;
+          console.log('[ClaudeAPIService] CLI stderr:', chunk.substring(0, 200));
+        });
+
+        proc.on('error', (error: Error) => {
+          clearTimeout(timeout);
+          reject(new Error(`CLI spawn error: ${error.message}`));
+        });
+
+        proc.on('close', (code: number | null) => {
+          clearTimeout(timeout);
+          if (code === 0) {
+            resolve(stdout);
+          } else {
+            reject(new Error(`CLI exited with code ${code}: ${stderr}`));
+          }
+        });
+
+        // Write prompt to stdin
+        if (proc.stdin) {
+          proc.stdin.write(prompt);
+          proc.stdin.end();
+        } else {
+          clearTimeout(timeout);
+          reject(new Error('Failed to write to CLI stdin'));
+        }
+      });
+
+      const { summary, keyPoints } = this.parseSummaryResponse(result);
+
+      console.log('[ClaudeAPIService] CLI summarization complete, summary length:', summary.length);
+
+      return { summary, keyPoints };
+    } catch (error) {
+      const message = isErrorObject(error) ? error.message : String(error);
+      console.error('[ClaudeAPIService] CLI summarization failed:', message);
+      return {
+        summary: '',
+        error: `Failed to summarize article: ${message}`
+      };
+    }
+  }
+
+  /**
+   * Batch summarize multiple articles in a SINGLE CLI call
+   * Much more efficient than individual calls - one CLI spawn for all articles
+   *
+   * @param articles - Array of {url, title, content} to summarize
+   * @returns Map of URL to summary result
+   */
+  async summarizeArticlesBatch(
+    articles: Array<{ url: string; title?: string; content: string }>
+  ): Promise<Map<string, ArticleSummaryResult>> {
+    const results = new Map<string, ArticleSummaryResult>();
+
+    if (articles.length === 0) {
+      return results;
+    }
+
+    // If only one article, use single summarization
+    if (articles.length === 1) {
+      const article = articles[0];
+      const result = await this.summarizeArticle(article.content, article.title);
+      results.set(article.url, result);
+      return results;
+    }
+
+    // Build batch prompt with all articles
+    const articlePrompts = articles.map((article, index) => {
+      const truncatedContent = article.content.length > 6000
+        ? article.content.substring(0, 6000) + '... [truncated]'
+        : article.content;
+      const titlePart = article.title ? `Title: "${article.title}"\n` : '';
+      return `=== ARTICLE ${index + 1} ===
+URL: ${article.url}
+${titlePart}
+${truncatedContent}`;
+    }).join('\n\n');
+
+    const batchPrompt = `You are summarizing multiple articles. For EACH article, provide a concise summary (2-3 paragraphs) and 3-5 key points.
+
+IMPORTANT: Return your response in this EXACT format for each article:
+
+--- ARTICLE 1 ---
+URL: [the url]
+SUMMARY:
+[summary here]
+
+KEY POINTS:
+• [point 1]
+• [point 2]
+• [point 3]
+
+--- ARTICLE 2 ---
+URL: [the url]
+SUMMARY:
+[summary here]
+
+KEY POINTS:
+• [point 1]
+• [point 2]
+
+(continue for all articles)
+
+Here are the ${articles.length} articles to summarize:
+
+${articlePrompts}`;
+
+    try {
+      // Get Claude CLI path
+      const claudePath = this.configStore.get('claudeCliPath');
+      if (!claudePath || typeof claudePath !== 'string') {
+        throw new Error('Claude CLI path not configured');
+      }
+
+      const { command, shellOption } = getSpawnConfig(claudePath);
+      const args = [
+        '--print',
+        '--model', CLI_HAIKU_MODEL,
+        '--output-format', 'text',
+        '--no-session-persistence',
+        '-'
+      ];
+
+      // Longer timeout for batch (5 minutes max)
+      const batchTimeout = Math.min(CLI_TIMEOUT_MS * 2, 300000); // Max 5 minutes
+
+      console.log(`[ClaudeAPIService] Batch summarizing ${articles.length} articles in ONE CLI call (Haiku)`);
+
+      const result = await new Promise<string>((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+
+        const proc = spawn(command, args, {
+          shell: shellOption,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: createSafeEnv()
+        });
+
+        const timeout = setTimeout(() => {
+          proc.kill('SIGTERM');
+          reject(new Error(`Batch CLI timeout after ${batchTimeout}ms`));
+        }, batchTimeout);
+
+        proc.stdout?.on('data', (data: Buffer) => {
+          stdout += data.toString();
+        });
+
+        proc.stderr?.on('data', (data: Buffer) => {
+          stderr += data.toString();
+        });
+
+        proc.on('error', (error: Error) => {
+          clearTimeout(timeout);
+          reject(new Error(`CLI spawn error: ${error.message}`));
+        });
+
+        proc.on('close', (code: number | null) => {
+          clearTimeout(timeout);
+          if (code === 0) {
+            resolve(stdout);
+          } else {
+            reject(new Error(`CLI exited with code ${code}: ${stderr}`));
+          }
+        });
+
+        if (proc.stdin) {
+          proc.stdin.write(batchPrompt);
+          proc.stdin.end();
+        } else {
+          clearTimeout(timeout);
+          reject(new Error('Failed to write to CLI stdin'));
+        }
+      });
+
+      // Parse batch response - split by article markers
+      const articleSections = result.split(/---\s*ARTICLE\s+\d+\s*---/i).filter(s => s.trim());
+
+      for (const section of articleSections) {
+        // Extract URL from section
+        const urlMatch = section.match(/URL:\s*(\S+)/i);
+        if (!urlMatch) continue;
+
+        const url = urlMatch[1];
+        const { summary, keyPoints } = this.parseSummaryResponse(section);
+
+        if (summary) {
+          results.set(url, { summary, keyPoints });
+        }
+      }
+
+      console.log(`[ClaudeAPIService] Batch summarization complete: ${results.size}/${articles.length} successful`);
+
+      // For any articles not in results, mark as failed
+      for (const article of articles) {
+        if (!results.has(article.url)) {
+          results.set(article.url, {
+            summary: '',
+            error: 'Failed to parse summary from batch response'
+          });
+        }
+      }
+
+      return results;
+    } catch (error) {
+      const message = isErrorObject(error) ? error.message : String(error);
+      console.error('[ClaudeAPIService] Batch summarization failed:', message);
+
+      // Mark all as failed
+      for (const article of articles) {
+        results.set(article.url, {
+          summary: '',
+          error: `Batch summarization failed: ${message}`
+        });
+      }
+
+      return results;
     }
   }
 }

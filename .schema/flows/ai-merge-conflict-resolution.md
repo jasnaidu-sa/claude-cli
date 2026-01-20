@@ -1,6 +1,6 @@
 # AI-Assisted Merge Conflict Resolution Flow
 
-**Last Updated**: 2025-12-22
+**Last Updated**: 2026-01-20
 
 ## Overview
 

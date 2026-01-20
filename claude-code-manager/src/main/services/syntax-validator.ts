@@ -3,6 +3,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as os from 'os';
+import { randomBytes } from 'crypto';
 import type { ValidationResult } from '@shared/types/git';
 
 const execFileAsync = promisify(execFile);
@@ -12,6 +13,24 @@ const execFileAsync = promisify(execFile);
  */
 function isErrorObject(error: unknown): error is Error {
   return error instanceof Error;
+}
+
+/**
+ * P0 FIX: Type guard for exec errors with stderr property
+ */
+function hasStderrProperty(error: unknown): error is Error & { stderr: unknown } {
+  return isErrorObject(error) && 'stderr' in error;
+}
+
+/**
+ * P0 FIX: Safely extract stderr from error object
+ */
+function getStderrFromError(error: unknown): string {
+  if (hasStderrProperty(error)) {
+    const stderr = error.stderr;
+    return typeof stderr === 'string' ? stderr : String(stderr ?? '');
+  }
+  return '';
 }
 
 /**
@@ -108,22 +127,24 @@ class SyntaxValidator {
 
   /**
    * Validate TypeScript/JavaScript syntax
-   *
-   * Creates a temporary file and runs tsc --noEmit on it
+   * P0 FIX: Use tsc directly instead of npx, use crypto random for temp files
+   * P2 FIX: Use exclusive write flag to prevent symlink attacks
    */
   private async validateTypeScript(content: string, language: Language): Promise<ValidationResult> {
     const ext = language === 'typescript' ? '.ts' : '.js';
-    const tempFile = path.join(os.tmpdir(), `syntax-check-${Date.now()}${ext}`);
+    // P2 FIX: Use cryptographically random filename
+    const randomSuffix = randomBytes(16).toString('hex');
+    const tempFile = path.join(os.tmpdir(), `syntax-check-${randomSuffix}-${Date.now()}${ext}`);
 
     try {
-      // Write content to temp file
-      await fs.writeFile(tempFile, content, 'utf-8');
+      // P2 FIX: Write with exclusive flag to fail if file exists (prevents symlink attack)
+      await fs.writeFile(tempFile, content, { encoding: 'utf-8', flag: 'wx' });
 
-      // Run TypeScript compiler in check mode
+      // P0 FIX: Use tsc directly instead of npx to prevent hijacking
       try {
         await execFileAsync(
-          'npx',
-          ['tsc', '--noEmit', '--skipLibCheck', '--esModuleInterop', tempFile],
+          'tsc',
+          ['--noEmit', '--skipLibCheck', '--esModuleInterop', tempFile],
           { timeout: VALIDATION_TIMEOUT_MS }
         );
 
@@ -131,8 +152,9 @@ class SyntaxValidator {
         return { valid: true };
       } catch (error) {
         // tsc failed, parse error output
-        if (isErrorObject(error) && 'stderr' in error) {
-          const stderr = String((error as { stderr?: unknown }).stderr || '');
+        // P0 FIX: Use type-safe stderr extraction
+        const stderr = getStderrFromError(error);
+        if (stderr) {
           return this.parseTypeScriptErrors(stderr);
         }
 
@@ -227,27 +249,36 @@ class SyntaxValidator {
 
   /**
    * Validate Python syntax
-   *
-   * Uses python -m py_compile to check syntax
+   * P0 FIX: Use ast.parse instead of py_compile to avoid code execution
+   * P2 FIX: Use crypto random for temp files and exclusive write
    */
   private async validatePython(content: string): Promise<ValidationResult> {
-    const tempFile = path.join(os.tmpdir(), `syntax-check-${Date.now()}.py`);
+    // P2 FIX: Use cryptographically random filename
+    const randomSuffix = randomBytes(16).toString('hex');
+    const tempFile = path.join(os.tmpdir(), `syntax-check-${randomSuffix}-${Date.now()}.py`);
 
     try {
-      // Write content to temp file
-      await fs.writeFile(tempFile, content, 'utf-8');
+      // P2 FIX: Write with exclusive flag to fail if file exists (prevents symlink attack)
+      await fs.writeFile(tempFile, content, { encoding: 'utf-8', flag: 'wx' });
 
-      // Run Python compiler
+      // P0 FIX: Use ast.parse (pure parsing) instead of py_compile (which can execute code)
+      // We use Python's ast module directly via -c flag with a safe script
       try {
-        await execFileAsync('python', ['-m', 'py_compile', tempFile], {
-          timeout: VALIDATION_TIMEOUT_MS
-        });
+        await execFileAsync(
+          'python',
+          [
+            '-c',
+            `import ast; ast.parse(open('${tempFile.replace(/'/g, "\\'")}', 'r', encoding='utf-8').read())`
+          ],
+          { timeout: VALIDATION_TIMEOUT_MS }
+        );
 
         return { valid: true };
       } catch (error) {
-        // Python compilation failed, parse error
-        if (isErrorObject(error) && 'stderr' in error) {
-          const stderr = String((error as { stderr?: unknown }).stderr || '');
+        // Python AST parsing failed, parse error
+        // P0 FIX: Use type-safe stderr extraction
+        const stderr = getStderrFromError(error);
+        if (stderr) {
           return this.parsePythonErrors(stderr);
         }
 
@@ -258,7 +289,7 @@ class SyntaxValidator {
         };
       }
     } finally {
-      // Clean up temp file and .pyc
+      // Clean up temp file
       try {
         await fs.unlink(tempFile);
       } catch {
@@ -266,7 +297,7 @@ class SyntaxValidator {
       }
 
       try {
-        // Also clean up __pycache__ if created
+        // Also clean up __pycache__ if created (shouldn't happen with ast.parse)
         const pycacheDir = path.join(os.tmpdir(), '__pycache__');
         await fs.rm(pycacheDir, { recursive: true, force: true });
       } catch {

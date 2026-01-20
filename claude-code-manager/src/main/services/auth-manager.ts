@@ -24,6 +24,8 @@ interface ClaudeCredentials {
 class AuthManager {
   private cachedToken: string | null = null;
   private cacheExpiry: number = 0;
+  private cachedApiKey: string | null = null;
+  private isOAuthToken: boolean = false;
 
   /**
    * Get authentication token from any available source
@@ -46,6 +48,7 @@ class AuthManager {
       // Cache for 4 minutes (token valid for 5+ minutes)
       this.cachedToken = oauthToken;
       this.cacheExpiry = Date.now() + 4 * 60 * 1000;
+      this.isOAuthToken = true;
       return oauthToken;
     }
 
@@ -60,6 +63,38 @@ class AuthManager {
       // Cache API keys for 1 hour (they don't expire)
       this.cachedToken = apiKey;
       this.cacheExpiry = Date.now() + 60 * 60 * 1000;
+      this.isOAuthToken = false;
+    }
+
+    return apiKey;
+  }
+
+  /**
+   * Get API key specifically for direct Claude Messages API calls
+   *
+   * IMPORTANT: OAuth tokens from Claude CLI are NOT compatible with the
+   * direct Messages API (api.anthropic.com). They only work with Claude's
+   * OAuth-based services. For the Messages API, we need an actual API key.
+   *
+   * Priority:
+   * 1. ANTHROPIC_API_KEY environment variable
+   * 2. CLAUDE_API_KEY environment variable
+   *
+   * @returns API key if available, null otherwise
+   */
+  getApiKeyForMessagesApi(): string | null {
+    if (this.cachedApiKey) {
+      return this.cachedApiKey;
+    }
+
+    const apiKey =
+      process.env.ANTHROPIC_API_KEY ||
+      process.env.CLAUDE_API_KEY ||
+      null;
+
+    if (apiKey) {
+      this.cachedApiKey = apiKey;
+      console.log('[AuthManager] Found API key for Messages API');
     }
 
     return apiKey;
@@ -109,11 +144,28 @@ class AuthManager {
   }
 
   /**
+   * Check if an API key (not OAuth) is available for Messages API
+   */
+  hasApiKeyForMessagesApi(): boolean {
+    return this.getApiKeyForMessagesApi() !== null;
+  }
+
+  /**
+   * Check if the current cached token is an OAuth token
+   * Must call getAuthToken() first to populate the cache
+   */
+  isCurrentTokenOAuth(): boolean {
+    return this.isOAuthToken;
+  }
+
+  /**
    * Clear cached authentication (force refresh)
    */
   clearCache(): void {
     this.cachedToken = null;
     this.cacheExpiry = 0;
+    this.cachedApiKey = null;
+    this.isOAuthToken = false;
   }
 }
 

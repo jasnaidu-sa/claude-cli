@@ -41,11 +41,25 @@ class WorktreeLifecycleManager {
 
   /**
    * Initialize lifecycle manager with storage location
+   * P2 FIX: Validate repository path before use
    *
    * @param repoPath - Repository root path
    */
   async initialize(repoPath: string): Promise<void> {
+    // P2 FIX: Validate input path
+    if (repoPath.includes('..') || repoPath.includes('\0')) {
+      throw new Error('Invalid repository path');
+    }
+
     const normalized = path.normalize(path.resolve(repoPath));
+
+    // P2 FIX: Verify it's a git repository
+    try {
+      await fs.access(path.join(normalized, '.git'));
+    } catch {
+      throw new Error('Path is not a git repository');
+    }
+
     this.storagePath = path.join(normalized, '.git', LIFECYCLE_STORAGE_FILE);
 
     // Load existing lifecycles
@@ -54,6 +68,8 @@ class WorktreeLifecycleManager {
 
   /**
    * Load lifecycles from storage
+   * P1 FIX: Throw on non-ENOENT errors to prevent silent data loss
+   * P2 FIX: Validate JSON structure before use
    */
   private async loadLifecycles(): Promise<void> {
     if (!this.storagePath) {
@@ -62,18 +78,60 @@ class WorktreeLifecycleManager {
 
     try {
       const data = await fs.readFile(this.storagePath, 'utf-8');
-      const parsed = JSON.parse(data) as Record<string, WorktreeLifecycle>;
+
+      // P2 FIX: Limit file size to prevent DoS
+      if (data.length > 10 * 1024 * 1024) { // 10MB limit
+        throw new Error('Lifecycle storage file too large');
+      }
+
+      const parsed = JSON.parse(data);
+
+      // P2 FIX: Validate structure
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('Invalid lifecycle data format');
+      }
 
       this.lifecycles.clear();
-      for (const [key, lifecycle] of Object.entries(parsed)) {
-        this.lifecycles.set(key, lifecycle);
+      for (const [key, value] of Object.entries(parsed)) {
+        // P2 FIX: Validate each lifecycle object
+        if (this.isValidLifecycle(value)) {
+          this.lifecycles.set(key, value as WorktreeLifecycle);
+        } else {
+          console.warn(`[WorktreeLifecycle] Skipping invalid lifecycle entry: ${key}`);
+        }
       }
     } catch (error) {
-      // File doesn't exist or is invalid, start fresh
-      if (isErrorObject(error) && 'code' in error && error.code !== 'ENOENT') {
-        console.warn('[WorktreeLifecycle] Failed to load lifecycles:', error.message);
+      // P1 FIX: Only ignore ENOENT (file doesn't exist yet)
+      if (isErrorObject(error) && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // File doesn't exist, start fresh
+        return;
       }
+
+      // P1 FIX: Throw on all other errors to prevent silent data loss
+      const message = isErrorObject(error) ? error.message : String(error);
+      throw new Error(`Failed to load worktree lifecycles: ${message}. Manual recovery may be required.`);
     }
+  }
+
+  /**
+   * P2 FIX: Validate lifecycle object structure
+   */
+  private isValidLifecycle(obj: unknown): obj is WorktreeLifecycle {
+    if (typeof obj !== 'object' || obj === null) return false;
+
+    const lifecycle = obj as Record<string, unknown>;
+
+    return (
+      typeof lifecycle.workflowId === 'string' &&
+      typeof lifecycle.worktreePath === 'string' &&
+      typeof lifecycle.createdAt === 'number' &&
+      typeof lifecycle.status === 'string' &&
+      ['active', 'testing', 'merged', 'discarded'].includes(lifecycle.status as string) &&
+      typeof lifecycle.autoCleanupAfterMerge === 'boolean' &&
+      typeof lifecycle.autoCleanupAfterDays === 'number' &&
+      lifecycle.autoCleanupAfterDays >= 0 &&
+      lifecycle.createdAt > 0
+    );
   }
 
   /**

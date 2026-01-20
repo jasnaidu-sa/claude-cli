@@ -3,14 +3,19 @@
  *
  * Handles IPC communication between renderer and the discovery chat service.
  * Includes BMAD-inspired complexity analysis and spec validation handlers.
+ *
+ * Uses Agent SDK implementation for faster responses when available,
+ * with fallback to CLI-based implementation.
  */
 
 import { ipcMain } from 'electron'
 import * as fs from 'fs/promises'
 import * as path from 'path'
 import { DiscoveryChatService, DISCOVERY_CHAT_CHANNELS, loadSessionFromDisk, listDrafts, loadDraft, deleteDraft, type DraftMetadata } from '../services/discovery-chat-service'
+import { DiscoveryChatServiceSDK } from '../services/discovery-chat-service-sdk'
 import { ComplexityAnalyzer } from '../services/complexity-analyzer'
 import { SpecValidator } from '../services/spec-validator'
+import { USE_SDK_DISCOVERY, discoveryChatServiceSDK } from '../index'
 
 // IPC channel names - use service channels plus handler-specific ones
 export const DISCOVERY_IPC_CHANNELS = {
@@ -39,10 +44,20 @@ export const DISCOVERY_IPC_CHANNELS = {
 const complexityAnalyzer = new ComplexityAnalyzer()
 const specValidator = new SpecValidator()
 
-let discoveryChatService: DiscoveryChatService | null = null
+let discoveryChatServiceCLI: DiscoveryChatService | null = null
+
+// Helper to get the active service based on feature flag
+function getActiveService(): DiscoveryChatService | DiscoveryChatServiceSDK {
+  if (USE_SDK_DISCOVERY) {
+    console.log('[DiscoveryHandler] Using Agent SDK service')
+    return discoveryChatServiceSDK
+  }
+  console.log('[DiscoveryHandler] Using CLI service')
+  return discoveryChatServiceCLI!
+}
 
 export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
-  discoveryChatService = service
+  discoveryChatServiceCLI = service
 
   // Check if an existing session exists for a project (without creating a new one)
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.CHECK_EXISTING_SESSION, async (_event, projectPath: string) => {
@@ -87,7 +102,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   // Create a new discovery session (may load existing from disk)
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.CREATE_SESSION, async (_event, projectPath: string, isNewProject: boolean) => {
     try {
-      const session = await discoveryChatService!.createSession(projectPath, isNewProject)
+      const activeService = getActiveService()
+      const session = await activeService.createSession(projectPath, isNewProject)
       return { success: true, session }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create session'
@@ -98,7 +114,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   // Create a fresh session, clearing any existing one
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.CREATE_FRESH_SESSION, async (_event, projectPath: string, isNewProject: boolean) => {
     try {
-      const session = await discoveryChatService!.createFreshSession(projectPath, isNewProject)
+      const activeService = getActiveService()
+      const session = await activeService.createFreshSession(projectPath, isNewProject)
       return { success: true, session }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create fresh session'
@@ -109,7 +126,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   // Send a message to Claude
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.SEND_MESSAGE, async (_event, sessionId: string, content: string) => {
     try {
-      await discoveryChatService!.sendMessage(sessionId, content)
+      const activeService = getActiveService()
+      await activeService.sendMessage(sessionId, content)
       return { success: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to send message'
@@ -120,7 +138,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   // Get all messages for a session
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.GET_MESSAGES, async (_event, sessionId: string) => {
     try {
-      const messages = discoveryChatService!.getMessages(sessionId)
+      const activeService = getActiveService()
+      const messages = activeService.getMessages(sessionId)
       return { success: true, messages }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to get messages'
@@ -131,7 +150,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   // Get session info
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.GET_SESSION, async (_event, sessionId: string) => {
     try {
-      const session = discoveryChatService!.getSession(sessionId)
+      const activeService = getActiveService()
+      const session = activeService.getSession(sessionId)
       return { success: true, session }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to get session'
@@ -140,9 +160,16 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   })
 
   // Cancel active request
-  ipcMain.handle(DISCOVERY_IPC_CHANNELS.CANCEL_REQUEST, async () => {
+  ipcMain.handle(DISCOVERY_IPC_CHANNELS.CANCEL_REQUEST, async (_event, sessionId?: string) => {
     try {
-      discoveryChatService!.cancelRequest()
+      const activeService = getActiveService()
+      if (USE_SDK_DISCOVERY && sessionId) {
+        // SDK version uses cancelQuery with sessionId
+        (activeService as DiscoveryChatServiceSDK).cancelQuery(sessionId)
+      } else {
+        // CLI version uses cancelRequest
+        (activeService as DiscoveryChatService).cancelRequest()
+      }
       return { success: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to cancel request'
@@ -153,7 +180,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   // Close a session
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.CLOSE_SESSION, async (_event, sessionId: string) => {
     try {
-      discoveryChatService!.closeSession(sessionId)
+      const activeService = getActiveService()
+      activeService.closeSession(sessionId)
       return { success: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to close session'
@@ -161,7 +189,7 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
     }
   })
 
-  // Update agent status (called internally, but exposed for flexibility)
+  // Update agent status (CLI-only, SDK handles this internally)
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.UPDATE_AGENT_STATUS, async (
     _event,
     sessionId: string,
@@ -171,7 +199,10 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
     error?: string
   ) => {
     try {
-      discoveryChatService!.updateAgentStatus(sessionId, agentName, status, output, error)
+      // Only CLI version has updateAgentStatus
+      if (!USE_SDK_DISCOVERY) {
+        discoveryChatServiceCLI!.updateAgentStatus(sessionId, agentName, status, output, error)
+      }
       return { success: true }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update agent status'
@@ -183,7 +214,8 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   ipcMain.handle(DISCOVERY_IPC_CHANNELS.GENERATE_QUICK_SPEC, async (_event, sessionId: string) => {
     try {
       console.log('[DiscoveryHandler] Generating quick spec for session:', sessionId)
-      await discoveryChatService!.generateQuickSpec(sessionId)
+      const activeService = getActiveService()
+      await activeService.generateQuickSpec(sessionId)
       return { success: true }
     } catch (error) {
       console.error('[DiscoveryHandler] Error generating quick spec:', error)
@@ -240,12 +272,13 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
     try {
       console.log('[DiscoveryHandler] Analyzing complexity for session:', sessionId)
 
-      const session = discoveryChatService!.getSession(sessionId)
+      const activeService = getActiveService()
+      const session = activeService.getSession(sessionId)
       if (!session) {
         return { success: false, error: 'Session not found' }
       }
 
-      const messages = session.messages.map(m => ({
+      const messages = session.messages.map((m: { role: string; content: string }) => ({
         role: m.role,
         content: m.content
       }))
@@ -300,6 +333,9 @@ export function setupDiscoveryHandlers(service: DiscoveryChatService): void {
   })
 }
 
-export function getDiscoveryChatService(): DiscoveryChatService | null {
-  return discoveryChatService
+export function getDiscoveryChatService(): DiscoveryChatService | DiscoveryChatServiceSDK | null {
+  if (USE_SDK_DISCOVERY) {
+    return discoveryChatServiceSDK
+  }
+  return discoveryChatServiceCLI
 }

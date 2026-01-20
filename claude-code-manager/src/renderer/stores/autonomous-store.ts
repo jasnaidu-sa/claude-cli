@@ -22,9 +22,14 @@ import type {
   OrchestratorOutput,
   OrchestratorProgress,
   ProgressSnapshot,
-  SchemaValidationResult
+  SchemaValidationResult,
+  RalphPromptConfig,
+  InitiatorSession,
+  RequirementsDoc,
+  RalphSessionSummary,
+  RalphSessionPhase
 } from '@shared/types'
-import type { VenvStatus, VenvCreationProgress, CreateWorkflowOptions, UpdateWorkflowOptions } from '../../preload/index'
+import type { VenvStatus, VenvCreationProgress, CreateWorkflowOptions, UpdateWorkflowOptions, RalphSession, RalphOrchestratorConfig } from '../../preload/index'
 
 // Phase types for the autonomous workflow (Option C: Full Architecture)
 export type AutonomousPhase =
@@ -136,6 +141,17 @@ interface AutonomousState {
   venvStatus: VenvStatus | null
   venvProgress: VenvCreationProgress | null
 
+  // Ralph Loop State
+  ralphSession: RalphSession | null
+  ralphInitiatorSession: InitiatorSession | null
+  ralphRequirements: RequirementsDoc | null
+  ralphPromptConfig: RalphPromptConfig | null
+
+  // Ralph Session History
+  ralphSessionHistory: RalphSessionSummary[]
+  currentRalphSessionId: string | null
+  showSessionHistory: boolean
+
   // UI State
   isLoading: boolean
   error: string | null
@@ -190,6 +206,25 @@ interface AutonomousState {
   canGoBack: () => boolean
   canGoForward: () => boolean
   getCurrentPhaseIndex: () => number
+
+  // Ralph Loop Actions
+  setRalphSession: (session: RalphSession | null) => void
+  setRalphInitiatorSession: (session: InitiatorSession | null) => void
+  setRalphRequirements: (requirements: RequirementsDoc | null) => void
+  setRalphPromptConfig: (config: RalphPromptConfig | null) => void
+  startRalphInitiator: (projectPath: string) => Promise<InitiatorSession | null>
+  startRalphExecution: (config: RalphOrchestratorConfig) => Promise<RalphSession | null>
+  stopRalphExecution: (sessionId: string) => Promise<boolean>
+  resetRalphState: () => void
+
+  // Ralph Session History Actions
+  loadSessionHistory: (projectPath?: string) => Promise<void>
+  saveCurrentSession: (phase: RalphSessionPhase, taskDescription: string) => Promise<RalphSessionSummary | null>
+  updateCurrentSession: (updates: Partial<RalphSessionSummary>) => Promise<void>
+  resumeSession: (sessionId: string) => Promise<boolean>
+  deleteSession: (sessionId: string) => Promise<boolean>
+  setShowSessionHistory: (show: boolean) => void
+  toggleSessionHistory: () => void
 
   // Helpers
   getActiveWorkflow: () => WorkflowConfig | undefined
@@ -249,6 +284,17 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
 
   venvStatus: null,
   venvProgress: null,
+
+  // Ralph Loop State
+  ralphSession: null,
+  ralphInitiatorSession: null,
+  ralphRequirements: null,
+  ralphPromptConfig: null,
+
+  // Ralph Session History
+  ralphSessionHistory: [],
+  currentRalphSessionId: null,
+  showSessionHistory: false,
 
   isLoading: false,
   error: null,
@@ -695,6 +741,199 @@ export const useAutonomousStore = create<AutonomousState>((set, get) => ({
 
   setVenvProgress: (progress: VenvCreationProgress | null) => {
     set({ venvProgress: progress })
+  },
+
+  // Ralph Loop Actions
+  setRalphSession: (session: RalphSession | null) => {
+    set({ ralphSession: session })
+  },
+
+  setRalphInitiatorSession: (session: InitiatorSession | null) => {
+    set({ ralphInitiatorSession: session })
+  },
+
+  setRalphRequirements: (requirements: RequirementsDoc | null) => {
+    set({ ralphRequirements: requirements })
+  },
+
+  setRalphPromptConfig: (config: RalphPromptConfig | null) => {
+    set({ ralphPromptConfig: config })
+  },
+
+  startRalphInitiator: async (projectPath: string) => {
+    set({ isLoading: true, error: null })
+    try {
+      const result = await window.electron.initiator.start(projectPath)
+      if (result.success && result.data) {
+        set({ ralphInitiatorSession: result.data, isLoading: false })
+        return result.data
+      } else {
+        set({ error: result.error || 'Failed to start initiator', isLoading: false })
+        return null
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start initiator'
+      set({ error: message, isLoading: false })
+      return null
+    }
+  },
+
+  startRalphExecution: async (config: RalphOrchestratorConfig) => {
+    set({ isLoading: true, error: null })
+    try {
+      const result = await window.electron.ralph.start(config)
+      if (result.success && result.session) {
+        set({ ralphSession: result.session, isLoading: false })
+        return result.session
+      } else {
+        set({ error: result.error || 'Failed to start Ralph execution', isLoading: false })
+        return null
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to start Ralph execution'
+      set({ error: message, isLoading: false })
+      return null
+    }
+  },
+
+  stopRalphExecution: async (sessionId: string) => {
+    try {
+      const result = await window.electron.ralph.stop(sessionId)
+      if (result.success) {
+        set({ ralphSession: null })
+        return true
+      }
+      return false
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to stop Ralph execution'
+      set({ error: message })
+      return false
+    }
+  },
+
+  resetRalphState: () => {
+    set({
+      ralphSession: null,
+      ralphInitiatorSession: null,
+      ralphRequirements: null,
+      ralphPromptConfig: null
+    })
+  },
+
+  // Ralph Session History Actions
+  loadSessionHistory: async (projectPath?: string) => {
+    try {
+      const result = await window.electron.ralph.listSessions(projectPath)
+      if (result.success && result.sessions) {
+        set({ ralphSessionHistory: result.sessions })
+      }
+    } catch (error) {
+      console.error('[AutonomousStore] Failed to load session history:', error)
+    }
+  },
+
+  saveCurrentSession: async (phase: RalphSessionPhase, taskDescription: string) => {
+    const state = get()
+    if (!state.selectedProject) return null
+
+    const sessionId = state.currentRalphSessionId || `ralph-${Date.now()}`
+    const session: RalphSessionSummary = {
+      id: sessionId,
+      projectPath: state.selectedProject.path,
+      projectName: state.selectedProject.name,
+      phase,
+      status: phase === 'completed' ? 'completed' : 'running',
+      taskDescription,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      featuresTotal: 0,
+      featuresPassed: 0,
+      featuresFailed: 0,
+      promptConfig: state.ralphPromptConfig || undefined
+    }
+
+    try {
+      const result = await window.electron.ralph.saveSession(session)
+      if (result.success) {
+        set((s) => ({
+          currentRalphSessionId: sessionId,
+          ralphSessionHistory: [session, ...s.ralphSessionHistory.filter(h => h.id !== sessionId)]
+        }))
+        return session
+      }
+    } catch (error) {
+      console.error('[AutonomousStore] Failed to save session:', error)
+    }
+    return null
+  },
+
+  updateCurrentSession: async (updates: Partial<RalphSessionSummary>) => {
+    const state = get()
+    if (!state.currentRalphSessionId) return
+
+    const existing = state.ralphSessionHistory.find(s => s.id === state.currentRalphSessionId)
+    if (!existing) return
+
+    const updated: RalphSessionSummary = {
+      ...existing,
+      ...updates,
+      updatedAt: Date.now()
+    }
+
+    try {
+      await window.electron.ralph.saveSession(updated)
+      set((s) => ({
+        ralphSessionHistory: s.ralphSessionHistory.map(h =>
+          h.id === state.currentRalphSessionId ? updated : h
+        )
+      }))
+    } catch (error) {
+      console.error('[AutonomousStore] Failed to update session:', error)
+    }
+  },
+
+  resumeSession: async (sessionId: string) => {
+    const state = get()
+    const session = state.ralphSessionHistory.find(s => s.id === sessionId)
+    if (!session) return false
+
+    // Restore session state
+    set({
+      currentRalphSessionId: sessionId,
+      selectedProject: {
+        path: session.projectPath,
+        name: session.projectName,
+        isNew: false
+      },
+      ralphPromptConfig: session.promptConfig || null,
+      showSessionHistory: false
+    })
+
+    return true
+  },
+
+  deleteSession: async (sessionId: string) => {
+    try {
+      const result = await window.electron.ralph.deleteSession(sessionId)
+      if (result.success) {
+        set((s) => ({
+          ralphSessionHistory: s.ralphSessionHistory.filter(h => h.id !== sessionId),
+          currentRalphSessionId: s.currentRalphSessionId === sessionId ? null : s.currentRalphSessionId
+        }))
+        return true
+      }
+    } catch (error) {
+      console.error('[AutonomousStore] Failed to delete session:', error)
+    }
+    return false
+  },
+
+  setShowSessionHistory: (show: boolean) => {
+    set({ showSessionHistory: show })
+  },
+
+  toggleSessionHistory: () => {
+    set((s) => ({ showSessionHistory: !s.showSessionHistory }))
   },
 
   // Helpers

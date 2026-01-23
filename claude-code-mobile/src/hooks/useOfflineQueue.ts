@@ -29,7 +29,7 @@ export function useOfflineQueue() {
     if (isConnected && offlineQueue.length > 0) {
       processQueue()
     }
-  }, [isConnected])
+  }, [isConnected, offlineQueue.length, processQueue])
 
   /**
    * Queue an action to be processed when online

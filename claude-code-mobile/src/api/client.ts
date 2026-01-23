@@ -57,13 +57,30 @@ class ApiClient {
         body: body ? JSON.stringify(body) : undefined,
       })
 
-      const json = await response.json()
+      // Check content-type before parsing JSON
+      const contentType = response.headers.get('content-type')
+      let json: Record<string, unknown> | undefined
+
+      if (contentType?.includes('application/json')) {
+        try {
+          json = await response.json()
+        } catch {
+          return {
+            success: false,
+            error: 'Invalid JSON response from server',
+          }
+        }
+      }
 
       if (!response.ok) {
         return {
           success: false,
-          error: json.error || `HTTP ${response.status}`,
+          error: json?.error as string || `HTTP ${response.status}`,
         }
+      }
+
+      if (!json) {
+        return { success: true, data: undefined as T }
       }
 
       // Server returns { success: true, sessions/data/etc: [...] }
@@ -72,7 +89,11 @@ class ApiClient {
         // Extract the data field - could be 'sessions', 'data', 'session', etc.
         const dataKey = Object.keys(json).find(k => k !== 'success' && k !== 'error')
         const data = dataKey ? json[dataKey] : json
-        return { success: json.success, data, error: json.error }
+        return {
+          success: Boolean(json.success),
+          data: data as T,
+          error: json.error as string | undefined
+        }
       }
 
       return { success: true, data: json as T }
@@ -118,9 +139,9 @@ class ApiClient {
 
       try {
         const wsUrl = this.baseUrl.replace(/^http/, 'ws')
-        const fullUrl = `${wsUrl}?token=${encodeURIComponent(this.authToken)}`
-
-        this.ws = new WebSocket(fullUrl)
+        // Use WebSocket subprotocol for auth instead of query parameter
+        // This prevents token exposure in server logs and browser history
+        this.ws = new WebSocket(wsUrl, [`auth-${this.authToken}`])
 
         this.ws.onopen = () => {
           console.log('[ApiClient] WebSocket connected')
@@ -322,6 +343,10 @@ class ApiClient {
     },
 
     get: (projectPath: string): Promise<ApiResponse<{ path: string; name: string; worktrees: string[] }>> => {
+      // Validate projectPath to prevent path traversal
+      if (!projectPath || projectPath.includes('..') || /[\x00-\x1f]/.test(projectPath)) {
+        return Promise.resolve({ success: false, error: 'Invalid project path' })
+      }
       return this.request('GET', `/api/projects/${encodeURIComponent(projectPath)}`)
     },
   }
@@ -332,10 +357,18 @@ class ApiClient {
 
   files = {
     getTree: (projectPath: string, depth = 3): Promise<ApiResponse<FileTreeNode[]>> => {
+      // Validate projectPath to prevent path traversal
+      if (!projectPath || projectPath.includes('..') || /[\x00-\x1f]/.test(projectPath)) {
+        return Promise.resolve({ success: false, error: 'Invalid project path' })
+      }
       return this.request('GET', `/api/files/read-dir?path=${encodeURIComponent(projectPath)}&depth=${depth}`)
     },
 
     getContent: (filePath: string): Promise<ApiResponse<{ content: string; language: string }>> => {
+      // Validate filePath to prevent path traversal
+      if (!filePath || filePath.includes('..') || /[\x00-\x1f]/.test(filePath)) {
+        return Promise.resolve({ success: false, error: 'Invalid file path' })
+      }
       return this.request('GET', `/api/files/read?path=${encodeURIComponent(filePath)}`)
     },
   }
@@ -364,10 +397,15 @@ class ApiClient {
     connectTerminal: (sessionId: string): WebSocket | null => {
       if (!this.baseUrl || !this.authToken) return null
 
-      const wsUrl = this.baseUrl.replace(/^http/, 'ws')
-      const fullUrl = `${wsUrl}/ws/terminal/${sessionId}?token=${encodeURIComponent(this.authToken)}`
+      // Validate sessionId to prevent injection
+      if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+        console.error('[ApiClient] Invalid session ID format')
+        return null
+      }
 
-      return new WebSocket(fullUrl)
+      const wsUrl = this.baseUrl.replace(/^http/, 'ws')
+      // Use WebSocket subprotocol for auth instead of query parameter
+      return new WebSocket(`${wsUrl}/ws/terminal/${sessionId}`, [`auth-${this.authToken}`])
     },
   }
 

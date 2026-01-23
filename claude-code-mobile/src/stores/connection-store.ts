@@ -11,7 +11,7 @@ const storage = {
     }
     // Dynamic import for native only
     const SecureStore = await import('expo-secure-store')
-    return storage.getItemAsync(key)
+    return SecureStore.getItemAsync(key)
   },
   async setItemAsync(key: string, value: string): Promise<void> {
     if (Platform.OS === 'web') {
@@ -19,7 +19,7 @@ const storage = {
       return
     }
     const SecureStore = await import('expo-secure-store')
-    return storage.setItemAsync(key, value)
+    return SecureStore.setItemAsync(key, value)
   },
   async deleteItemAsync(key: string): Promise<void> {
     if (Platform.OS === 'web') {
@@ -27,7 +27,7 @@ const storage = {
       return
     }
     const SecureStore = await import('expo-secure-store')
-    return storage.deleteItemAsync(key)
+    return SecureStore.deleteItemAsync(key)
   }
 }
 

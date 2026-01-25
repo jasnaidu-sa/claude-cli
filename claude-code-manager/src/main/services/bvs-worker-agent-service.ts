@@ -596,6 +596,29 @@ export class BvsWorkerAgentService extends EventEmitter {
   }
 
   /**
+   * RALPH-005: Model Selection Logic
+   *
+   * Selects appropriate model based on complexity:
+   * - Haiku: Simple subtasks (≤4 files, straightforward changes)
+   * - Sonnet: Complex subtasks (>4 files, or complex logic)
+   *
+   * Cost optimization while maintaining quality.
+   */
+  private selectModelForSubtask(subtask: BvsSubtask, baseComplexity: number): BvsModelId {
+    // Simple heuristic: file count + base complexity
+    const fileCount = subtask.files.length
+    const subtaskComplexity = baseComplexity + fileCount
+
+    // Haiku for simple subtasks (fast, cheap)
+    if (subtaskComplexity <= 4) {
+      return 'haiku'
+    }
+
+    // Sonnet for complex subtasks (slower, more capable)
+    return 'sonnet'
+  }
+
+  /**
    * RALPH-003: Execute Section with Subtask Loop
    *
    * NEW execution flow: Fresh context per subtask instead of single 15-turn session.
@@ -640,6 +663,10 @@ export class BvsWorkerAgentService extends EventEmitter {
         const subtask = subtasks[i]
         console.log(`[BvsWorker:${workerId}] Executing subtask ${i + 1}/${subtasks.length}: ${subtask.name}`)
 
+        // RALPH-005: Select model based on subtask complexity
+        const subtaskModel = this.selectModelForSubtask(subtask, config.complexity.score)
+        console.log(`[BvsWorker:${workerId}] Selected model: ${subtaskModel} (base complexity: ${config.complexity.score}, files: ${subtask.files.length})`)
+
         // Mark subtask as in progress
         subtask.status = 'in_progress'
         subtask.startedAt = Date.now()
@@ -651,7 +678,7 @@ export class BvsWorkerAgentService extends EventEmitter {
             sectionId,
             subtask,
             worktreePath,
-            config.model,
+            subtaskModel, // Use selected model, not base config model
             projectContext
           )
 
@@ -660,7 +687,10 @@ export class BvsWorkerAgentService extends EventEmitter {
           subtask.turnsUsed = subtaskResult.turnsUsed
           subtask.completedAt = Date.now()
           subtask.duration = subtask.completedAt - subtask.startedAt
-          subtask.metrics = subtaskResult.metrics
+          subtask.metrics = {
+            ...subtaskResult.metrics,
+            model: subtaskModel, // Track actual model used
+          }
 
           // Aggregate results
           result.turnsUsed += subtaskResult.turnsUsed

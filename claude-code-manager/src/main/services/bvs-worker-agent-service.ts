@@ -596,7 +596,290 @@ export class BvsWorkerAgentService extends EventEmitter {
   }
 
   /**
+   * RALPH-003: Execute Section with Subtask Loop
+   *
+   * NEW execution flow: Fresh context per subtask instead of single 15-turn session.
+   * Each subtask gets its own Agent SDK instance with 5 turns max.
+   *
+   * Benefits:
+   * - Prevents context rot (AI degradation in long sessions)
+   * - Better cost tracking per atomic unit
+   * - Easier to retry individual subtasks
+   * - Cleaner git history (commit per subtask)
+   */
+  async executeSectionWithSubtasks(config: WorkerConfig): Promise<WorkerResult> {
+    const startedAt = Date.now()
+    const { workerId, sectionId, section, worktreePath, projectContext } = config
+
+    console.log(`[BvsWorker:${workerId}] Starting section with subtasks: ${section.name}`)
+
+    const result: WorkerResult = {
+      workerId,
+      sectionId,
+      status: 'failed',
+      turnsUsed: 0,
+      filesChanged: [],
+      qualityGatesPassed: false,
+      errors: [],
+      retryCount: 0,
+      startedAt,
+      completedAt: 0,
+      commits: [],
+    }
+
+    try {
+      // Step 1: Identify subtasks
+      const subtasks = this.identifySubtasks(section)
+      console.log(`[BvsWorker:${workerId}] Identified ${subtasks.length} subtasks`)
+
+      // Update section with subtasks
+      section.subtasks = subtasks
+
+      // Step 2: Execute each subtask with fresh context
+      for (let i = 0; i < subtasks.length; i++) {
+        const subtask = subtasks[i]
+        console.log(`[BvsWorker:${workerId}] Executing subtask ${i + 1}/${subtasks.length}: ${subtask.name}`)
+
+        // Mark subtask as in progress
+        subtask.status = 'in_progress'
+        subtask.startedAt = Date.now()
+
+        try {
+          // Execute subtask (fresh Agent SDK session, 5 turns max)
+          const subtaskResult = await this.executeSubtask(
+            workerId,
+            sectionId,
+            subtask,
+            worktreePath,
+            config.model,
+            projectContext
+          )
+
+          // Update subtask with result
+          subtask.status = subtaskResult.success ? 'done' : 'failed'
+          subtask.turnsUsed = subtaskResult.turnsUsed
+          subtask.completedAt = Date.now()
+          subtask.duration = subtask.completedAt - subtask.startedAt
+          subtask.metrics = subtaskResult.metrics
+
+          // Aggregate results
+          result.turnsUsed += subtaskResult.turnsUsed
+          result.filesChanged.push(...subtaskResult.filesChanged)
+
+          if (subtaskResult.commitHash) {
+            result.commits.push(subtaskResult.commitHash)
+            subtask.commitSha = subtaskResult.commitHash
+          }
+
+          if (!subtaskResult.success) {
+            result.errors.push(...subtaskResult.errors)
+            // Continue with other subtasks even if one fails
+          }
+
+        } catch (error) {
+          subtask.status = 'failed'
+          subtask.error = error instanceof Error ? error.message : String(error)
+          result.errors.push(`Subtask ${subtask.name} failed: ${subtask.error}`)
+        }
+      }
+
+      // Step 3: Determine overall status
+      const allCompleted = subtasks.every(st => st.status === 'done')
+      const anyFailed = subtasks.some(st => st.status === 'failed')
+
+      if (allCompleted) {
+        result.status = 'completed'
+        result.qualityGatesPassed = true
+      } else if (anyFailed) {
+        result.status = 'failed'
+      }
+
+    } catch (error) {
+      console.error(`[BvsWorker:${workerId}] Section execution error:`, error)
+      result.status = 'failed'
+      result.errors.push(error instanceof Error ? error.message : String(error))
+    } finally {
+      result.completedAt = Date.now()
+      this.activeWorkers.delete(workerId)
+    }
+
+    return result
+  }
+
+  /**
+   * RALPH-003: Execute Single Subtask
+   *
+   * Runs ONE subtask with fresh Agent SDK context.
+   * Max 5 turns instead of 15 for entire section.
+   */
+  private async executeSubtask(
+    workerId: string,
+    sectionId: string,
+    subtask: BvsSubtask,
+    worktreePath: string,
+    model: BvsModelId,
+    projectContext: ProjectContext
+  ): Promise<{
+    success: boolean
+    turnsUsed: number
+    filesChanged: string[]
+    commitHash?: string
+    errors: string[]
+    metrics?: any
+  }> {
+    const sdk = await getSDK()
+    const filesChanged: string[] = []
+    const errors: string[] = []
+    let turnsUsed = 0
+
+    // Build subtask-specific prompt
+    const taskPrompt = this.buildSubtaskPrompt(subtask, projectContext)
+
+    const options = {
+      maxTurns: subtask.maxTurns,
+      cwd: worktreePath,
+      permissionMode: 'default' as const,
+      tools: WORKER_TOOLS,
+    }
+
+    // Create message generator
+    async function* generateMessages() {
+      yield {
+        type: 'user' as const,
+        message: {
+          role: 'user' as const,
+          content: taskPrompt
+        },
+        parent_tool_use_id: null,
+        session_id: `${workerId}-${subtask.id}`
+      }
+    }
+
+    // Execute query
+    const queryResult = sdk.query({
+      prompt: generateMessages(),
+      options,
+    })
+
+    // Process streaming response
+    let isComplete = false
+    for await (const message of queryResult) {
+      if (message.type === 'tool_use') {
+        turnsUsed++
+        const toolName = (message as Record<string, unknown>).name as string || 'unknown'
+        const toolInput = (message as Record<string, unknown>).input as Record<string, unknown> || {}
+
+        // Track file changes
+        if ((toolName === 'write_file' || toolName === 'edit_file')) {
+          const filePath = toolInput.path as string
+          if (filePath && !filesChanged.includes(filePath)) {
+            filesChanged.push(filePath)
+          }
+        }
+
+        // Check for completion
+        if (toolName === 'mark_complete') {
+          isComplete = true
+        }
+      }
+    }
+
+    // RALPH-007: Commit subtask changes
+    let commitHash: string | undefined
+    if (filesChanged.length > 0) {
+      commitHash = await this.commitSubtask(worktreePath, subtask, workerId)
+    }
+
+    return {
+      success: isComplete && errors.length === 0,
+      turnsUsed,
+      filesChanged,
+      commitHash,
+      errors,
+      metrics: {
+        turnsUsed,
+        tokensInput: 0, // TODO: RALPH-008
+        tokensOutput: 0, // TODO: RALPH-008
+        costUsd: 0, // TODO: RALPH-008
+        model,
+        filesChanged: filesChanged.length,
+        linesAdded: 0, // TODO
+        linesRemoved: 0, // TODO
+      }
+    }
+  }
+
+  /**
+   * Build subtask-specific prompt
+   */
+  private buildSubtaskPrompt(subtask: BvsSubtask, projectContext: ProjectContext): string {
+    return `
+You are implementing a subtask as part of a larger feature.
+
+SUBTASK: ${subtask.name}
+DESCRIPTION: ${subtask.description}
+
+FILES TO MODIFY:
+${subtask.files.map(f => `- ${f}`).join('\n')}
+
+PROJECT CONTEXT:
+- Framework: ${projectContext.framework}
+- Database: ${projectContext.database}
+- Patterns: ${projectContext.patterns.join(', ')}
+
+IMPORTANT:
+- You have ${subtask.maxTurns} turns to complete this subtask
+- Focus ONLY on the files listed above
+- When done, call mark_complete()
+- Previous subtasks in this section have already been completed
+- Keep the implementation focused and atomic
+
+Start implementing now.
+`.trim()
+  }
+
+  /**
+   * RALPH-007: Commit Subtask Changes
+   */
+  private async commitSubtask(
+    worktreePath: string,
+    subtask: BvsSubtask,
+    workerId: string
+  ): Promise<string | undefined> {
+    try {
+      const commitMessage = `feat(${subtask.sectionId}): ${subtask.name}
+
+${subtask.description}
+
+Files changed:
+${subtask.files.map(f => `- ${f}`).join('\n')}
+
+Subtask: ${subtask.id}
+Worker: ${workerId}
+
+Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`
+
+      const { stdout } = await execFile('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: worktreePath
+      })
+
+      await execFile('git', ['add', '.'], { cwd: worktreePath })
+      await execFile('git', ['commit', '-m', commitMessage], { cwd: worktreePath })
+
+      const { stdout: newHash } = await execFile('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: worktreePath
+      })
+
+      return newHash.trim()
+    } catch (error) {
+      console.error(`[BvsWorker:${workerId}] Failed to commit subtask:`, error)
+      return undefined
+    }
+  }
+
+  /**
    * Execute a section with the configured model and turn limit
+   * (Legacy method - use executeSectionWithSubtasks for Ralph Loop)
    */
   async executeSection(config: WorkerConfig): Promise<WorkerResult> {
     const startedAt = Date.now()

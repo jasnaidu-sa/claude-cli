@@ -373,6 +373,83 @@ export interface ElectronAPI {
     stop: () => Promise<{ success: boolean; error?: string }>
     status: () => Promise<ApiServerStatusResult>
   }
+
+  // BVS (Bounded Verified Sections) Planning V2
+  bvsPlanning: {
+    // Session management
+    startSession: (projectPath: string) => Promise<BvsPlanningStartResult>
+    getSession: (sessionId: string) => Promise<{ success: boolean; session?: BvsPlanningSessionV2 }>
+    clearSession: (projectPath: string) => Promise<{ success: boolean }>
+
+    // Message handling
+    sendMessage: (sessionId: string, message: string) => Promise<BvsPlanningMessageResult>
+
+    // Discovery actions (question/option button clicks)
+    answerQuestions: (sessionId: string, answers: Record<string, string>) => Promise<BvsPlanningMessageResult>
+    selectOption: (sessionId: string, optionId: string) => Promise<BvsPlanningMessageResult>
+    approvePlan: (sessionId: string) => Promise<BvsPlanningMessageResult>
+    requestChanges: (sessionId: string, feedback: string) => Promise<BvsPlanningMessageResult>
+
+    // Project management
+    listProjects: (projectPath: string) => Promise<{ success: boolean; projects?: BvsProjectItem[]; error?: string }>
+    getProject: (projectPath: string, projectId: string) => Promise<{ success: boolean; project?: BvsProjectItem; error?: string }>
+    updateProject: (projectPath: string, projectId: string, updates: { status?: string; selectedSections?: string[] }) => Promise<{ success: boolean; project?: BvsProjectItem; error?: string }>
+    deleteProject: (projectPath: string, projectId: string, archive?: boolean) => Promise<{ success: boolean; error?: string }>
+    resumeProject: (projectPath: string, projectId: string) => Promise<{ success: boolean; session?: BvsPlanningSessionV2; error?: string }>
+    loadPlan: (projectPath: string, projectId?: string) => Promise<{ success: boolean; plan?: BvsExecutionPlanItem; error?: string }>
+
+    // Plan revision
+    analyzePlan: (projectPath: string, projectId: string) => Promise<{ success: boolean; issues?: unknown[]; error?: string }>
+    revisePlan: (request: {
+      projectPath: string
+      projectId: string
+      message: string
+      issues: unknown[]
+      conversationHistory: Array<{ role: string; content: string }>
+    }) => Promise<{ success: boolean; response?: unknown; error?: string }>
+    applyPlanChanges: (projectPath: string, projectId: string, changes: unknown[]) => Promise<{ success: boolean; error?: string }>
+
+    // Execution management
+    startExecution: (projectPath: string, projectId: string) => Promise<{ success: boolean; sessionId?: string; error?: string }>
+    pauseExecution: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    resumeExecution: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    getExecutionSession: (sessionId: string) => Promise<{ success: boolean; session?: BvsSessionData }>
+    listExecutionSessions: () => Promise<{ success: boolean; sessions?: BvsSessionData[] }>
+
+    // Parallel execution with merge points
+    startParallelExecution: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    startParallelExecutionFromProject: (projectPath: string, projectId: string) => Promise<{ success: boolean; sessionId?: string; error?: string }>
+    analyzeComplexity: (projectPath: string, projectId: string) => Promise<{
+      success: boolean
+      analyses?: Array<{
+        sectionId: string
+        sectionName: string
+        score: number
+        model: string
+        maxTurns: number
+        reasoning: string[]
+        riskFlags: string[]
+      }>
+      distribution?: { haiku: number; sonnet: number; totalTurns: number }
+      error?: string
+    }>
+
+    // Ralph Loop - Cost tracking and subtask progress (RALPH-004, RALPH-006)
+    getSessionCost: (sessionId: string) => Promise<{ success: boolean; cost?: number; error?: string }>
+    getSubtaskProgress: (sessionId: string, sectionId: string) => Promise<{ success: boolean; subtasks?: unknown[]; error?: string }>
+    approveContinue: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+
+    // Streaming event listeners
+    onToolStart: (callback: (data: BvsToolStartData) => void) => () => void
+    onToolResult: (callback: (data: BvsToolResultData) => void) => () => void
+    onResponseChunk: (callback: (data: BvsResponseChunkData) => void) => () => void
+    onResponseComplete: (callback: (data: BvsResponseCompleteData) => void) => () => void
+    onQuestionsReady: (callback: (data: BvsQuestionsReadyData) => void) => () => void
+    onOptionsReady: (callback: (data: BvsOptionsReadyData) => void) => () => void
+    onSectionsReady: (callback: (data: BvsSectionsReadyData) => void) => () => void
+    onPlanWritten: (callback: (data: BvsPlanWrittenData) => void) => () => void
+    onError: (callback: (data: BvsErrorData) => void) => () => void
+  }
 }
 
 // API Server types
@@ -400,6 +477,192 @@ export interface ApiServerStatusResult {
     authToken?: string
   }
   error?: string
+}
+
+// BVS Planning V2 types
+
+export interface BvsPlanningQuestionOption {
+  id: string
+  label: string
+  description: string
+}
+
+export interface BvsPlanningQuestion {
+  id: string
+  category: string
+  question: string
+  options: BvsPlanningQuestionOption[]
+}
+
+export interface BvsPlanningOption {
+  id: string
+  name: string
+  description: string
+  recommended?: boolean
+  sectionCount: number
+  complexity: 'low' | 'medium' | 'high'
+}
+
+export interface BvsPlannedSection {
+  id: string
+  name: string
+  description: string
+  files: Array<{ path: string; action: 'create' | 'modify' | 'delete' }>
+  dependencies: string[]
+  successCriteria: string[]
+}
+
+export interface BvsPlanningMessageV2 {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  timestamp: number
+  questions?: BvsPlanningQuestion[]
+  options?: BvsPlanningOption[]
+  sections?: BvsPlannedSection[]
+  toolCalls?: Array<{
+    name: string
+    input: Record<string, unknown>
+    result?: string
+  }>
+}
+
+export interface BvsPlanningSessionV2 {
+  id: string
+  projectPath: string
+  messages: BvsPlanningMessageV2[]
+  phase: 'exploring' | 'options' | 'planning' | 'approval' | 'complete'
+  selectedOption?: string
+  proposedSections?: BvsPlannedSection[]
+  sdkSessionId?: string
+  createdAt: number
+  updatedAt: number
+  totalCostUsd?: number
+}
+
+export interface BvsPlanningStartResult {
+  success: boolean
+  session?: BvsPlanningSessionV2
+  error?: string
+}
+
+export interface BvsPlanningMessageResult {
+  success: boolean
+  response?: BvsPlanningMessageV2
+  session?: BvsPlanningSessionV2
+  phase?: string
+  error?: string
+}
+
+// BVS Project types
+export type BvsProjectStatus =
+  | 'planning'      // Still in planning chat
+  | 'ready'         // Plan approved, waiting to start execution
+  | 'in_progress'   // Execution running
+  | 'paused'        // Execution paused by user
+  | 'completed'     // All sections done
+  | 'cancelled'     // User cancelled
+
+export interface BvsProjectItem {
+  id: string
+  name: string
+  slug: string
+  description: string
+  status: BvsProjectStatus
+  createdAt: number
+  updatedAt: number
+  planApprovedAt?: number
+  executionStartedAt?: number
+  completedAt?: number
+  sectionsTotal: number
+  sectionsCompleted: number
+  sectionsFailed: number
+  selectedSections?: string[]
+  projectPath: string
+  bvsProjectDir: string
+}
+
+export interface BvsExecutionPlanItem {
+  id: string
+  projectPath: string
+  createdAt: number
+  approvedAt?: number
+  sections: BvsPlannedSection[]
+}
+
+// BVS Session data (from orchestrator)
+export interface BvsSessionData {
+  id: string
+  projectPath: string
+  projectName: string
+  projectId?: string
+  phase: string
+  status: string
+  sectionsTotal: number
+  sectionsCompleted: number
+  sectionsFailed: number
+  overallProgress: number
+  startedAt?: number
+  completedAt?: number
+  plan?: {
+    sections: Array<{
+      id: string
+      name: string
+      status: string
+      progress: number
+      workerId?: string
+      currentStep?: string
+    }>
+  }
+}
+
+// Streaming event data types
+export interface BvsToolStartData {
+  sessionId: string
+  tool: string
+  input: Record<string, unknown>
+}
+
+export interface BvsToolResultData {
+  sessionId: string
+  tool: string
+  result: string
+}
+
+export interface BvsResponseChunkData {
+  sessionId: string
+  chunk: string
+  fullContent: string
+}
+
+export interface BvsResponseCompleteData {
+  sessionId: string
+  message: BvsPlanningMessageV2
+}
+
+export interface BvsQuestionsReadyData {
+  sessionId: string
+  questions: BvsPlanningQuestion[]
+}
+
+export interface BvsOptionsReadyData {
+  sessionId: string
+  options: BvsPlanningOption[]
+}
+
+export interface BvsSectionsReadyData {
+  sessionId: string
+  sections: BvsPlannedSection[]
+}
+
+export interface BvsPlanWrittenData {
+  sessionId: string
+  planPath: string
+}
+
+export interface BvsErrorData {
+  sessionId: string
+  error: string
 }
 
 // Sync progress data types
@@ -1214,6 +1477,133 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('api-server:stop'),
     status: () =>
       ipcRenderer.invoke('api-server:status')
+  },
+
+  // BVS (Bounded Verified Sections) Planning V2
+  bvsPlanning: {
+    // Session management
+    startSession: (projectPath: string) =>
+      ipcRenderer.invoke('bvs:start-planning', projectPath),
+    getSession: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:get-planning-session', sessionId),
+    clearSession: (projectPath: string) =>
+      ipcRenderer.invoke('bvs:clear-planning-session', projectPath),
+
+    // Message handling
+    sendMessage: (sessionId: string, message: string) =>
+      ipcRenderer.invoke('bvs:send-planning-message', sessionId, message),
+
+    // Discovery actions (question/option button clicks)
+    answerQuestions: (sessionId: string, answers: Record<string, string>) =>
+      ipcRenderer.invoke('bvs:answer-questions', sessionId, answers),
+    selectOption: (sessionId: string, optionId: string) =>
+      ipcRenderer.invoke('bvs:select-option', sessionId, optionId),
+    approvePlan: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:planning-approve', sessionId),
+    requestChanges: (sessionId: string, feedback: string) =>
+      ipcRenderer.invoke('bvs:request-changes', sessionId, feedback),
+
+    // Project management
+    listProjects: (projectPath: string) =>
+      ipcRenderer.invoke('bvs:list-projects', projectPath),
+    getProject: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:get-project', projectPath, projectId),
+    updateProject: (projectPath: string, projectId: string, updates: { status?: string; selectedSections?: string[] }) =>
+      ipcRenderer.invoke('bvs:update-project', projectPath, projectId, updates),
+    deleteProject: (projectPath: string, projectId: string, archive?: boolean) =>
+      ipcRenderer.invoke('bvs:delete-project', projectPath, projectId, archive),
+    resumeProject: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:resume-project', projectPath, projectId),
+    loadPlan: (projectPath: string, projectId?: string) =>
+      ipcRenderer.invoke('bvs:load-plan', projectPath, projectId),
+
+    // Plan revision
+    analyzePlan: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:analyze-plan', projectPath, projectId),
+    revisePlan: (request: {
+      projectPath: string
+      projectId: string
+      message: string
+      issues: any[]
+      conversationHistory: Array<{ role: string; content: string }>
+    }) => ipcRenderer.invoke('bvs:revise-plan', request),
+    applyPlanChanges: (projectPath: string, projectId: string, changes: any[]) =>
+      ipcRenderer.invoke('bvs:apply-plan-changes', projectPath, projectId, changes),
+
+    // Execution management
+    startExecution: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:start-execution-from-project', projectPath, projectId),
+    pauseExecution: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:pause-execution', sessionId),
+    resumeExecution: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:resume-execution', sessionId),
+    getExecutionSession: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:get-session', sessionId),
+    listExecutionSessions: () =>
+      ipcRenderer.invoke('bvs:list-sessions'),
+
+    // Parallel execution with merge points
+    startParallelExecution: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:start-parallel-execution', sessionId),
+    startParallelExecutionFromProject: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:start-parallel-execution-from-project', projectPath, projectId),
+    analyzeComplexity: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:analyze-complexity', projectPath, projectId),
+
+    // Ralph Loop - Cost tracking and subtask progress (RALPH-004, RALPH-006)
+    getSessionCost: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:get-session-cost', sessionId),
+    getSubtaskProgress: (sessionId: string, sectionId: string) =>
+      ipcRenderer.invoke('bvs:get-subtask-progress', sessionId, sectionId),
+    approveContinue: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:approve-continue', sessionId),
+
+    // Streaming event listeners
+    onToolStart: (callback: (data: BvsToolStartData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsToolStartData) => callback(data)
+      ipcRenderer.on('bvs-planning:tool-start', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:tool-start', handler)
+    },
+    onToolResult: (callback: (data: BvsToolResultData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsToolResultData) => callback(data)
+      ipcRenderer.on('bvs-planning:tool-result', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:tool-result', handler)
+    },
+    onResponseChunk: (callback: (data: BvsResponseChunkData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsResponseChunkData) => callback(data)
+      ipcRenderer.on('bvs-planning:response-chunk', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:response-chunk', handler)
+    },
+    onResponseComplete: (callback: (data: BvsResponseCompleteData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsResponseCompleteData) => callback(data)
+      ipcRenderer.on('bvs-planning:response-complete', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:response-complete', handler)
+    },
+    onQuestionsReady: (callback: (data: BvsQuestionsReadyData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsQuestionsReadyData) => callback(data)
+      ipcRenderer.on('bvs-planning:questions-ready', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:questions-ready', handler)
+    },
+    onOptionsReady: (callback: (data: BvsOptionsReadyData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsOptionsReadyData) => callback(data)
+      ipcRenderer.on('bvs-planning:options-ready', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:options-ready', handler)
+    },
+    onSectionsReady: (callback: (data: BvsSectionsReadyData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsSectionsReadyData) => callback(data)
+      ipcRenderer.on('bvs-planning:sections-ready', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:sections-ready', handler)
+    },
+    onPlanWritten: (callback: (data: BvsPlanWrittenData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsPlanWrittenData) => callback(data)
+      ipcRenderer.on('bvs-planning:plan-written', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:plan-written', handler)
+    },
+    onError: (callback: (data: BvsErrorData) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: BvsErrorData) => callback(data)
+      ipcRenderer.on('bvs-planning:error', handler)
+      return () => ipcRenderer.removeListener('bvs-planning:error', handler)
+    }
   }
 }
 

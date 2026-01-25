@@ -349,6 +349,14 @@ export interface BvsTestResult {
   }[]
 }
 
+export interface BvsBuildResult {
+  passed: boolean
+  duration: number
+  command: string
+  output: string
+  errors: string[]  // Build errors extracted from output
+}
+
 export interface BvsE2EResult {
   passed: boolean
   url: string
@@ -372,6 +380,7 @@ export interface BvsQualityGateResult {
   typeCheck: BvsTypeCheckResult
   lint: BvsLintResult
   tests: BvsTestResult
+  build?: BvsBuildResult  // Ralph Loop: Build verification
   e2e: BvsE2EResult[]
   totalDuration: number
   completedAt: number
@@ -766,6 +775,7 @@ export interface BvsConfig {
     lint: boolean
     typecheck: boolean
     tests: boolean
+    build: boolean          // Ralph Loop: Build verification
     e2eTests: boolean
     maxFixAttempts: number  // Default: 3
     allowSkip: boolean
@@ -817,6 +827,7 @@ export const DEFAULT_BVS_CONFIG: BvsConfig = {
     lint: true,
     typecheck: true,
     tests: true,
+    build: true,       // Ralph Loop: Build verification enabled by default
     e2eTests: true,
     maxFixAttempts: 3,
     allowSkip: false,

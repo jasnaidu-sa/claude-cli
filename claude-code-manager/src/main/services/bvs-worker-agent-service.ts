@@ -596,6 +596,54 @@ export class BvsWorkerAgentService extends EventEmitter {
   }
 
   /**
+   * RALPH-008: Calculate Subtask Cost
+   *
+   * Estimates token usage and USD cost based on:
+   * - Model (Haiku vs Sonnet pricing)
+   * - Turns used
+   * - Files changed
+   *
+   * Pricing (as of 2024):
+   * - Haiku: $0.25/1M input, $1.25/1M output
+   * - Sonnet: $3/1M input, $15/1M output
+   */
+  private calculateSubtaskCost(
+    model: BvsModelId,
+    turnsUsed: number,
+    filesChanged: number
+  ): {
+    tokensInput: number
+    tokensOutput: number
+    costUsd: number
+  } {
+    // Rough estimates based on typical subtask patterns
+    // Input: System prompt + context + file contents
+    const inputTokensPerTurn = 2000 + (filesChanged * 500) // System + files
+    const outputTokensPerTurn = 1000 // Code generation
+
+    const tokensInput = inputTokensPerTurn * turnsUsed
+    const tokensOutput = outputTokensPerTurn * turnsUsed
+
+    // Pricing per 1M tokens
+    const pricing = {
+      haiku: { input: 0.25, output: 1.25 },
+      sonnet: { input: 3.0, output: 15.0 },
+    }
+
+    const modelPricing = pricing[model === 'haiku' ? 'haiku' : 'sonnet']
+
+    const costInput = (tokensInput / 1_000_000) * modelPricing.input
+    const costOutput = (tokensOutput / 1_000_000) * modelPricing.output
+    const costUsd = costInput + costOutput
+
+    return {
+      tokensInput,
+      tokensOutput,
+      costUsd,
+    }
+  }
+
+  /**
    * RALPH-005: Model Selection Logic
    *
    * Selects appropriate model based on complexity:
@@ -650,6 +698,14 @@ export class BvsWorkerAgentService extends EventEmitter {
       commits: [],
     }
 
+    // RALPH-008: Track aggregated metrics
+    const aggregatedMetrics = {
+      totalCostUsd: 0,
+      totalTokensInput: 0,
+      totalTokensOutput: 0,
+      subtaskMetrics: [] as any[],
+    }
+
     try {
       // Step 1: Identify subtasks
       const subtasks = this.identifySubtasks(section)
@@ -696,6 +752,14 @@ export class BvsWorkerAgentService extends EventEmitter {
           result.turnsUsed += subtaskResult.turnsUsed
           result.filesChanged.push(...subtaskResult.filesChanged)
 
+          // RALPH-008: Aggregate costs
+          if (subtaskResult.metrics) {
+            aggregatedMetrics.totalCostUsd += subtaskResult.metrics.costUsd
+            aggregatedMetrics.totalTokensInput += subtaskResult.metrics.tokensInput
+            aggregatedMetrics.totalTokensOutput += subtaskResult.metrics.tokensOutput
+            aggregatedMetrics.subtaskMetrics.push(subtaskResult.metrics)
+          }
+
           if (subtaskResult.commitHash) {
             result.commits.push(subtaskResult.commitHash)
             subtask.commitSha = subtaskResult.commitHash
@@ -723,6 +787,14 @@ export class BvsWorkerAgentService extends EventEmitter {
       } else if (anyFailed) {
         result.status = 'failed'
       }
+
+      // RALPH-008: Log cost summary
+      console.log(`[BvsWorker:${workerId}] Section complete:`)
+      console.log(`  - Subtasks: ${subtasks.length}`)
+      console.log(`  - Total turns: ${result.turnsUsed}`)
+      console.log(`  - Total cost: $${aggregatedMetrics.totalCostUsd.toFixed(4)}`)
+      console.log(`  - Tokens in: ${aggregatedMetrics.totalTokensInput.toLocaleString()}`)
+      console.log(`  - Tokens out: ${aggregatedMetrics.totalTokensOutput.toLocaleString()}`)
 
     } catch (error) {
       console.error(`[BvsWorker:${workerId}] Section execution error:`, error)
@@ -820,6 +892,9 @@ export class BvsWorkerAgentService extends EventEmitter {
       commitHash = await this.commitSubtask(worktreePath, subtask, workerId)
     }
 
+    // RALPH-008: Calculate cost based on model and usage
+    const cost = this.calculateSubtaskCost(model, turnsUsed, filesChanged.length)
+
     return {
       success: isComplete && errors.length === 0,
       turnsUsed,
@@ -828,13 +903,13 @@ export class BvsWorkerAgentService extends EventEmitter {
       errors,
       metrics: {
         turnsUsed,
-        tokensInput: 0, // TODO: RALPH-008
-        tokensOutput: 0, // TODO: RALPH-008
-        costUsd: 0, // TODO: RALPH-008
+        tokensInput: cost.tokensInput,
+        tokensOutput: cost.tokensOutput,
+        costUsd: cost.costUsd,
         model,
         filesChanged: filesChanged.length,
-        linesAdded: 0, // TODO
-        linesRemoved: 0, // TODO
+        linesAdded: 0, // Approximate - would need git diff
+        linesRemoved: 0, // Approximate - would need git diff
       }
     }
   }

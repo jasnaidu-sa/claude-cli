@@ -176,6 +176,56 @@ export class BvsOrchestratorService extends EventEmitter {
   }
 
   /**
+   * RALPH-012: Check if should pause for user approval
+   *
+   * Execution modes:
+   * - ATTENDED_SINGLE: Pause after EACH subtask
+   * - ATTENDED_LEVEL: Pause after each parallel LEVEL completes
+   * - SEMI_ATTENDED: Pause only if issue detected
+   * - UNATTENDED: No pauses, full automation
+   */
+  private async shouldPauseForApproval(
+    sessionId: string,
+    context: 'subtask' | 'level' | 'issue',
+    details?: {
+      sectionId?: string
+      subtaskId?: string
+      level?: number
+      issue?: string
+    }
+  ): Promise<boolean> {
+    const mode = this.executionConfig.mode
+
+    // UNATTENDED: Never pause
+    if (mode === 'UNATTENDED') {
+      return false
+    }
+
+    // ATTENDED_SINGLE: Pause after every subtask
+    if (mode === 'ATTENDED_SINGLE' && context === 'subtask') {
+      console.log(`[BvsOrchestrator] Pausing for approval (ATTENDED_SINGLE)`)
+      await this.pauseExecution(sessionId, `Awaiting approval after subtask ${details?.subtaskId}`)
+      return true
+    }
+
+    // ATTENDED_LEVEL: Pause after each level
+    if (mode === 'ATTENDED_LEVEL' && context === 'level') {
+      console.log(`[BvsOrchestrator] Pausing for approval (ATTENDED_LEVEL) - Level ${details?.level} complete`)
+      await this.pauseExecution(sessionId, `Awaiting approval after level ${details?.level}`)
+      return true
+    }
+
+    // SEMI_ATTENDED: Pause only on issues
+    if (mode === 'SEMI_ATTENDED' && context === 'issue') {
+      console.log(`[BvsOrchestrator] Pausing for approval (SEMI_ATTENDED) - Issue: ${details?.issue}`)
+      await this.pauseExecution(sessionId, `Awaiting approval due to issue: ${details?.issue}`)
+      return true
+    }
+
+    return false
+  }
+
+  /**
    * RALPH-010: Calculate section cost from worker result
    */
   private calculateSectionCost(result: any): number {
@@ -595,12 +645,22 @@ export class BvsOrchestratorService extends EventEmitter {
   /**
    * Pause execution
    */
-  async pauseExecution(sessionId: string): Promise<void> {
+  async pauseExecution(sessionId: string, reason?: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
     session.status = 'paused'
     session.pausedAt = Date.now()
+
+    // RALPH-012: Emit pause event with reason
+    this.emitBvsEvent({
+      type: 'session_paused',
+      sessionId,
+      reason: reason || 'User requested pause',
+      timestamp: Date.now(),
+    } as any)
+
+    console.log(`[BvsOrchestrator] Session paused: ${reason || 'User requested'}`)
 
     // Pause all running workers
     // (Workers will check pause flag and stop at next checkpoint)

@@ -1,0 +1,671 @@
+{
+  "title": "Ralph Loop-Inspired BVS Improvements",
+  "description": "Implement subtask-level execution with fresh context, session limits, build verification, cost tracking, and attended modes to improve BVS reliability and reduce token waste",
+  "totalFeatures": 17,
+  "createdAt": 1737675600000,
+  "approvedAt": null,
+  "codebaseContext": {
+    "framework": "Electron + React",
+    "language": "typescript",
+    "packageManager": "npm",
+    "hasTypeScript": true,
+    "hasTests": false,
+    "existingPatterns": [
+      "Agent SDK integration for workers",
+      "Git worktree isolation",
+      "Quality gates (typecheck, lint, tests)",
+      "Event-driven architecture with EventEmitter",
+      "IPC between main and renderer"
+    ]
+  },
+  "sections": [
+    {
+      "id": "RALPH-001",
+      "name": "Add Subtask and Metrics Types",
+      "description": "Define TypeScript interfaces for subtasks, subtask results, execution limits, and enhanced worker metrics to support the new execution model",
+      "files": [
+        {
+          "path": "src/shared/bvs-types.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": [],
+      "dependents": ["RALPH-002", "RALPH-003", "RALPH-004", "RALPH-007"],
+      "successCriteria": [
+        "Subtask interface defined with id, name, files, estimatedLines",
+        "SubtaskResult interface defined with metrics",
+        "BvsExecutionLimits interface defined",
+        "BvsWorkerMetrics includes subtasks array",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 1,
+      "implementation": {
+        "details": "Add new interfaces to bvs-types.ts for subtask execution and cost tracking",
+        "codePattern": "Follow existing BvsSection and BvsWorkerInfo patterns",
+        "interfaces": [
+          "Subtask { id, name, files, estimatedLines, dependencies? }",
+          "SubtaskResult { subtask, status, turnsUsed, tokensUsed, model, files, errors, startedAt, completedAt }",
+          "BvsExecutionLimits { maxIterationsPerWorker, maxTotalIterations, maxCostPerWorker, maxTotalCost }",
+          "SubtaskMetrics { subtaskId, name, iterations, tokensUsed, costUsd, timeElapsed }",
+          "BvsExecutionMode enum { ATTENDED_SINGLE, ATTENDED_LEVEL, SEMI_ATTENDED, UNATTENDED }",
+          "BvsExecutionConfig { mode, limits, notifications }"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-002",
+      "name": "Implement identifySubtasks() Method",
+      "description": "Create logic to automatically split a BVS section into logical subtasks grouped by file purpose (schema, types, implementation, tests)",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-001"],
+      "dependents": ["RALPH-003"],
+      "successCriteria": [
+        "identifySubtasks() method groups files by purpose",
+        "Schema files grouped into one subtask",
+        "Type files grouped into one subtask",
+        "Implementation files split if >2 files or >150 lines",
+        "Test files grouped into one subtask",
+        "All subtasks have estimatedLines calculated"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 4,
+      "implementation": {
+        "details": "Add private method that analyzes section.files and creates logical Subtask groupings",
+        "algorithm": [
+          "1. Filter files by path patterns (schema, types, test, impl)",
+          "2. Group schema files (migration, schema.prisma, .sql)",
+          "3. Group type files (types/, interfaces/, .d.ts)",
+          "4. Split implementation files if large (>2 files or >150 lines estimate)",
+          "5. Group test files (test/, spec/)",
+          "6. Return array of Subtask objects"
+        ],
+        "edgeCases": [
+          "Section with only 1 file → 1 subtask",
+          "Section with 5 impl files → split into individual subtasks",
+          "Mixed create/modify actions → keep together if same purpose"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-003",
+      "name": "Implement Subtask Execution Loop",
+      "description": "Refactor executeSection() to iterate over subtasks, creating a fresh Agent SDK instance for each subtask with lower turn limit",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-002"],
+      "dependents": ["RALPH-004", "RALPH-005"],
+      "successCriteria": [
+        "executeSection() calls identifySubtasks()",
+        "Each subtask gets fresh ClaudeAgent instance",
+        "Turn limit per subtask is 5 (not 15)",
+        "Subtask results accumulated in array",
+        "Agent instances destroyed between subtasks",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 6,
+      "implementation": {
+        "details": "Replace single Agent SDK call with loop over subtasks",
+        "codePattern": "for (const subtask of subtasks) { const agent = new ClaudeAgent(...); await agent.run(...); }",
+        "changes": [
+          "Call identifySubtasks() at start of executeSection()",
+          "Create results: SubtaskResult[] = []",
+          "Loop over subtasks",
+          "Create fresh ClaudeAgent per subtask with maxTurns: 5",
+          "Call buildSubtaskPrompt() (new method)",
+          "Store result in results array",
+          "Call aggregateResults() to combine into WorkerResult"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-004",
+      "name": "Implement Subtask Prompt Building",
+      "description": "Create buildSubtaskPrompt() method that generates focused prompts for individual subtasks with context from previous subtasks",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-003", "RALPH-001"],
+      "dependents": [],
+      "successCriteria": [
+        "buildSubtaskPrompt() method created",
+        "Prompt includes subtask name and files",
+        "Prompt includes section context",
+        "Prompt includes previous subtask results",
+        "Prompt constrains scope to subtask files only",
+        "Prompt includes subtask-specific success criteria"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 2,
+      "implementation": {
+        "details": "Create focused prompt template for subtask execution",
+        "promptStructure": [
+          "Section name and description",
+          "Current subtask name",
+          "Files to work on (action: create/modify)",
+          "Previous subtasks completed (summary)",
+          "Success criteria for this subtask",
+          "Instruction: Focus ONLY on listed files"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-005",
+      "name": "Implement Progressive Feedback Per Subtask",
+      "description": "Add verifySubtask() method that runs quality checks (typecheck, lint) immediately after each subtask completes",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-003"],
+      "dependents": ["RALPH-006"],
+      "successCriteria": [
+        "verifySubtask() method created",
+        "Runs typecheck on modified files only",
+        "Runs lint on modified files only",
+        "Returns VerificationResult with passed boolean",
+        "Verification failures logged with details",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 3,
+      "implementation": {
+        "details": "Run incremental quality checks after each subtask",
+        "checks": [
+          "Extract modified file paths from SubtaskResult",
+          "Call runTypeCheckOnFiles(modifiedFiles)",
+          "Call runLintOnFiles(modifiedFiles)",
+          "Return { passed: allChecksPassed, failures: [...] }"
+        ],
+        "integration": "Call verifySubtask() after agent.run() in subtask loop"
+      }
+    },
+    {
+      "id": "RALPH-006",
+      "name": "Implement Subtask Retry Logic",
+      "description": "Add retrySubtask() method that attempts to fix verification failures up to 3 times before failing the subtask",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-005"],
+      "dependents": [],
+      "successCriteria": [
+        "retrySubtask() method created",
+        "Retries up to 3 times on verification failure",
+        "Each retry uses same Agent SDK instance",
+        "Retry prompt includes failure details",
+        "Success on any retry continues to next subtask",
+        "Failure after 3 retries marks subtask as failed"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 2,
+      "implementation": {
+        "details": "Implement retry loop with failure context",
+        "retryStrategy": [
+          "for (let attempt = 0; attempt < 3; attempt++)",
+          "Build retry prompt with verification failures",
+          "Call agent.run() with retry prompt",
+          "Verify again",
+          "Break on success, continue on failure"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-007",
+      "name": "Implement Subtask Commit Logic",
+      "description": "Add commitSubtask() method that commits each subtask independently with descriptive commit messages",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-001"],
+      "dependents": [],
+      "successCriteria": [
+        "commitSubtask() method created",
+        "Commit message includes subtask id and name",
+        "Commit message lists files changed",
+        "Commit message includes Co-Authored-By",
+        "Uses git add with specific file paths",
+        "Git commit executes successfully"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 1,
+      "implementation": {
+        "details": "Create git commit after each successful subtask",
+        "commitFormat": "feat(subtask-id): Subtask name\\n\\nFiles changed:\\n- file1\\n- file2\\n\\nCo-Authored-By: Claude model <noreply@anthropic.com>"
+      }
+    },
+    {
+      "id": "RALPH-008",
+      "name": "Implement Cost Tracking in Workers",
+      "description": "Add token usage and cost calculation to worker execution with per-subtask breakdown",
+      "files": [
+        {
+          "path": "src/main/services/bvs-worker-agent-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-001"],
+      "dependents": [],
+      "successCriteria": [
+        "calculateCost() function created",
+        "onTokenUsage callback tracks tokens per subtask",
+        "SubtaskMetrics includes tokensUsed and costUsd",
+        "WorkerResult includes total cost and subtask breakdown",
+        "Cost calculation uses correct model pricing",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 3,
+      "implementation": {
+        "details": "Track and calculate cost per subtask and total",
+        "pricing": {
+          "sonnet-4-5": { "input": 3.00, "output": 15.00 },
+          "haiku-4-5": { "input": 0.80, "output": 4.00 }
+        },
+        "calculation": "cost = (inputTokens * inputPrice + outputTokens * outputPrice) / 1M"
+      }
+    },
+    {
+      "id": "RALPH-009",
+      "name": "Add Build Verification to Quality Gates",
+      "description": "Extend quality gate service to detect and run build commands (npm run build) as part of verification",
+      "files": [
+        {
+          "path": "src/main/services/bvs-quality-gate-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": [],
+      "dependents": [],
+      "successCriteria": [
+        "QualityGateConfig includes build: boolean",
+        "runBuild() function created",
+        "detectBuildCommand() reads package.json scripts",
+        "Build command executes with 5min timeout",
+        "Build failures captured in QualityCheck result",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 2,
+      "implementation": {
+        "details": "Add build verification check to quality gates",
+        "buildScripts": ["build", "compile", "tsc", "build:prod"],
+        "execution": "Use safeExec('npm', ['run', buildCmd]) with 300s timeout"
+      }
+    },
+    {
+      "id": "RALPH-010",
+      "name": "Implement Session Limits in Orchestrator",
+      "description": "Add iteration and cost limit checking before each level execution with early termination on limit exceeded",
+      "files": [
+        {
+          "path": "src/main/services/bvs-orchestrator-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-001"],
+      "dependents": [],
+      "successCriteria": [
+        "executeWithMergePoints() accepts BvsExecutionLimits",
+        "Checks totalIterations before each level",
+        "Checks totalCost before each level",
+        "Throws SessionLimitError on limit exceeded",
+        "Progress saved before throwing error",
+        "Emits progress event with remaining budget"
+      ],
+      "status": "pending",
+      "priority": "high",
+      "estimatedHours": 3,
+      "implementation": {
+        "details": "Add limit checking logic to orchestrator",
+        "limits": {
+          "maxIterationsPerWorker": 20,
+          "maxTotalIterations": 100,
+          "maxCostPerWorker": 0.50,
+          "maxTotalCost": 5.00
+        },
+        "errorHandling": "Throw SessionLimitError with limit type and values"
+      }
+    },
+    {
+      "id": "RALPH-011",
+      "name": "Create SessionLimitError Class",
+      "description": "Define custom error class for session limit violations with limit type and values",
+      "files": [
+        {
+          "path": "src/main/services/bvs-orchestrator-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": [],
+      "dependents": ["RALPH-010"],
+      "successCriteria": [
+        "SessionLimitError class extends Error",
+        "Constructor accepts limitType, currentValue, limit, message",
+        "Properties are public and typed",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 0.5,
+      "implementation": {
+        "details": "Create custom error class for limit violations",
+        "class": "export class SessionLimitError extends Error { constructor(public limitType: 'iteration' | 'cost', public currentValue: number, public limit: number, message: string) { super(message); this.name = 'SessionLimitError'; } }"
+      }
+    },
+    {
+      "id": "RALPH-012",
+      "name": "Implement Attended Execution Modes",
+      "description": "Add execution mode support to orchestrator with waitForUserApproval() for attended modes",
+      "files": [
+        {
+          "path": "src/main/services/bvs-orchestrator-service.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-001"],
+      "dependents": [],
+      "successCriteria": [
+        "executeWithMergePoints() accepts BvsExecutionConfig",
+        "Checks config.mode after each level/section",
+        "Emits approval-required event for attended modes",
+        "Waits for approval before continuing",
+        "UNATTENDED mode skips approval",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 4,
+      "implementation": {
+        "details": "Add mode checking and approval waiting logic",
+        "modes": {
+          "ATTENDED_SINGLE": "Wait after each section",
+          "ATTENDED_LEVEL": "Wait after each level",
+          "SEMI_ATTENDED": "Wait at merge points only",
+          "UNATTENDED": "No waiting"
+        },
+        "approvalMethod": "waitForUserApproval() returns Promise that resolves on user approval event"
+      }
+    },
+    {
+      "id": "RALPH-013",
+      "name": "Create Plan Validator Service",
+      "description": "Build new service that validates BVS plans before execution checking file counts, dependencies, and success criteria",
+      "files": [
+        {
+          "path": "src/main/services/bvs-plan-validator-service.ts",
+          "action": "create",
+          "status": "pending"
+        }
+      ],
+      "dependencies": [],
+      "dependents": [],
+      "successCriteria": [
+        "validatePlan() function exported",
+        "Checks section file count (warns if >5)",
+        "Checks success criteria exist and are binary",
+        "Detects dependency cycles using DFS",
+        "Validates files exist for modify actions",
+        "Returns errors array and warnings array",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 5,
+      "implementation": {
+        "details": "Create validation service with multiple checks",
+        "validations": [
+          "File count per section (error if 0, warn if >5)",
+          "Success criteria exist (error if missing)",
+          "Success criteria are binary (warn if not)",
+          "Dependency graph is DAG (error if cycles)",
+          "Files exist for modify actions (error if missing)"
+        ],
+        "algorithms": [
+          "detectDependencyCycles() using DFS with recursion stack",
+          "isBinaryCriterion() using regex patterns"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-014",
+      "name": "Add IPC Handlers for Execution Config",
+      "description": "Add IPC handlers for starting execution with limits and mode, and for plan validation",
+      "files": [
+        {
+          "path": "src/main/ipc/bvs-handlers.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-001", "RALPH-013"],
+      "dependents": ["RALPH-015"],
+      "successCriteria": [
+        "bvs:start-execution-with-config handler created",
+        "bvs:validate-plan handler created",
+        "Handlers accept config with limits and mode",
+        "Validation handler returns errors and warnings",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 2,
+      "implementation": {
+        "details": "Add new IPC handlers for enhanced execution",
+        "handlers": [
+          "ipcMain.handle('bvs:start-execution-with-config', async (_event, sessionId, config) => { ... })",
+          "ipcMain.handle('bvs:validate-plan', async (_event, projectPath, plan) => { ... })"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-015",
+      "name": "Update Preload with New APIs",
+      "description": "Add type definitions and implementations for new IPC handlers in preload script",
+      "files": [
+        {
+          "path": "src/preload/index.ts",
+          "action": "modify",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-014"],
+      "dependents": ["RALPH-016"],
+      "successCriteria": [
+        "startExecutionWithConfig type defined",
+        "validatePlan type defined",
+        "Implementations call ipcRenderer.invoke",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 1,
+      "implementation": {
+        "details": "Add preload API definitions",
+        "apis": [
+          "startExecutionWithConfig: (sessionId: string, config: BvsExecutionConfig) => Promise<...>",
+          "validatePlan: (projectPath: string, plan: BvsExecutionPlan) => Promise<PlanValidationResult>"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-016",
+      "name": "Build Execution Config UI",
+      "description": "Create UI components for execution mode selector, limit configuration, and cost display",
+      "files": [
+        {
+          "path": "src/renderer/components/bvs/BvsExecutionConfig.tsx",
+          "action": "create",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-015"],
+      "dependents": [],
+      "successCriteria": [
+        "ExecutionModeSelector component created",
+        "LimitConfiguration component created",
+        "Shows default limits with edit option",
+        "First-time users see attended mode recommendation",
+        "Components integrate with execution dashboard",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 6,
+      "implementation": {
+        "details": "Build React components for execution configuration",
+        "components": [
+          "ExecutionModeSelector - dropdown with 4 modes",
+          "LimitConfiguration - inputs for max iterations and cost",
+          "CostDisplay - real-time cost tracking during execution",
+          "InfoBanner - first-time user guidance"
+        ]
+      }
+    },
+    {
+      "id": "RALPH-017",
+      "name": "Build Plan Validation UI",
+      "description": "Create UI to display validation errors and warnings before execution with ability to proceed or fix",
+      "files": [
+        {
+          "path": "src/renderer/components/bvs/BvsPlanValidator.tsx",
+          "action": "create",
+          "status": "pending"
+        }
+      ],
+      "dependencies": ["RALPH-015"],
+      "dependents": [],
+      "successCriteria": [
+        "PlanValidator component created",
+        "Displays errors in red with block icon",
+        "Displays warnings in yellow with info icon",
+        "Groups issues by section",
+        "Proceed button disabled if errors exist",
+        "Proceed button enabled if only warnings",
+        "TypeScript compilation passes"
+      ],
+      "status": "pending",
+      "priority": "medium",
+      "estimatedHours": 4,
+      "implementation": {
+        "details": "Build validation results UI",
+        "components": [
+          "ValidationResult - error/warning display",
+          "ValidationSummary - counts by severity",
+          "ProceedButton - conditional enabling",
+          "FixButton - navigate to section for fixes"
+        ]
+      }
+    }
+  ],
+  "dependencyGraph": {
+    "nodes": [
+      { "sectionId": "RALPH-001", "dependencies": [], "dependents": ["RALPH-002", "RALPH-003", "RALPH-004", "RALPH-007", "RALPH-008", "RALPH-010", "RALPH-012", "RALPH-014"], "level": 0 },
+      { "sectionId": "RALPH-002", "dependencies": ["RALPH-001"], "dependents": ["RALPH-003"], "level": 1 },
+      { "sectionId": "RALPH-003", "dependencies": ["RALPH-002"], "dependents": ["RALPH-004", "RALPH-005"], "level": 2 },
+      { "sectionId": "RALPH-004", "dependencies": ["RALPH-003", "RALPH-001"], "dependents": [], "level": 3 },
+      { "sectionId": "RALPH-005", "dependencies": ["RALPH-003"], "dependents": ["RALPH-006"], "level": 3 },
+      { "sectionId": "RALPH-006", "dependencies": ["RALPH-005"], "dependents": [], "level": 4 },
+      { "sectionId": "RALPH-007", "dependencies": ["RALPH-001"], "dependents": [], "level": 1 },
+      { "sectionId": "RALPH-008", "dependencies": ["RALPH-001"], "dependents": [], "level": 1 },
+      { "sectionId": "RALPH-009", "dependencies": [], "dependents": [], "level": 0 },
+      { "sectionId": "RALPH-010", "dependencies": ["RALPH-001"], "dependents": [], "level": 1 },
+      { "sectionId": "RALPH-011", "dependencies": [], "dependents": ["RALPH-010"], "level": 0 },
+      { "sectionId": "RALPH-012", "dependencies": ["RALPH-001"], "dependents": [], "level": 1 },
+      { "sectionId": "RALPH-013", "dependencies": [], "dependents": ["RALPH-014"], "level": 0 },
+      { "sectionId": "RALPH-014", "dependencies": ["RALPH-001", "RALPH-013"], "dependents": ["RALPH-015"], "level": 1 },
+      { "sectionId": "RALPH-015", "dependencies": ["RALPH-014"], "dependents": ["RALPH-016", "RALPH-017"], "level": 2 },
+      { "sectionId": "RALPH-016", "dependencies": ["RALPH-015"], "dependents": [], "level": 3 },
+      { "sectionId": "RALPH-017", "dependencies": ["RALPH-015"], "dependents": [], "level": 3 }
+    ],
+    "levels": [
+      ["RALPH-001", "RALPH-009", "RALPH-011", "RALPH-013"],
+      ["RALPH-002", "RALPH-007", "RALPH-008", "RALPH-010", "RALPH-012", "RALPH-014"],
+      ["RALPH-003", "RALPH-015"],
+      ["RALPH-004", "RALPH-005", "RALPH-016", "RALPH-017"],
+      ["RALPH-006"]
+    ],
+    "criticalPath": ["RALPH-001", "RALPH-002", "RALPH-003", "RALPH-005", "RALPH-006"]
+  },
+  "parallelGroups": [
+    {
+      "groupId": "group_1",
+      "level": 0,
+      "sections": ["RALPH-001", "RALPH-009", "RALPH-011", "RALPH-013"],
+      "status": "pending"
+    },
+    {
+      "groupId": "group_2",
+      "level": 1,
+      "sections": ["RALPH-002", "RALPH-007", "RALPH-008", "RALPH-010", "RALPH-012", "RALPH-014"],
+      "status": "pending"
+    },
+    {
+      "groupId": "group_3",
+      "level": 2,
+      "sections": ["RALPH-003", "RALPH-015"],
+      "status": "pending"
+    },
+    {
+      "groupId": "group_4",
+      "level": 3,
+      "sections": ["RALPH-004", "RALPH-005", "RALPH-016", "RALPH-017"],
+      "status": "pending"
+    },
+    {
+      "groupId": "group_5",
+      "level": 4,
+      "sections": ["RALPH-006"],
+      "status": "pending"
+    }
+  ],
+  "e2eMapping": {},
+  "parallelConfig": {
+    "maxParallelWorkers": 5,
+    "modelSelectionStrategy": "complexity-based",
+    "retryStrategy": "exponential-backoff",
+    "conflictResolution": "ai-assisted"
+  }
+}

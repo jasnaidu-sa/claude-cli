@@ -10,6 +10,7 @@ import { ResizeHandle } from './components/ui/ResizeHandle'
 import { WorktreePanel } from './components/worktree'
 import { AutonomousView } from './components/autonomous'
 import { IdeasView } from './components/ideas'
+import { BvsView } from './components/bvs/BvsView'
 import { useUIStore } from './stores/ui-store'
 import { useSessionStore } from './stores/session-store'
 import { useDevServerAutoStart } from './hooks/useDevServerAutoStart'
@@ -59,10 +60,10 @@ export default function App() {
   const hasActiveSessions = sessions.length > 0
 
   // Check if we should show a right panel
-  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || activePanel === 'ideas' || (activePanel === 'files' && selectedFile)
+  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || activePanel === 'ideas' || activePanel === 'bvs' || (activePanel === 'files' && selectedFile)
 
-  // Check if autonomous or ideas should take full width (no active sessions)
-  const autonomousFullWidth = (activePanel === 'autonomous' || activePanel === 'ideas') && !hasActiveSessions
+  // Check if autonomous, ideas, or bvs should take full width (no active sessions)
+  const autonomousFullWidth = (activePanel === 'autonomous' || activePanel === 'ideas' || activePanel === 'bvs') && !hasActiveSessions
 
   // Handle resize of right panel
   const handleRightPanelResize = useCallback((delta: number) => {
@@ -90,6 +91,9 @@ export default function App() {
     }
     if (activePanel === 'ideas') {
       return <IdeasView />
+    }
+    if (activePanel === 'bvs') {
+      return <BvsView onClose={() => setActivePanel(null)} />
     }
     if (activePanel === 'files' && selectedFile) {
       return <FileViewer />

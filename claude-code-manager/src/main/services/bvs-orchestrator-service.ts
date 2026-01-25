@@ -1354,7 +1354,7 @@ export class BvsOrchestratorService extends EventEmitter {
             console.error(`[BvsOrchestrator] Session limit exceeded:`, error.message)
 
             // RALPH-015: Capture learning from limit violation
-            const learningService = getBvsLearningCaptureService()
+            const learningService = await getBvsLearningCaptureService()
             await learningService.captureLimitViolation(
               error,
               section,
@@ -1389,7 +1389,7 @@ export class BvsOrchestratorService extends EventEmitter {
         } catch (error) {
           if (error instanceof SessionLimitError) {
             // RALPH-015: Capture learning from post-execution limit violation
-            const learningService = getBvsLearningCaptureService()
+            const learningService = await getBvsLearningCaptureService()
             await learningService.captureLimitViolation(
               error,
               section,

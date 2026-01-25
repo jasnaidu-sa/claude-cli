@@ -13,6 +13,7 @@
 
 import * as fs from 'fs/promises'
 import * as path from 'path'
+import { randomUUID } from 'crypto'
 import type {
   BvsSubtask,
   BvsSection,
@@ -84,7 +85,7 @@ export class BvsLearningCaptureService {
     config?: BvsExecutionConfig
   ): Promise<LearningEntry> {
     const learning: LearningEntry = {
-      id: `learning-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      id: `learning-${randomUUID()}`,
       timestamp: Date.now(),
       category: this.categorizeLimitViolation(error, subtask),
       severity: this.calculateSeverity(error),
@@ -256,11 +257,13 @@ export class BvsLearningCaptureService {
     }
 
     // Check for complexity indicators
-    const hasApiRoutes = (subtask?.files || section.files).some(f =>
-      f.path.includes('/api/') || f.path.includes('/routes/')
+    // Fix type mismatch: subtask.files is string[], section.files is BvsFile[]
+    const files = subtask ? subtask.files : (section.files || []).map(f => f.path)
+    const hasApiRoutes = files.some(filePath =>
+      typeof filePath === 'string' && (filePath.includes('/api/') || filePath.includes('/routes/'))
     )
-    const hasDatabase = (subtask?.files || section.files).some(f =>
-      f.path.includes('database') || f.path.includes('db.')
+    const hasDatabase = files.some(filePath =>
+      typeof filePath === 'string' && (filePath.includes('database') || filePath.includes('db.'))
     )
 
     if (hasApiRoutes && hasDatabase) {
@@ -271,12 +274,13 @@ export class BvsLearningCaptureService {
   }
 
   private calculateComplexity(section: BvsSection, subtask?: BvsSubtask): number {
-    const fileCount = subtask ? subtask.files.length : section.files.length
-    let score = fileCount
+    // Normalize file paths to string[] for consistent handling
+    const files = subtask ? subtask.files : (section.files || []).map(f => f.path)
+    let score = files.length
 
     // Add complexity for specific file types
-    const files = subtask ? subtask.files : section.files.map(f => f.path)
     files.forEach(file => {
+      if (typeof file !== 'string') return
       if (file.includes('schema') || file.includes('migration')) score += 2
       if (file.includes('/api/')) score += 1
       if (file.includes('service')) score += 1
@@ -337,29 +341,45 @@ export class BvsLearningCaptureService {
       const learningsFile = path.join(this.learningsDir, 'learnings.json')
       const data = await fs.readFile(learningsFile, 'utf-8')
       this.learnings = JSON.parse(data)
-    } catch (error) {
-      // File doesn't exist yet, start with empty array
-      this.learnings = []
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // File doesn't exist yet, start with empty array
+        this.learnings = []
+      } else {
+        console.error('[BvsLearningCapture] Failed to load learnings:', error)
+        console.error('[BvsLearningCapture] Starting with empty learnings array')
+        this.learnings = []
+      }
     }
   }
 
   private async saveLearnings(): Promise<void> {
+    const learningsFile = path.join(this.learningsDir, 'learnings.json')
+
     try {
-      const learningsFile = path.join(this.learningsDir, 'learnings.json')
       await fs.writeFile(learningsFile, JSON.stringify(this.learnings, null, 2))
     } catch (error) {
       console.error('[BvsLearningCapture] Failed to save learnings:', error)
+      throw new Error(`Failed to persist learnings: ${error}`)
     }
   }
 }
 
 // Singleton instance
 let bvsLearningCaptureService: BvsLearningCaptureService | null = null
+let initializationPromise: Promise<void> | null = null
 
-export function getBvsLearningCaptureService(): BvsLearningCaptureService {
+export async function getBvsLearningCaptureService(): Promise<BvsLearningCaptureService> {
   if (!bvsLearningCaptureService) {
     bvsLearningCaptureService = new BvsLearningCaptureService()
-    bvsLearningCaptureService.initialize()
+    initializationPromise = bvsLearningCaptureService.initialize()
   }
+
+  // Wait for initialization to complete
+  if (initializationPromise) {
+    await initializationPromise
+    initializationPromise = null
+  }
+
   return bvsLearningCaptureService
 }

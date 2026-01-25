@@ -60,19 +60,34 @@ export function BvsSubtaskMetrics({
 
   // Poll for session cost updates
   useEffect(() => {
+    let failureCount = 0
+    const MAX_FAILURES = 3
+
     const loadSessionCost = async () => {
       try {
         const result = await window.electron.bvsGetSessionCost(sessionId)
         if (result.success && typeof result.cost === 'number') {
           setSessionCost(result.cost)
+          failureCount = 0 // Reset on success
+        } else {
+          failureCount++
         }
       } catch (error) {
+        failureCount++
         console.error('[BvsSubtaskMetrics] Error loading session cost:', error)
       }
     }
 
     loadSessionCost()
-    const interval = setInterval(loadSessionCost, 5000)
+    const interval = setInterval(() => {
+      if (failureCount < MAX_FAILURES) {
+        loadSessionCost()
+      } else {
+        console.warn('[BvsSubtaskMetrics] Stopped polling after multiple failures')
+        clearInterval(interval)
+      }
+    }, 5000)
+
     return () => clearInterval(interval)
   }, [sessionId])
 
@@ -81,14 +96,19 @@ export function BvsSubtaskMetrics({
     (acc, subtask) => {
       if (!subtask.metrics) return acc
 
+      // Defensive checks for each metric property
+      const costUsd = subtask.metrics.costUsd ?? 0
+      const tokensInput = subtask.metrics.tokensInput ?? 0
+      const tokensOutput = subtask.metrics.tokensOutput ?? 0
+
       return {
-        totalCost: acc.totalCost + subtask.metrics.costUsd,
-        totalTokensInput: acc.totalTokensInput + subtask.metrics.tokensInput,
-        totalTokensOutput: acc.totalTokensOutput + subtask.metrics.tokensOutput,
+        totalCost: acc.totalCost + costUsd,
+        totalTokensInput: acc.totalTokensInput + tokensInput,
+        totalTokensOutput: acc.totalTokensOutput + tokensOutput,
         avgCostPerSubtask: 0, // calculated after reduce
         haikuCount: acc.haikuCount + (subtask.metrics.model === 'haiku' ? 1 : 0),
         sonnetCount: acc.sonnetCount + (subtask.metrics.model === 'sonnet' ? 1 : 0),
-        totalDuration: acc.totalDuration + (subtask.duration || 0)
+        totalDuration: acc.totalDuration + (subtask.duration ?? 0)
       }
     },
     {
@@ -335,14 +355,19 @@ export function BvsSubtaskMetrics({
                     )}
 
                     {/* Warning if approaching subtask limit */}
-                    {subtask.metrics && subtask.metrics.costUsd > sessionLimits.maxCostPerSubtask * 0.9 && (
-                      <div className="pt-2 border-t border-border/50">
-                        <div className="text-xs text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
-                          <AlertTriangle className="h-3 w-3" />
-                          High cost subtask ({Math.round((subtask.metrics.costUsd / sessionLimits.maxCostPerSubtask) * 100)}% of limit)
+                    {subtask.metrics && subtask.metrics.costUsd > sessionLimits.maxCostPerSubtask * 0.9 && (() => {
+                      const percentOfLimit = sessionLimits.maxCostPerSubtask > 0
+                        ? Math.round((subtask.metrics.costUsd / sessionLimits.maxCostPerSubtask) * 100)
+                        : 100
+                      return (
+                        <div className="pt-2 border-t border-border/50">
+                          <div className="text-xs text-yellow-600 dark:text-yellow-400 flex items-center gap-1">
+                            <AlertTriangle className="h-3 w-3" />
+                            High cost subtask ({percentOfLimit}% of limit)
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )
+                    })()}
 
                     {/* Commit SHA if available */}
                     {subtask.commitSha && (

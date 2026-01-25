@@ -6,7 +6,7 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({
       // Ensure native modules and their dependencies are fully externalized
-      include: ['node-pty']
+      include: ['node-pty', '@anthropic-ai/claude-code']
     })],
     build: {
       outDir: 'dist/main',
@@ -15,7 +15,8 @@ export default defineConfig({
           index: resolve(__dirname, 'src/main/index.ts')
         },
         external: [
-          'node-pty'
+          'node-pty',
+          '@anthropic-ai/claude-code'
         ]
       }
     },
@@ -53,7 +54,8 @@ export default defineConfig({
     resolve: {
       alias: {
         '@renderer': resolve(__dirname, 'src/renderer'),
-        '@shared': resolve(__dirname, 'src/shared')
+        '@shared': resolve(__dirname, 'src/shared'),
+        '@preload': resolve(__dirname, 'src/preload')
       }
     }
   }

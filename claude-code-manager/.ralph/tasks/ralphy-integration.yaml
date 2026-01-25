@@ -1,0 +1,684 @@
+# Auto-generated from PRD: AI-Assisted Merge Conflict Resolution and Worktree Lifecycle Management
+# Generated: 2026-01-17
+# Source: claude-code-manager/docs/PRD-RALPHY-INTEGRATION.md
+
+project:
+  name: "Ralphy Integration - Parallel Execution with AI Merge Resolution"
+  description: "Integrate Ralphy's parallel execution architecture with git worktree isolation, automatic YAML task file generation from PRDs, AI-powered merge conflict resolution, and human-in-the-loop checkpoints"
+  base_branch: "main"
+  repository: "claude-code-manager"
+
+settings:
+  max_parallel_agents: 3
+  checkpoint_before_merge: true
+  checkpoint_between_groups: true
+  run_tests_per_task: true
+  run_lint_per_task: true
+  min_confidence_for_auto_merge: 0.75
+  review_after_group: true  # Run start-task review agents after each group
+
+# =============================================================================
+# GROUP 1: PRD Parser & YAML Generation Infrastructure
+# Foundation tasks - must complete before parallel work begins
+# =============================================================================
+
+tasks:
+  # --- Core Types and Interfaces ---
+  - id: ralphy-001
+    title: "Create core types for YAML task structure and parallel execution"
+    description: |
+      Define TypeScript interfaces for:
+      - TaskYaml: Full YAML file structure
+      - Task: Individual task with dependencies, parallel_group, acceptance_criteria
+      - ParallelGroup: Group of tasks that can run concurrently
+      - DependencyGraph: Task dependency relationships
+      - WorktreeConfig: Git worktree configuration
+      - AgentStatus: Runtime agent state tracking
+      - MergeConflict: Conflict representation
+      - MergeResolution: AI-resolved conflict
+    category: "types"
+    parallel_group: 1
+    dependencies: []
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/shared/ralph-types.ts"
+    acceptance_criteria:
+      - "All interfaces exported from ralph-types.ts"
+      - "Types include JSDoc comments"
+      - "No TypeScript errors"
+
+  # --- PRD Parser Service ---
+  - id: ralphy-002
+    title: "Implement PRD parser service with markdown extraction"
+    description: |
+      Create service to parse PRD documents:
+      - Parse markdown checkboxes (- [ ] task)
+      - Extract task titles and descriptions
+      - Identify categories from headings
+      - Support plain text and structured markdown
+      - Return normalized task list
+    category: "backend"
+    parallel_group: 1
+    dependencies: ["ralphy-001"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/services/prd-parser-service.ts"
+    acceptance_criteria:
+      - "Parses markdown PRD files"
+      - "Extracts tasks with titles and descriptions"
+      - "Handles various markdown formats"
+      - "Returns structured task array"
+
+  # --- AI Task Extraction ---
+  - id: ralphy-003
+    title: "Implement AI-powered task extraction and dependency analysis"
+    description: |
+      Use Claude API to analyze PRD and:
+      - Extract tasks with detailed descriptions
+      - Identify logical dependencies between tasks
+      - Assign categories (backend, frontend, testing, etc.)
+      - Generate acceptance criteria per task
+      - Estimate complexity (low, medium, high)
+    category: "backend"
+    parallel_group: 1
+    dependencies: ["ralphy-001", "ralphy-002"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/ai-task-extractor.ts"
+    acceptance_criteria:
+      - "Calls Claude API with PRD content"
+      - "Returns structured tasks with dependencies"
+      - "Generates meaningful acceptance criteria"
+      - "Handles API errors gracefully"
+
+  # --- Dependency Graph Builder ---
+  - id: ralphy-004
+    title: "Create dependency graph analyzer and parallel group generator"
+    description: |
+      Build dependency graph from extracted tasks:
+      - Create directed acyclic graph (DAG) of dependencies
+      - Detect circular dependencies (error)
+      - Generate parallel_group assignments via topological sort
+      - Group independent tasks together
+      - Ensure dependent tasks run after their dependencies
+    category: "backend"
+    parallel_group: 1
+    dependencies: ["ralphy-001"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/dependency-graph-service.ts"
+    acceptance_criteria:
+      - "Builds DAG from task dependencies"
+      - "Detects and reports circular dependencies"
+      - "Assigns parallel groups correctly"
+      - "Independent tasks get same group"
+
+  # --- YAML Generator ---
+  - id: ralphy-005
+    title: "Implement YAML task file generator and validator"
+    description: |
+      Generate and validate YAML task files:
+      - Convert task objects to YAML format
+      - Include all metadata (project, settings, tasks)
+      - Validate YAML structure and required fields
+      - Support loading existing YAML files
+      - Handle file versioning
+    category: "backend"
+    parallel_group: 1
+    dependencies: ["ralphy-001", "ralphy-004"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/services/yaml-task-service.ts"
+    acceptance_criteria:
+      - "Generates valid YAML from tasks"
+      - "Validates YAML against schema"
+      - "Loads and parses existing files"
+      - "Handles malformed YAML gracefully"
+
+  # --- IPC Handlers for PRD/YAML ---
+  - id: ralphy-006
+    title: "Create IPC handlers for PRD parsing and YAML management"
+    description: |
+      Add IPC handlers for renderer communication:
+      - ralph:parse-prd - Parse PRD content
+      - ralph:generate-yaml - Generate YAML from tasks
+      - ralph:validate-yaml - Validate YAML structure
+      - ralph:save-task-file - Save to disk
+      - ralph:load-task-file - Load from disk
+    category: "backend"
+    parallel_group: 1
+    dependencies: ["ralphy-002", "ralphy-003", "ralphy-005"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/ipc/ralph-yaml-handlers.ts"
+    files_to_modify:
+      - "src/main/ipc/index.ts"
+    acceptance_criteria:
+      - "All IPC handlers registered"
+      - "Handlers call appropriate services"
+      - "Error responses properly formatted"
+      - "TypeScript types match preload"
+
+# =============================================================================
+# GROUP 2: Worktree Infrastructure & Parallel Execution
+# Can begin after Group 1 completes
+# =============================================================================
+
+  # --- Git Worktree Service ---
+  - id: ralphy-007
+    title: "Implement git worktree management service"
+    description: |
+      Service for git worktree operations:
+      - createWorktree(path, branch, baseBranch)
+      - removeWorktree(path)
+      - listWorktrees()
+      - getWorktreeStatus(path) - clean/dirty
+      - Cleanup helpers for session end
+    category: "backend"
+    parallel_group: 2
+    dependencies: ["ralphy-001"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/git-worktree-service.ts"
+    acceptance_criteria:
+      - "Creates worktrees with correct branch"
+      - "Removes worktrees safely"
+      - "Detects dirty worktrees"
+      - "Lists all session worktrees"
+
+  # --- Agent Isolation Layer ---
+  - id: ralphy-008
+    title: "Create agent isolation and execution environment"
+    description: |
+      Isolated execution environment per agent:
+      - AgentEnvironment class with worktree path
+      - Separate Claude session per agent
+      - Agent-local state and progress tracking
+      - Output capture and logging
+      - Cleanup on completion/failure
+    category: "backend"
+    parallel_group: 2
+    dependencies: ["ralphy-001", "ralphy-007"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/agent-environment.ts"
+    acceptance_criteria:
+      - "Agent runs in isolated worktree"
+      - "Has dedicated Claude session"
+      - "Captures all output"
+      - "Cleans up on termination"
+
+  # --- Parallel Execution Orchestrator ---
+  - id: ralphy-009
+    title: "Build parallel execution orchestrator"
+    description: |
+      Orchestrate parallel task execution:
+      - Execute tasks by parallel_group order
+      - Spawn up to maxAgents concurrent agents
+      - Queue remaining tasks in group
+      - Track agent status (initializing/running/done/failed)
+      - Wait for group completion before next group
+      - Handle agent failures with retry logic
+    category: "backend"
+    parallel_group: 2
+    dependencies: ["ralphy-001", "ralphy-008"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/parallel-orchestrator.ts"
+    acceptance_criteria:
+      - "Executes tasks in parallel groups"
+      - "Respects maxAgents limit"
+      - "Waits for group completion"
+      - "Handles failures gracefully"
+
+  # --- Agent Status Tracking ---
+  - id: ralphy-010
+    title: "Implement real-time agent status tracking and events"
+    description: |
+      Track and broadcast agent status:
+      - AgentStatusTracker class
+      - Status updates via WebSocket events
+      - Progress tracking (steps, elapsed time)
+      - Metrics collection (tokens, files, tests)
+      - Event: agent:status, agent:output, agent:complete
+    category: "backend"
+    parallel_group: 2
+    dependencies: ["ralphy-001", "ralphy-009"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/services/agent-status-tracker.ts"
+    acceptance_criteria:
+      - "Tracks all agent statuses"
+      - "Broadcasts status via WebSocket"
+      - "Collects execution metrics"
+      - "Events fire correctly"
+
+  # --- Worktree IPC Handlers ---
+  - id: ralphy-011
+    title: "Create IPC handlers for worktree and parallel execution"
+    description: |
+      IPC handlers for execution control:
+      - ralph:start-parallel - Start parallel execution
+      - ralph:get-agent-status - Get all agent statuses
+      - ralph:stop-agent - Stop specific agent
+      - ralph:list-worktrees - List session worktrees
+      - ralph:cleanup-worktrees - Clean up all worktrees
+    category: "backend"
+    parallel_group: 2
+    dependencies: ["ralphy-007", "ralphy-009", "ralphy-010"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/ipc/ralph-parallel-handlers.ts"
+    files_to_modify:
+      - "src/main/ipc/index.ts"
+    acceptance_criteria:
+      - "All handlers registered"
+      - "Parallel execution controllable"
+      - "Status retrieval works"
+      - "Cleanup functions properly"
+
+# =============================================================================
+# GROUP 3: AI Merge Resolution & Checkpoints
+# Requires Groups 1 and 2
+# =============================================================================
+
+  # --- Merge Conflict Detector ---
+  - id: ralphy-012
+    title: "Implement merge conflict detection service"
+    description: |
+      Detect and analyze merge conflicts:
+      - detectConflicts(baseBranch, mergeBranch)
+      - parseConflictMarkers(file) - extract ours/theirs/base
+      - getConflictedFiles() - list of files
+      - getConflictDetails() - full conflict info
+    category: "backend"
+    parallel_group: 3
+    dependencies: ["ralphy-007"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/services/merge-conflict-detector.ts"
+    acceptance_criteria:
+      - "Detects all conflicted files"
+      - "Parses conflict markers correctly"
+      - "Extracts ours/theirs/base content"
+      - "Works with multiple file types"
+
+  # --- AI Merge Resolution ---
+  - id: ralphy-013
+    title: "Create AI-powered merge conflict resolution service"
+    description: |
+      Use Claude to resolve merge conflicts:
+      - Build resolution prompt with context
+      - Include both versions and common ancestor
+      - Include task descriptions for context
+      - Validate resolution has no conflict markers
+      - Syntax check resolved content
+      - Calculate confidence score
+    category: "backend"
+    parallel_group: 3
+    dependencies: ["ralphy-001", "ralphy-012"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/ai-merge-resolver.ts"
+    acceptance_criteria:
+      - "Generates resolution prompts"
+      - "Calls Claude API for resolution"
+      - "Validates resolved content"
+      - "Calculates confidence scores"
+
+  # --- Confidence Scoring ---
+  - id: ralphy-014
+    title: "Implement merge confidence scoring system"
+    description: |
+      Score confidence of AI merge resolutions:
+      - Conflict size factor
+      - File complexity factor
+      - Similarity to originals factor
+      - Critical file detection (package.json, migrations)
+      - Combined score 0.0 - 1.0
+      - Threshold for auto-merge vs checkpoint
+    category: "backend"
+    parallel_group: 3
+    dependencies: ["ralphy-013"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/services/merge-confidence-scorer.ts"
+    acceptance_criteria:
+      - "Scores all factors correctly"
+      - "Identifies critical files"
+      - "Returns normalized score"
+      - "Threshold comparison works"
+
+  # --- Merge Checkpoint Flow ---
+  - id: ralphy-015
+    title: "Create merge checkpoint and approval flow"
+    description: |
+      Checkpoint system for merge approvals:
+      - MergeCheckpoint type with conflict details
+      - Create checkpoint when confidence < threshold
+      - Create checkpoint for critical files
+      - Actions: approve, reject, edit, manual
+      - Integrate with existing checkpoint system
+    category: "backend"
+    parallel_group: 3
+    dependencies: ["ralphy-012", "ralphy-013", "ralphy-014"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/services/merge-checkpoint-service.ts"
+    acceptance_criteria:
+      - "Creates checkpoints correctly"
+      - "Triggers on low confidence"
+      - "Triggers on critical files"
+      - "Integrates with checkpoint system"
+
+  # --- Merge Orchestrator ---
+  - id: ralphy-016
+    title: "Build merge orchestration with conflict resolution pipeline"
+    description: |
+      Orchestrate the full merge flow:
+      1. Attempt fast-forward merge
+      2. Attempt standard merge
+      3. On conflicts: AI resolution
+      4. Score confidence
+      5. Auto-merge or checkpoint
+      6. Apply resolution and commit
+    category: "backend"
+    parallel_group: 3
+    dependencies: ["ralphy-012", "ralphy-013", "ralphy-014", "ralphy-015"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/merge-orchestrator.ts"
+    acceptance_criteria:
+      - "Handles all merge scenarios"
+      - "Falls through correctly"
+      - "Creates checkpoints when needed"
+      - "Commits successful merges"
+
+  # --- Merge IPC Handlers ---
+  - id: ralphy-017
+    title: "Create IPC handlers for merge operations"
+    description: |
+      IPC handlers for merge control:
+      - ralph:get-merge-status
+      - ralph:resolve-conflicts
+      - ralph:approve-merge
+      - ralph:reject-merge
+      - ralph:edit-resolution
+    category: "backend"
+    parallel_group: 3
+    dependencies: ["ralphy-016"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/main/ipc/ralph-merge-handlers.ts"
+    files_to_modify:
+      - "src/main/ipc/index.ts"
+    acceptance_criteria:
+      - "All handlers registered"
+      - "Merge operations controllable"
+      - "Approval flow works"
+      - "Rejection with reason works"
+
+# =============================================================================
+# GROUP 4: Desktop UI Components
+# Can run parallel with Group 3
+# =============================================================================
+
+  # --- YAML Task Editor Component ---
+  - id: ralphy-018
+    title: "Create YAML task editor component with dependency graph"
+    description: |
+      Visual editor for task YAML:
+      - Task list with drag-drop reordering
+      - Dependency graph visualization
+      - Edit task details inline
+      - Add/remove tasks
+      - Parallel group assignment
+      - Validate on change
+    category: "frontend"
+    parallel_group: 3
+    dependencies: ["ralphy-006"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/renderer/components/ralph/YamlTaskEditor.tsx"
+      - "src/renderer/components/ralph/DependencyGraph.tsx"
+      - "src/renderer/components/ralph/TaskDetailEditor.tsx"
+    acceptance_criteria:
+      - "Displays all tasks"
+      - "Shows dependency graph"
+      - "Allows inline editing"
+      - "Validates changes"
+
+  # --- PRD Import Modal ---
+  - id: ralphy-019
+    title: "Create PRD import modal with preview"
+    description: |
+      Modal for importing PRDs:
+      - Text area for paste
+      - File picker for .md files
+      - GitHub issue URL input
+      - Preview extracted tasks
+      - Edit before confirming
+      - Generate YAML button
+    category: "frontend"
+    parallel_group: 3
+    dependencies: ["ralphy-006"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "src/renderer/components/ralph/PrdImportModal.tsx"
+    acceptance_criteria:
+      - "Accepts paste, file, URL"
+      - "Shows extraction preview"
+      - "Allows editing"
+      - "Generates YAML"
+
+  # --- Parallel Execution Dashboard ---
+  - id: ralphy-020
+    title: "Build parallel execution monitoring dashboard"
+    description: |
+      Dashboard for parallel execution:
+      - Overall progress bar
+      - Agent status cards (running/done/failed)
+      - Per-agent output view
+      - Metrics display (tokens, time)
+      - Stop/restart controls
+    category: "frontend"
+    parallel_group: 3
+    dependencies: ["ralphy-011"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/renderer/components/ralph/ParallelExecutionDashboard.tsx"
+      - "src/renderer/components/ralph/AgentStatusCard.tsx"
+      - "src/renderer/components/ralph/AgentOutputView.tsx"
+    acceptance_criteria:
+      - "Shows all agent statuses"
+      - "Updates in real-time"
+      - "Displays metrics"
+      - "Controls work"
+
+  # --- Merge Resolution Modal ---
+  - id: ralphy-021
+    title: "Create merge conflict resolution review modal"
+    description: |
+      Modal for reviewing merge resolutions:
+      - List of conflicted files
+      - Per-file confidence score
+      - Diff view (ours vs theirs vs resolved)
+      - Edit resolution inline
+      - Approve/reject actions
+    category: "frontend"
+    parallel_group: 3
+    dependencies: ["ralphy-017"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/renderer/components/ralph/MergeResolutionModal.tsx"
+      - "src/renderer/components/ralph/ConflictDiffView.tsx"
+    acceptance_criteria:
+      - "Shows all conflicts"
+      - "Displays confidence"
+      - "Diff view works"
+      - "Editing works"
+
+# =============================================================================
+# GROUP 5: Mobile App Integration
+# Requires Groups 3 and 4
+# =============================================================================
+
+  # --- Mobile Parallel Dashboard ---
+  - id: ralphy-022
+    title: "Add parallel execution dashboard to mobile app"
+    description: |
+      Mobile parallel execution view:
+      - Progress overview
+      - Agent status list
+      - Expandable output view
+      - Pull to refresh
+    category: "mobile"
+    parallel_group: 4
+    dependencies: ["ralphy-010", "ralphy-011"]
+    estimated_complexity: "medium"
+    files_to_create:
+      - "claude-code-mobile/src/screens/ralph/ParallelDashboardScreen.tsx"
+      - "claude-code-mobile/src/components/AgentStatusList.tsx"
+    acceptance_criteria:
+      - "Shows parallel progress"
+      - "Updates in real-time"
+      - "Expandable details"
+      - "Pull to refresh"
+
+  # --- Mobile Merge Notifications ---
+  - id: ralphy-023
+    title: "Implement merge conflict push notifications"
+    description: |
+      Push notifications for merge events:
+      - Notification on conflict detected
+      - Include confidence score
+      - Deep link to merge review
+      - Action buttons (Approve/View)
+    category: "mobile"
+    parallel_group: 4
+    dependencies: ["ralphy-015", "ralphy-017"]
+    estimated_complexity: "medium"
+    files_to_modify:
+      - "claude-code-mobile/src/services/NotificationService.ts"
+      - "claude-code-mobile/src/services/DeepLinkHandler.ts"
+    acceptance_criteria:
+      - "Notifications fire correctly"
+      - "Shows confidence score"
+      - "Deep link works"
+      - "Actions functional"
+
+  # --- Mobile Merge Review Screen ---
+  - id: ralphy-024
+    title: "Create mobile merge conflict review screen"
+    description: |
+      Mobile screen for merge review:
+      - Conflict list with confidence
+      - Expandable file diff view
+      - Approve/reject with comment
+      - Edit resolution (simple)
+    category: "mobile"
+    parallel_group: 4
+    dependencies: ["ralphy-017", "ralphy-023"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "claude-code-mobile/src/screens/ralph/MergeReviewScreen.tsx"
+      - "claude-code-mobile/src/components/MobileConflictDiff.tsx"
+    acceptance_criteria:
+      - "Shows all conflicts"
+      - "Diff view readable"
+      - "Approve/reject works"
+      - "Comment included"
+
+  # --- API Server Extensions ---
+  - id: ralphy-025
+    title: "Add API server endpoints for parallel execution and merge"
+    description: |
+      New API endpoints:
+      - POST /api/ralph/parse-prd
+      - GET/PUT /api/ralph/sessions/:id/tasks
+      - POST /api/ralph/sessions/:id/start-parallel
+      - GET /api/ralph/sessions/:id/agents
+      - GET /api/ralph/sessions/:id/merge-status
+      - POST /api/ralph/sessions/:id/merge/approve
+      - POST /api/ralph/sessions/:id/merge/reject
+    category: "backend"
+    parallel_group: 4
+    dependencies: ["ralphy-006", "ralphy-011", "ralphy-017"]
+    estimated_complexity: "medium"
+    files_to_modify:
+      - "src/main/api-server/index.ts"
+    acceptance_criteria:
+      - "All endpoints implemented"
+      - "Authentication works"
+      - "Proper error responses"
+      - "WebSocket events fire"
+
+# =============================================================================
+# GROUP 6: Integration & Testing
+# Final group - all others must complete
+# =============================================================================
+
+  # --- Integration Tests ---
+  - id: ralphy-026
+    title: "Create integration tests for parallel execution flow"
+    description: |
+      Integration tests covering:
+      - PRD → YAML conversion
+      - Parallel execution with mock agents
+      - Merge conflict scenarios
+      - Checkpoint flow
+      - Mobile API endpoints
+    category: "testing"
+    parallel_group: 5
+    dependencies: ["ralphy-009", "ralphy-016", "ralphy-025"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/__tests__/parallel-orchestrator.test.ts"
+      - "src/main/services/__tests__/merge-orchestrator.test.ts"
+      - "src/main/services/__tests__/prd-parser.test.ts"
+    acceptance_criteria:
+      - "Tests all major flows"
+      - "Mock agents work"
+      - "Conflict scenarios covered"
+      - "All tests pass"
+
+  # --- E2E Test ---
+  - id: ralphy-027
+    title: "Create E2E test for full PRD to completion flow"
+    description: |
+      End-to-end test:
+      - Import sample PRD
+      - Generate YAML
+      - Execute parallel tasks
+      - Handle merge
+      - Complete session
+    category: "testing"
+    parallel_group: 5
+    dependencies: ["ralphy-026"]
+    estimated_complexity: "high"
+    files_to_create:
+      - "src/main/services/__tests__/e2e-parallel-flow.test.ts"
+    acceptance_criteria:
+      - "Full flow executes"
+      - "No manual intervention needed"
+      - "Proper cleanup"
+      - "Metrics captured"
+
+# =============================================================================
+# Review Configuration
+# =============================================================================
+
+review:
+  after_each_group: true
+  agents:
+    - type: "code-reviewer"
+      focus: ["bugs", "security", "performance"]
+    - type: "typescript-reviewer"
+      focus: ["type-safety", "null-safety"]
+    - type: "conventions-checker"
+      focus: ["naming", "file-structure", "patterns"]
+  issue_handling:
+    P0: "fix_immediately"  # Critical bugs, security issues
+    P1: "fix_immediately"  # Major functionality problems
+    P2: "fix_immediately"  # Moderate issues affecting UX
+    P3: "document_for_later"  # Minor issues, nice-to-haves

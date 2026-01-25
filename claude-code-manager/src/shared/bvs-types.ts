@@ -421,6 +421,7 @@ export interface BvsReviewerResult {
   duration: number
   error?: string
   completedAt?: number
+  reviewData?: string  // Raw JSON output from reviewer agent
 }
 
 export interface BvsCodeReviewResult {

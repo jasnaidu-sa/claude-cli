@@ -17,6 +17,7 @@ import { registerIdeasHandlers } from './ideas-handlers'
 import { registerAutocoderHandlers } from './autocoder-handlers'
 import { registerInitiatorHandlers } from './initiator-handlers'
 import { registerRalphHandlers } from './ralph-handlers'
+import { registerBvsHandlers } from './bvs-handlers'
 
 export function registerIpcHandlers(): void {
   // Session handlers
@@ -75,6 +76,9 @@ export function registerIpcHandlers(): void {
 
   // Ralph Loop orchestrator handlers
   registerRalphHandlers()
+
+  // BVS (Bounded Verified Sections) workflow handlers
+  registerBvsHandlers()
 }
 
 function registerSessionHandlers(): void {

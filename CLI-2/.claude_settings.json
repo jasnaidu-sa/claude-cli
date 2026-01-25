@@ -1,0 +1,14 @@
+{
+  "sandbox": {
+    "enabled": false
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)"
+    ]
+  }
+}

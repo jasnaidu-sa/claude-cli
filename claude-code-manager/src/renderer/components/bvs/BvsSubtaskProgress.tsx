@@ -46,10 +46,9 @@ export function BvsSubtaskProgress({
   useEffect(() => {
     const loadSubtasks = async () => {
       try {
-        const result = await window.electron.bvsPlanning.getSubtaskProgress(sessionId, sectionId)
-        if (result.success && onRefresh) {
-          onRefresh()
-        }
+        await window.electron.bvsPlanning.getSubtaskProgress(sessionId, sectionId)
+        // The IPC call should trigger state updates via events/stores
+        // Removed onRefresh() call to prevent infinite re-render loop
       } catch (error) {
         console.error('[BvsSubtaskProgress] Error loading subtasks:', error)
       }
@@ -57,11 +56,18 @@ export function BvsSubtaskProgress({
 
     // Poll every 2 seconds during execution
     const hasActive = subtasks.some(s => s.status === 'in_progress')
+
+    let interval: NodeJS.Timeout | undefined
     if (hasActive) {
-      const interval = setInterval(loadSubtasks, 2000)
-      return () => clearInterval(interval)
+      interval = setInterval(loadSubtasks, 2000)
     }
-  }, [sessionId, sectionId, subtasks, onRefresh])
+
+    return () => {
+      if (interval) {
+        clearInterval(interval)
+      }
+    }
+  }, [sessionId, sectionId, subtasks])
 
   const toggleSubtask = (subtaskId: string) => {
     setExpandedSubtasks(prev => {
@@ -201,20 +207,25 @@ export function BvsSubtaskProgress({
                             </div>
 
                             {/* Progress Bar (for in_progress only) */}
-                            {subtask.status === 'in_progress' && (
-                              <div className="mb-2">
-                                <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                                  <span>Turn {subtask.turnsUsed} of {subtask.maxTurns}</span>
-                                  <span>{Math.round((subtask.turnsUsed / subtask.maxTurns) * 100)}%</span>
+                            {subtask.status === 'in_progress' && (() => {
+                              const progressPercent = subtask.maxTurns > 0
+                                ? Math.round((subtask.turnsUsed / subtask.maxTurns) * 100)
+                                : 0
+                              return (
+                                <div className="mb-2">
+                                  <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                                    <span>Turn {subtask.turnsUsed} of {subtask.maxTurns}</span>
+                                    <span>{progressPercent}%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full bg-blue-500 transition-all duration-300"
+                                      style={{ width: `${progressPercent}%` }}
+                                    />
+                                  </div>
                                 </div>
-                                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-blue-500 transition-all duration-300"
-                                    style={{ width: `${(subtask.turnsUsed / subtask.maxTurns) * 100}%` }}
-                                  />
-                                </div>
-                              </div>
-                            )}
+                              )
+                            })()}
 
                             {/* Quick Stats */}
                             <div className="flex items-center gap-3 text-xs">

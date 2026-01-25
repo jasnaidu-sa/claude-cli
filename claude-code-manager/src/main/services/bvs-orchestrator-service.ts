@@ -48,6 +48,7 @@ import {
   complexityAnalyzer,
   type ComplexityAnalysis,
 } from './bvs-complexity-analyzer-service'
+import { getBvsLearningCaptureService } from './bvs-learning-capture-service'
 import {
   BvsWorkerAgentService,
   type WorkerConfig,
@@ -1351,6 +1352,16 @@ export class BvsOrchestratorService extends EventEmitter {
         } catch (error) {
           if (error instanceof SessionLimitError) {
             console.error(`[BvsOrchestrator] Session limit exceeded:`, error.message)
+
+            // RALPH-015: Capture learning from limit violation
+            const learningService = getBvsLearningCaptureService()
+            await learningService.captureLimitViolation(
+              error,
+              section,
+              undefined, // No specific subtask yet (pre-execution)
+              this.executionConfig
+            )
+
             lastResult = {
               workerId: workerId as string,
               sectionId: section.id,
@@ -1373,7 +1384,22 @@ export class BvsOrchestratorService extends EventEmitter {
 
         // RALPH-010: Track cost after execution
         const sectionCost = this.calculateSectionCost(lastResult)
-        this.checkSessionLimits(sessionId, section.id, sectionCost)
+        try {
+          this.checkSessionLimits(sessionId, section.id, sectionCost)
+        } catch (error) {
+          if (error instanceof SessionLimitError) {
+            // RALPH-015: Capture learning from post-execution limit violation
+            const learningService = getBvsLearningCaptureService()
+            await learningService.captureLimitViolation(
+              error,
+              section,
+              undefined, // Aggregate across all subtasks
+              this.executionConfig
+            )
+            throw error
+          }
+          throw error
+        }
 
         // Check if successful
         if (lastResult.status === 'completed' && lastResult.qualityGatesPassed) {

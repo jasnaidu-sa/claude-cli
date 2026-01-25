@@ -64,13 +64,13 @@ interface IdeaReviewModalProps {
 }
 
 function formatDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  const date = new Date(timestamp)
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = date.getFullYear()
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${day}/${month}/${year} ${hours}:${minutes}`
 }
 
 function DiscussionMessage({ message }: { message: IdeaDiscussionMessage }) {
@@ -424,7 +424,7 @@ export function IdeaReviewModal({
     sections.push('## Original Request')
     sections.push(`From: ${idea.emailSource.from}`)
     sections.push(`Subject: ${idea.emailSource.subject}`)
-    sections.push(`Received: ${new Date(idea.emailSource.receivedAt).toLocaleDateString()}`)
+    sections.push(`Received: ${formatDate(idea.emailSource.receivedAt).split(' ')[0]}`)
     sections.push('')
     sections.push('```')
     sections.push(idea.emailSource.body)

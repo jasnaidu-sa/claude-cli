@@ -12,6 +12,17 @@
  */
 
 import React, { useMemo } from 'react'
+
+/**
+ * Format date as dd/mm/yyyy
+ */
+function formatDate(timestamp: number): string {
+  const date = new Date(timestamp)
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = date.getFullYear()
+  return `${day}/${month}/${year}`
+}
 import {
   Inbox,
   Clock,
@@ -296,14 +307,14 @@ function IdeaCard({
             <MessageSquare className="h-3 w-3" />
             {idea.discussionMessages.length}
             <span className="text-[10px] opacity-70">
-              ({new Date(Math.max(...idea.discussionMessages.map(m => m.timestamp))).toLocaleDateString()})
+              ({formatDate(Math.max(...idea.discussionMessages.map(m => m.timestamp)))})
             </span>
           </div>
         )}
 
         {/* Date - show email received date if available, otherwise created date */}
         <span className="text-[10px] text-muted-foreground" title={`Received: ${new Date(idea.emailSource?.receivedAt || idea.createdAt).toLocaleString()}`}>
-          {new Date(idea.emailSource?.receivedAt || idea.createdAt).toLocaleDateString()}
+          {formatDate(idea.emailSource?.receivedAt || idea.createdAt)}
         </span>
       </div>
     </div>

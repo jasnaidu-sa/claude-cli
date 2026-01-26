@@ -50,17 +50,18 @@ import {
 } from './bvs-complexity-analyzer-service'
 import { getBvsLearningCaptureService } from './bvs-learning-capture-service'
 import {
-  BvsWorkerAgentService,
+  BvsWorkerCliService,
   type WorkerConfig,
   type WorkerResult,
   type ProjectContext,
-} from './bvs-worker-agent-service'
+} from './bvs-worker-cli-service'
 import {
   mergePointService,
   type MergePointConfig,
   type MergePointResult,
   BVS_MERGE_CHANNELS,
 } from './bvs-merge-point-service'
+import { ConfigStore } from './config-store'
 
 // Directory structure constants
 const BVS_DIR = '.bvs'
@@ -93,6 +94,7 @@ export class BvsOrchestratorService extends EventEmitter {
   private workerProcesses: Map<string, unknown> = new Map() // Task agent references
   private config: BvsConfig = DEFAULT_BVS_CONFIG
   private executionConfig: BvsExecutionConfig = DEFAULT_BVS_EXECUTION_CONFIG // RALPH-010
+  private configStore: ConfigStore
 
   // RALPH-010: Session-level cost tracking
   private sessionCosts: Map<string, {
@@ -101,8 +103,9 @@ export class BvsOrchestratorService extends EventEmitter {
     iterationCount: number
   }> = new Map()
 
-  constructor() {
+  constructor(configStore: ConfigStore) {
     super()
+    this.configStore = configStore
   }
 
   /**
@@ -698,6 +701,53 @@ export class BvsOrchestratorService extends EventEmitter {
     session.currentSections = []
   }
 
+  /**
+   * Execute only selected sections (phase selection support)
+   */
+  async executeSelectedSections(
+    projectPath: string,
+    sessionId: string,
+    selectedSectionIds: string[],
+    config: any
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.plan) {
+      throw new Error(`Session or plan not found: ${sessionId}`)
+    }
+
+    // Filter sections to only selected ones
+    const allSections = session.plan.sections
+    const selectedSections = allSections.filter(s => selectedSectionIds.includes(s.id))
+
+    if (selectedSections.length === 0) {
+      throw new Error('No sections selected for execution')
+    }
+
+    // Create filtered plan with only selected sections
+    const filteredPlan = {
+      ...session.plan,
+      sections: selectedSections
+    }
+
+    // Rebuild dependency graph for selected sections only
+    filteredPlan.dependencyGraph = this.buildDependencyGraph(selectedSections)
+    filteredPlan.parallelGroups = this.buildParallelGroups(filteredPlan.dependencyGraph)
+
+    // Update session with filtered plan
+    session.plan = filteredPlan
+    session.sectionsTotal = selectedSections.length
+    session.sectionsCompleted = 0
+    session.sectionsFailed = 0
+
+    // Apply execution config
+    if (config) {
+      session.plan.executionConfig = config
+    }
+
+    // Start execution with filtered plan
+    await this.startExecution(sessionId)
+  }
+
   // ============================================================================
   // Dependency Graph
   // ============================================================================
@@ -901,9 +951,126 @@ export class BvsOrchestratorService extends EventEmitter {
       workerId,
     })
 
-    // Note: Actual section execution would be handled by spawning a Task agent
-    // This is a placeholder for the agent SDK integration
     console.log(`[BVS] Starting section ${sectionId} with worker ${workerId}`)
+
+    // Execute section with worker agent
+    this.executeSectionWithWorker(sessionId, sectionId, workerId, workerInfo)
+      .catch(error => {
+        console.error(`[BVS] Error executing section ${sectionId}:`, error)
+        this.completeSection(sessionId, sectionId, false, error.message)
+      })
+  }
+
+  /**
+   * Execute a section using worker agent
+   */
+  private async executeSectionWithWorker(
+    sessionId: string,
+    sectionId: string,
+    workerId: BvsWorkerId,
+    workerInfo: BvsWorkerInfo
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session || !session.plan) {
+      throw new Error(`Session not found: ${sessionId}`)
+    }
+
+    const section = session.plan.sections.find(s => s.id === sectionId)
+    if (!section) {
+      throw new Error(`Section not found: ${sectionId}`)
+    }
+
+    // Create worker CLI service
+    const workerService = new BvsWorkerCliService(this.configStore)
+
+    // Forward worker progress events to UI
+    workerService.on('progress', (data: any) => {
+      section.progress = data.progress
+      workerInfo.progress = data.progress
+      workerInfo.currentStep = data.currentStep
+
+      this.emitBvsEvent({
+        type: 'section_update',
+        sectionId: section.id,
+        status: section.status,
+        progress: data.progress,
+        currentStep: data.currentStep,
+        currentFile: data.currentFile,
+        workerId,
+      })
+    })
+
+    // Build project context
+    const projectContext: ProjectContext = {
+      projectPath: session.projectPath,
+      projectName: session.projectName,
+      framework: session.plan?.codebaseContext?.framework || 'Unknown',
+      database: 'None',
+      patterns: session.plan?.codebaseContext?.patterns || [],
+      existingFiles: [],
+      completedSections: [],
+    }
+
+    // Get complexity analysis (default to medium)
+    const complexity: ComplexityAnalysis = {
+      sectionId: section.id,
+      score: 5,
+      model: 'sonnet',
+      maxTurns: 5,
+      reasoning: ['Standard complexity'],
+      riskFlags: [],
+    }
+
+    const workerConfig: WorkerConfig = {
+      workerId: workerId as string,
+      sectionId: section.id,
+      section,
+      worktreePath: null, // Sequential execution doesn't use worktrees
+      model: complexity.model,
+      maxTurns: complexity.maxTurns,
+      projectContext,
+      complexity,
+    }
+
+    try {
+      // Execute the section
+      console.log(`[BVS] Worker ${workerId} executing section ${sectionId}`)
+
+      const result = await workerService.executeSection(workerConfig)
+
+      // Quality gate validation - check if work was actually completed
+      if (result.status === 'failed' || !result.qualityGatesPassed) {
+        console.error(`[BVS] Worker ${workerId} section ${sectionId} failed quality gates:`, result.errors)
+        await this.completeSection(sessionId, sectionId, false, result.errors.join('; '))
+
+        // Pause for user intervention in SEMI_ATTENDED or higher
+        await this.shouldPauseForApproval(sessionId, 'issue', {
+          sectionId,
+          issue: `Section ${sectionId} failed quality gates: ${result.errors.join(', ')}`
+        })
+
+        return
+      }
+
+      // Mark as complete
+      console.log(`[BVS] Worker ${workerId} completed section ${sectionId} ✓`)
+      await this.completeSection(sessionId, sectionId, true)
+
+      // Checkpoint: Pause for approval after section completion
+      await this.shouldPauseForApproval(sessionId, 'subtask', {
+        sectionId,
+        subtaskId: sectionId
+      })
+    } catch (error) {
+      console.error(`[BVS] Worker ${workerId} failed section ${sectionId}:`, error)
+      await this.completeSection(sessionId, sectionId, false, error instanceof Error ? error.message : 'Unknown error')
+
+      // Pause for user intervention on errors
+      await this.shouldPauseForApproval(sessionId, 'issue', {
+        sectionId,
+        issue: error instanceof Error ? error.message : 'Unknown error'
+      })
+    }
   }
 
   /**
@@ -1220,6 +1387,11 @@ export class BvsOrchestratorService extends EventEmitter {
           mergeResult.mergedWorkers
         )
       }
+
+      // Checkpoint: Pause for approval after level completion
+      await this.shouldPauseForApproval(sessionId, 'level', {
+        level: levelIndex
+      })
     }
 
     // All levels complete
@@ -1305,20 +1477,21 @@ export class BvsOrchestratorService extends EventEmitter {
       })
 
       // Create and execute worker
-      const workerService = new BvsWorkerAgentService()
+      const workerService = new BvsWorkerCliService(this.configStore)
 
       // Forward worker events
-      workerService.on('progress', (data) => {
+      workerService.on('progress', (data: any) => {
         section.progress = data.progress
         workerInfo.progress = data.progress
-        workerInfo.currentStep = data.step
+        workerInfo.currentStep = data.currentStep
 
         this.emitBvsEvent({
           type: 'section_update',
           sectionId: section.id,
           status: section.status,
           progress: data.progress,
-          currentStep: data.step,
+          currentStep: data.currentStep,
+          currentFile: data.currentFile,
           workerId,
         })
       })
@@ -1560,7 +1733,8 @@ let bvsOrchestratorService: BvsOrchestratorService | null = null
 
 export function getBvsOrchestratorService(): BvsOrchestratorService {
   if (!bvsOrchestratorService) {
-    bvsOrchestratorService = new BvsOrchestratorService()
+    const configStore = new ConfigStore()
+    bvsOrchestratorService = new BvsOrchestratorService(configStore)
   }
   return bvsOrchestratorService
 }

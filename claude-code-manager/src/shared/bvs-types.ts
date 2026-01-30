@@ -222,6 +222,10 @@ export interface BvsSection {
   retryCount: number
   maxRetries: number
   lastError?: string
+  errorMessage?: string  // For frontend display (same as lastError)
+
+  // Worker output (accumulated for display)
+  workerOutput?: string
 
   // Commits made in this section
   commits: string[]
@@ -564,6 +568,7 @@ export interface BvsSession {
   sectionsTotal: number
   sectionsCompleted: number
   sectionsFailed: number
+  sectionsSkipped?: number
   overallProgress: number
 
   // Current activity
@@ -581,6 +586,10 @@ export interface BvsSession {
   // Error handling
   lastError?: string
   consecutiveFailures: number
+
+  // Partial execution - when user selects specific sections to run
+  // If set, only these sections will be executed; others remain pending
+  selectedSectionIds?: Set<string>
 }
 
 // ============================================================================
@@ -593,6 +602,7 @@ export interface BvsSectionUpdateEvent {
   status: BvsSectionStatus
   progress: number
   currentStep?: string
+  currentFile?: string
   workerId?: BvsWorkerId
 }
 
@@ -731,6 +741,14 @@ export interface BvsWorkerFailedEvent {
   willRetry: boolean
 }
 
+export interface BvsWorkerOutputEvent {
+  type: 'worker_output'
+  sectionId: string
+  workerId: BvsWorkerId
+  output: string
+  timestamp: number
+}
+
 export type BvsEvent =
   | BvsSectionUpdateEvent
   | BvsTypeCheckEvent
@@ -749,6 +767,7 @@ export type BvsEvent =
   | BvsWorkerStartedEvent
   | BvsWorkerCompletedEvent
   | BvsWorkerFailedEvent
+  | BvsWorkerOutputEvent
 
 // ============================================================================
 // Configuration
@@ -892,6 +911,253 @@ export class SessionLimitError extends Error {
 }
 
 // ============================================================================
+// File Ownership Types (P0.1 - Ultrapilot Improvements)
+// ============================================================================
+
+/**
+ * File ownership for a section - defines what files the section exclusively owns
+ */
+export interface FileOwnership {
+  /** Files this section exclusively owns */
+  exclusiveFiles: string[]
+  /** Glob patterns this section owns (e.g., "src/api/**") */
+  exclusiveGlobs: string[]
+  /** Files this section reads but doesn't modify */
+  readOnlyDependencies: string[]
+  /** Cross-boundary imports (for tracking) */
+  boundaryImports: string[]
+}
+
+/**
+ * Extended section with file ownership (V2)
+ */
+export interface BvsSectionV2 extends BvsSection {
+  /** File ownership for this section */
+  ownership: FileOwnership
+  /** Whether ownership has been validated */
+  ownershipValidated: boolean
+}
+
+/**
+ * Ownership map - tracks which sections own which files
+ */
+export interface OwnershipMap {
+  /** Map of file path to owning section ID */
+  fileToSection: Record<string, string>
+  /** Map of glob pattern to owning section ID */
+  globToSection: Record<string, string>
+  /** Files classified as shared (no exclusive owner) */
+  sharedFiles: string[]
+  /** Validation timestamp */
+  validatedAt: string
+}
+
+/**
+ * Result of file classification across sections
+ */
+export interface ClassificationResult {
+  /** Files with single owner */
+  exclusiveFiles: Map<string, string>
+  /** Files in multiple sections */
+  sharedFiles: string[]
+  /** Files matching shared patterns */
+  patternMatchedShared: string[]
+  /** Conflicts that need resolution */
+  conflicts: FileConflict[]
+}
+
+/**
+ * File conflict - when multiple sections claim the same file
+ */
+export interface FileConflict {
+  file: string
+  claimingSections: string[]
+  resolution: 'first-wins' | 'shared' | 'manual'
+}
+
+// ============================================================================
+// Decomposition Types (P1.1 - AI-Powered Decomposition)
+// ============================================================================
+
+/**
+ * Result of AI-powered task decomposition
+ */
+export interface DecomposedPlan {
+  /** Original user requirement */
+  requirement: string
+  /** Decomposed sections with ownership */
+  sections: BvsSectionV2[]
+  /** Parallel execution groups */
+  parallelGroups: ParallelGroup[]
+  /** Files classified as shared */
+  sharedFiles: string[]
+  /** Critical path (longest dependency chain) */
+  criticalPath: CriticalPath
+  /** Decomposition metadata */
+  metadata: DecompositionMetadata
+}
+
+/**
+ * Group of sections that can execute in parallel
+ */
+export interface ParallelGroup {
+  /** Group index (execution order) */
+  level: number
+  /** Section IDs that can run in parallel */
+  sectionIds: string[]
+  /** Why these are grouped together */
+  rationale: string
+  /** Estimated duration for this group */
+  estimatedDuration?: number
+}
+
+/**
+ * Critical path analysis result
+ */
+export interface CriticalPath {
+  /** Section IDs in critical path order */
+  path: string[]
+  /** Total estimated duration */
+  totalDuration: number
+  /** Bottleneck section (longest single section) */
+  bottleneck: string
+}
+
+/**
+ * Metadata about the decomposition process
+ */
+export interface DecompositionMetadata {
+  /** Model used for decomposition */
+  model: 'opus' | 'sonnet'
+  /** Time taken to decompose */
+  decompositionTimeMs: number
+  /** Number of iterations to resolve conflicts */
+  conflictResolutionIterations: number
+  /** Parallelization efficiency score (0-1) */
+  parallelizationScore: number
+}
+
+// ============================================================================
+// Validation Gate Types (P1.2 - Mandatory Validation)
+// ============================================================================
+
+/**
+ * Configuration for validation gates
+ */
+export interface ValidationGateConfig {
+  /** Required validation checks */
+  required: {
+    typecheck: boolean
+    lint: boolean
+    tests: boolean
+    build: boolean
+  }
+  /** Optional but recommended checks */
+  recommended: {
+    securityScan: boolean
+    e2eTests: boolean
+    coverageThreshold: number
+  }
+  /** Bypass settings */
+  allowBypass: {
+    enabled: boolean
+    requiresReason: boolean
+    auditLog: boolean
+  }
+}
+
+/**
+ * Validation bypass request
+ */
+export interface ValidationBypass {
+  /** Who requested the bypass */
+  user: string
+  /** Why bypass is needed */
+  reason: string
+  /** Which checks are being bypassed */
+  checks: string[]
+  /** Timestamp of bypass request */
+  timestamp: string
+  /** Acknowledgment of risks */
+  acknowledgedRisks: boolean
+}
+
+// ============================================================================
+// Mode Registry Types (P2.1 - Conflict Prevention)
+// ============================================================================
+
+/**
+ * BVS operational modes
+ */
+export type BvsMode =
+  | 'idle'           // No active operation
+  | 'planning'       // Planning agent active
+  | 'decomposing'    // Task decomposition in progress
+  | 'executing'      // Section execution in progress
+  | 'validating'     // Validation gate running
+  | 'integrating'    // Shared file integration
+
+/**
+ * Mode configuration
+ */
+export interface ModeConfig {
+  name: string
+  exclusive: boolean
+  conflictsWith: BvsMode[]
+  allowsSubMode: BvsMode[]
+}
+
+/**
+ * Current mode state
+ */
+export interface ModeState {
+  currentMode: BvsMode
+  modeData?: Record<string, unknown>
+  enteredAt: string
+  projectId?: string
+  sessionId?: string
+  activeSubModes: BvsMode[]
+}
+
+// ============================================================================
+// Worker Skills Types (P2.2 - Skill Injection)
+// ============================================================================
+
+/**
+ * Worker skill definition
+ */
+export interface WorkerSkill {
+  /** Skill identifier */
+  id: string
+  /** When to apply this skill */
+  trigger: 'always' | 'on-error' | 'on-new-file' | 'on-test'
+  /** Skill instructions */
+  instructions: string
+  /** Priority (higher = earlier in prompt) */
+  priority: number
+}
+
+/**
+ * Shared file change record (for integration phase)
+ */
+export interface SharedFileChange {
+  file: string
+  sectionId: string
+  changeType: 'add-dependency' | 'add-script' | 'add-type' | 'modify'
+  description: string
+  packageChanges?: {
+    dependencies?: Record<string, string>
+    devDependencies?: Record<string, string>
+    scripts?: Record<string, string>
+  }
+  typeChanges?: {
+    exports?: string[]
+    imports?: string[]
+  }
+  contentPatch?: string
+}
+
+// ============================================================================
 // IPC Channels
 // ============================================================================
 
@@ -901,11 +1167,13 @@ export const BVS_IPC_CHANNELS = {
   BVS_GET_SESSION: 'bvs:get-session',
   BVS_LIST_SESSIONS: 'bvs:list-sessions',
   BVS_DELETE_SESSION: 'bvs:delete-session',
+  BVS_RESTORE_SESSION: 'bvs:restore-session',
 
   // Task input
   BVS_UPLOAD_PRD: 'bvs:upload-prd',
   BVS_START_PLANNING: 'bvs:start-planning',
   BVS_SEND_PLANNING_MESSAGE: 'bvs:send-planning-message',
+  BVS_CANCEL_PLANNING: 'bvs:cancel-planning',
   BVS_FINALIZE_PLAN: 'bvs:finalize-plan',
 
   // Plan management
@@ -966,6 +1234,14 @@ export const BVS_IPC_CHANNELS = {
   BVS_UPDATE_PROJECT: 'bvs:update-project',
   BVS_DELETE_PROJECT: 'bvs:delete-project',
   BVS_ARCHIVE_PROJECT: 'bvs:archive-project',
+
+  // Execution runs (persistent storage for partial runs)
+  BVS_LIST_EXECUTION_RUNS: 'bvs:list-execution-runs',
+  BVS_GET_EXECUTION_RUN: 'bvs:get-execution-run',
+  BVS_CREATE_EXECUTION_RUN: 'bvs:create-execution-run',
+  BVS_UPDATE_EXECUTION_RUN: 'bvs:update-execution-run',
+  BVS_DELETE_EXECUTION_RUN: 'bvs:delete-execution-run',
+  BVS_RESUME_EXECUTION_RUN: 'bvs:resume-execution-run',
 } as const
 
 export type BvsIpcChannel = typeof BVS_IPC_CHANNELS[keyof typeof BVS_IPC_CHANNELS]
@@ -1035,6 +1311,36 @@ export interface BvsProjectListItem {
 }
 
 /**
+ * Execution run - represents a single execution attempt
+ * Stored in .bvs/projects/{projectId}/runs/{runId}.json
+ */
+export interface BvsExecutionRun {
+  id: string                          // e.g., "run-20260127-143052"
+  projectId: string
+  startedAt: number
+  pausedAt?: number
+  completedAt?: number
+  status: 'in_progress' | 'paused' | 'completed' | 'failed'
+
+  // What was selected for this run
+  selectedPhases: number[]
+  selectedSections: string[]
+
+  // Progress tracking
+  sectionsCompleted: string[]
+  sectionsFailed: string[]
+  sectionsInProgress: string[]
+  currentLevel: number
+
+  // Metrics
+  totalCostUsd?: number
+  totalTokens?: number
+
+  // Session ID for live execution (if running)
+  sessionId?: string
+}
+
+/**
  * Project directory structure constants
  */
 export const BVS_PROJECT_FILES = {
@@ -1044,6 +1350,7 @@ export const BVS_PROJECT_FILES = {
   PROGRESS_JSON: 'progress.json',
   LOGS_DIR: 'logs',
   CHECKPOINTS_DIR: 'checkpoints',
+  RUNS_DIR: 'runs',
 } as const
 
 /**

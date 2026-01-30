@@ -41,20 +41,23 @@ import {
   type BvsParallelGroup,
   type BvsProject,
   type BvsExecutionConfig,
+  type BvsExecutionRun,
 } from '@shared/bvs-types'
 
 // Import new execution services
 import {
   complexityAnalyzer,
+  BVS_MODELS,
   type ComplexityAnalysis,
 } from './bvs-complexity-analyzer-service'
 import { getBvsLearningCaptureService } from './bvs-learning-capture-service'
+// Using SDK service for real-time streaming (matches planning agent pattern)
 import {
-  BvsWorkerCliService,
+  BvsWorkerSdkService,
   type WorkerConfig,
   type WorkerResult,
   type ProjectContext,
-} from './bvs-worker-cli-service'
+} from './bvs-worker-sdk-service'
 import {
   mergePointService,
   type MergePointConfig,
@@ -396,6 +399,7 @@ export class BvsOrchestratorService extends EventEmitter {
     const sessionId = generateSessionId()
 
     // Convert plan sections to BvsSection format if needed
+    // IMPORTANT: Preserve existing section status (e.g., 'done' for completed sections)
     const sections: BvsSection[] = plan.sections.map((s) => ({
       id: s.id,
       name: s.name,
@@ -403,18 +407,20 @@ export class BvsOrchestratorService extends EventEmitter {
       files: s.files.map((f) => ({
         path: f.path,
         action: f.action,
-        status: 'pending' as const,
+        status: (f as any).status || 'pending' as const,
       })),
       dependencies: s.dependencies || [],
       dependents: [], // Will be computed
-      status: 'pending' as const,
+      // Preserve existing status from plan (e.g., 'done' from progress.json)
+      status: (s as any).status || 'pending' as const,
       successCriteria: (s.successCriteria || []).map((c, i) => ({
         id: `${s.id}-criterion-${i}`,
         description: typeof c === 'string' ? c : c.description,
-        passed: false,
+        passed: typeof c === 'object' ? (c as any).passed || false : false,
       })),
-      progress: 0,
-      retryCount: 0,
+      // Preserve progress from plan
+      progress: (s as any).progress || 0,
+      retryCount: (s as any).retryCount || 0,
       maxRetries: 3,
       commits: [],
     }))
@@ -455,6 +461,14 @@ export class BvsOrchestratorService extends EventEmitter {
       consecutiveFailures: 0,
     }
 
+    // Remove any old sessions for the same project to avoid stale data
+    for (const [existingId, existingSession] of this.sessions.entries()) {
+      if (existingSession.projectId === projectId && existingId !== sessionId) {
+        console.log(`[BvsOrchestrator] Removing old session ${existingId} for project ${projectId} (status: ${existingSession.status})`)
+        this.sessions.delete(existingId)
+      }
+    }
+
     this.sessions.set(sessionId, session)
     return sessionId
   }
@@ -471,6 +485,147 @@ export class BvsOrchestratorService extends EventEmitter {
    */
   listSessions(): BvsSession[] {
     return Array.from(this.sessions.values())
+  }
+
+  /**
+   * Restore a session from project/progress files if the project was in_progress
+   * This is used when the app restarts and in-memory sessions are lost
+   */
+  async restoreSessionFromProgress(
+    projectPath: string,
+    projectId: string
+  ): Promise<BvsSession | null> {
+    // First check if session already exists in memory
+    const existingSession = Array.from(this.sessions.values()).find(
+      s => s.projectId === projectId
+    )
+    if (existingSession) {
+      console.log('[BvsOrchestrator] Session already in memory:', existingSession.id)
+      return existingSession
+    }
+
+    // Load project.json to check if it was in progress
+    const projectJsonPath = path.join(
+      projectPath,
+      BVS_DIR,
+      BVS_GLOBAL_FILES.PROJECTS_DIR,
+      projectId,
+      BVS_PROJECT_FILES.PROJECT_JSON
+    )
+
+    try {
+      const projectContent = await fs.readFile(projectJsonPath, 'utf-8')
+      const projectData = JSON.parse(projectContent) as BvsProject
+
+      // Load the plan to get full section data
+      const plan = await this.loadPlan(projectPath, projectId)
+      if (!plan) {
+        console.log('[BvsOrchestrator] Cannot restore session - plan not found:', projectId)
+        return null
+      }
+
+      // Try to load progress file for section status
+      const progressPath = path.join(
+        projectPath,
+        BVS_DIR,
+        BVS_GLOBAL_FILES.PROJECTS_DIR,
+        projectId,
+        BVS_PROJECT_FILES.PROGRESS_JSON
+      )
+
+      let progress: any = {}
+      let sectionsCompleted = 0
+      let sectionsFailed = 0
+      let sectionsSkipped = 0
+      try {
+        const progressContent = await fs.readFile(progressPath, 'utf-8')
+        progress = JSON.parse(progressContent)
+        console.log('[BvsOrchestrator] Loaded progress from:', progressPath)
+
+        // Merge progress status into plan sections if available
+        if (progress.sections) {
+          for (const progressSection of progress.sections) {
+            const planSection = plan.sections.find(s => s.id === progressSection.id)
+            if (planSection) {
+              planSection.status = progressSection.status
+              planSection.progress = progressSection.progress
+              planSection.workerId = progressSection.workerId
+              planSection.startedAt = progressSection.startedAt
+              planSection.completedAt = progressSection.completedAt
+              planSection.errorMessage = progressSection.errorMessage
+              ;(planSection as any).workerOutput = progressSection.workerOutput
+
+              // Count section statuses
+              if (progressSection.status === 'done') sectionsCompleted++
+              else if (progressSection.status === 'failed') sectionsFailed++
+              else if (progressSection.status === 'skipped') sectionsSkipped++
+
+              console.log(`[BvsOrchestrator] Restored section ${planSection.id}: ${planSection.status}`)
+            }
+          }
+        }
+
+        // Use progress file values if available
+        if (progress.sectionsCompleted !== undefined) sectionsCompleted = progress.sectionsCompleted
+        if (progress.sectionsFailed !== undefined) sectionsFailed = progress.sectionsFailed
+        if (progress.sectionsSkipped !== undefined) sectionsSkipped = progress.sectionsSkipped
+      } catch {
+        // Progress file doesn't exist or is invalid, continue with plan data
+        console.log('[BvsOrchestrator] No valid progress file, using plan data')
+      }
+
+      // Determine if there's actual progress to restore
+      const hasProgress = sectionsCompleted > 0 || sectionsFailed > 0 || sectionsSkipped > 0 ||
+        plan.sections.some(s => s.status !== 'pending')
+      const isActiveProject = projectData.status === 'in_progress' || projectData.status === 'paused'
+
+      // Only restore if there's progress OR project was explicitly in_progress/paused
+      if (!hasProgress && !isActiveProject) {
+        console.log('[BvsOrchestrator] No progress and project not in progress, not restoring:', projectId, 'status:', projectData.status)
+        return null
+      }
+
+      console.log(`[BvsOrchestrator] Restoring session - hasProgress: ${hasProgress}, isActiveProject: ${isActiveProject}`)
+
+      // Generate a new session ID for the restored session
+      const sessionId = progress.sessionId || `bvs-restored-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+
+      // Calculate overall progress from section counts
+      const overallProgress = plan.sections.length > 0
+        ? Math.round((sectionsCompleted / plan.sections.length) * 100)
+        : 0
+
+      // Create restored session - always restore as 'paused' so user can choose to resume
+      const session: BvsSession = {
+        id: sessionId,
+        projectPath,
+        projectId,
+        config: this.config,
+        status: 'paused', // Always restore as paused
+        phase: 'executing',
+        plan,
+        sectionsTotal: plan.sections.length,
+        sectionsCompleted,
+        sectionsFailed,
+        sectionsSkipped,
+        overallProgress,
+        startedAt: projectData.executionStartedAt || Date.now(),
+        totalElapsedSeconds: progress.totalElapsedSeconds || 0,
+        workers: [], // Array of BvsWorkerInfo
+        currentSections: [], // Track current running sections
+        eventHistory: [],
+      }
+
+      // Add to sessions map
+      this.sessions.set(session.id, session)
+      console.log('[BvsOrchestrator] Restored session from project:', session.id, 'status:', session.status)
+
+      return session
+    } catch (error) {
+      // Project file doesn't exist or is invalid
+      console.log('[BvsOrchestrator] Error restoring session for:', projectId, error)
+      return null
+    }
   }
 
   /**
@@ -526,6 +681,9 @@ export class BvsOrchestratorService extends EventEmitter {
    *                    If not provided, tries project directories first, then legacy location.
    */
   async loadPlan(projectPath: string, projectId?: string): Promise<BvsExecutionPlan | null> {
+    let plan: BvsExecutionPlan | null = null
+    let usedProjectId: string | null = projectId || null
+
     // If projectId provided, load from that specific project directory
     if (projectId) {
       const planPath = path.join(
@@ -538,44 +696,91 @@ export class BvsOrchestratorService extends EventEmitter {
       try {
         const content = await fs.readFile(planPath, 'utf-8')
         console.log('[BvsOrchestrator] Loaded plan from project:', projectId)
-        return JSON.parse(content) as BvsExecutionPlan
+        plan = JSON.parse(content) as BvsExecutionPlan
       } catch {
         console.warn('[BvsOrchestrator] Plan not found for project:', projectId)
         return null
       }
-    }
-
-    // No projectId - try to find a 'ready' project first
-    const projectsDir = path.join(projectPath, BVS_DIR, BVS_GLOBAL_FILES.PROJECTS_DIR)
-    try {
-      const projects = await fs.readdir(projectsDir)
-      for (const pid of projects) {
-        const projectJsonPath = path.join(projectsDir, pid, BVS_PROJECT_FILES.PROJECT_JSON)
-        try {
-          const projectJson = JSON.parse(await fs.readFile(projectJsonPath, 'utf-8')) as BvsProject
-          if (projectJson.status === 'ready' || projectJson.status === 'in_progress') {
-            const planPath = path.join(projectsDir, pid, BVS_PROJECT_FILES.PLAN_JSON)
-            const content = await fs.readFile(planPath, 'utf-8')
-            console.log('[BvsOrchestrator] Found ready project:', pid)
-            return JSON.parse(content) as BvsExecutionPlan
+    } else {
+      // No projectId - try to find a 'ready' or 'in_progress' project first
+      const projectsDir = path.join(projectPath, BVS_DIR, BVS_GLOBAL_FILES.PROJECTS_DIR)
+      try {
+        const projects = await fs.readdir(projectsDir)
+        for (const pid of projects) {
+          const projectJsonPath = path.join(projectsDir, pid, BVS_PROJECT_FILES.PROJECT_JSON)
+          try {
+            const projectJson = JSON.parse(await fs.readFile(projectJsonPath, 'utf-8')) as BvsProject
+            if (projectJson.status === 'ready' || projectJson.status === 'in_progress' || projectJson.status === 'paused') {
+              const planPath = path.join(projectsDir, pid, BVS_PROJECT_FILES.PLAN_JSON)
+              const content = await fs.readFile(planPath, 'utf-8')
+              console.log('[BvsOrchestrator] Found project:', pid, 'status:', projectJson.status)
+              plan = JSON.parse(content) as BvsExecutionPlan
+              usedProjectId = pid
+              break
+            }
+          } catch {
+            continue
           }
+        }
+      } catch {
+        // Projects directory doesn't exist
+      }
+
+      // Fallback: legacy location
+      if (!plan) {
+        const legacyPlanPath = path.join(this.getBvsDir(projectPath), 'plan.json')
+        try {
+          const content = await fs.readFile(legacyPlanPath, 'utf-8')
+          console.log('[BvsOrchestrator] Loaded plan from legacy location')
+          plan = JSON.parse(content) as BvsExecutionPlan
         } catch {
-          continue
+          return null
         }
       }
-    } catch {
-      // Projects directory doesn't exist
     }
 
-    // Fallback: legacy location
-    const legacyPlanPath = path.join(this.getBvsDir(projectPath), 'plan.json')
-    try {
-      const content = await fs.readFile(legacyPlanPath, 'utf-8')
-      console.log('[BvsOrchestrator] Loaded plan from legacy location')
-      return JSON.parse(content) as BvsExecutionPlan
-    } catch {
-      return null
+    // IMPORTANT: Merge progress data into plan sections
+    // This ensures the UI shows the current status even after app restart
+    if (plan && usedProjectId) {
+      const progressPath = path.join(
+        projectPath,
+        BVS_DIR,
+        BVS_GLOBAL_FILES.PROJECTS_DIR,
+        usedProjectId,
+        BVS_PROJECT_FILES.PROGRESS_JSON
+      )
+      try {
+        const progressContent = await fs.readFile(progressPath, 'utf-8')
+        const progress = JSON.parse(progressContent)
+        console.log('[BvsOrchestrator] Merging progress data from:', progressPath)
+
+        if (progress.sections && Array.isArray(progress.sections)) {
+          for (const progressSection of progress.sections) {
+            const planSection = plan.sections.find(s => s.id === progressSection.id)
+            if (planSection) {
+              // Merge all progress data into plan section
+              planSection.status = progressSection.status || planSection.status
+              planSection.progress = progressSection.progress ?? planSection.progress
+              planSection.workerId = progressSection.workerId || planSection.workerId
+              planSection.startedAt = progressSection.startedAt
+              planSection.completedAt = progressSection.completedAt
+              planSection.errorMessage = progressSection.errorMessage
+              ;(planSection as any).workerOutput = progressSection.workerOutput
+              ;(planSection as any).costUsd = progressSection.costUsd
+              ;(planSection as any).tokensInput = progressSection.tokensInput
+              ;(planSection as any).tokensOutput = progressSection.tokensOutput
+              ;(planSection as any).turnsUsed = progressSection.turnsUsed
+
+              console.log(`[BvsOrchestrator] Merged progress for ${planSection.id}: status=${planSection.status}, progress=${planSection.progress}%`)
+            }
+          }
+        }
+      } catch {
+        console.log('[BvsOrchestrator] No progress file found, using plan defaults')
+      }
     }
+
+    return plan
   }
 
   /**
@@ -674,15 +879,34 @@ export class BvsOrchestratorService extends EventEmitter {
    * Resume execution
    */
   async resumeExecution(sessionId: string): Promise<void> {
+    console.log('[BvsOrchestrator] resumeExecution called for session:', sessionId)
     const session = this.sessions.get(sessionId)
-    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    if (!session) {
+      console.log('[BvsOrchestrator] Session not found:', sessionId)
+      throw new Error(`Session not found: ${sessionId}`)
+    }
 
+    console.log('[BvsOrchestrator] Session status:', session.status)
     if (session.status !== 'paused') {
       throw new Error('Session is not paused')
     }
 
+    // Initialize currentSections if not set (for restored sessions)
+    if (!session.currentSections) {
+      session.currentSections = []
+    }
+
+    // Ensure plan has parallelGroups (for restored sessions)
+    if (session.plan && !session.plan.parallelGroups) {
+      console.log('[BvsOrchestrator] Building parallelGroups for restored session')
+      session.plan.dependencyGraph = this.buildDependencyGraph(session.plan.sections)
+      session.plan.parallelGroups = this.buildParallelGroups(session.plan.dependencyGraph)
+    }
+
     session.status = 'running'
     session.pausedAt = undefined
+
+    console.log('[BvsOrchestrator] Session status set to running, calling executeNextSections')
 
     // Resume execution from current state
     this.executeNextSections(sessionId)
@@ -703,6 +927,11 @@ export class BvsOrchestratorService extends EventEmitter {
 
   /**
    * Execute only selected sections (phase selection support)
+   *
+   * IMPORTANT: We need to keep completed sections in the plan so that
+   * dependency checking works correctly. For example, if S4 depends on S3
+   * and S3 is completed, we need S3 in the sections list so that when
+   * checking if S4 can run, we can verify S3.status === 'done'.
    */
   async executeSelectedSections(
     projectPath: string,
@@ -715,36 +944,47 @@ export class BvsOrchestratorService extends EventEmitter {
       throw new Error(`Session or plan not found: ${sessionId}`)
     }
 
-    // Filter sections to only selected ones
     const allSections = session.plan.sections
-    const selectedSections = allSections.filter(s => selectedSectionIds.includes(s.id))
 
-    if (selectedSections.length === 0) {
-      throw new Error('No sections selected for execution')
+    // Find sections that are already completed (dependencies that are satisfied)
+    const completedSectionIds = new Set(
+      allSections
+        .filter(s => s.status === 'done')
+        .map(s => s.id)
+    )
+
+    // The sections to actually execute are only the selected ones (not already done)
+    const sectionsToExecute = allSections.filter(s =>
+      selectedSectionIds.includes(s.id) && s.status !== 'done'
+    )
+
+    console.log(`[BvsOrchestrator] executeSelectedSections - selected: ${selectedSectionIds.length}, completed: ${completedSectionIds.size}, toExecute: ${sectionsToExecute.length}`)
+
+    if (sectionsToExecute.length === 0) {
+      throw new Error('No sections to execute (all selected sections are already completed)')
     }
 
-    // Create filtered plan with only selected sections
-    const filteredPlan = {
-      ...session.plan,
-      sections: selectedSections
-    }
+    // IMPORTANT: Keep the FULL plan with ALL sections intact
+    // This preserves the original plan structure so:
+    // 1. Dependency checking works correctly (can find completed dependency sections)
+    // 2. Resume button can show remaining pending sections
+    // 3. Progress tracking shows correct total
 
-    // Rebuild dependency graph for selected sections only
-    filteredPlan.dependencyGraph = this.buildDependencyGraph(selectedSections)
-    filteredPlan.parallelGroups = this.buildParallelGroups(filteredPlan.dependencyGraph)
+    // Store which sections are selected for this execution run
+    // This allows executeNextSections to know which pending sections to actually run
+    session.selectedSectionIds = new Set(selectedSectionIds)
 
-    // Update session with filtered plan
-    session.plan = filteredPlan
-    session.sectionsTotal = selectedSections.length
-    session.sectionsCompleted = 0
-    session.sectionsFailed = 0
+    // Update session counts - use FULL plan totals, not filtered
+    session.sectionsTotal = allSections.length
+    session.sectionsCompleted = completedSectionIds.size
+    session.sectionsFailed = allSections.filter(s => s.status === 'failed').length
 
     // Apply execution config
     if (config) {
       session.plan.executionConfig = config
     }
 
-    // Start execution with filtered plan
+    // Start execution - will only run sections in selectedSectionIds
     await this.startExecution(sessionId)
   }
 
@@ -876,35 +1116,86 @@ export class BvsOrchestratorService extends EventEmitter {
    * Execute next available sections based on dependencies
    */
   private async executeNextSections(sessionId: string): Promise<void> {
+    console.log('[BvsOrchestrator] executeNextSections called for:', sessionId)
     const session = this.sessions.get(sessionId)
-    if (!session || !session.plan || session.status !== 'running') return
+    if (!session || !session.plan || session.status !== 'running') {
+      console.log('[BvsOrchestrator] executeNextSections early return - session:', !!session, 'plan:', !!session?.plan, 'status:', session?.status)
+      return
+    }
 
     const { sections, parallelGroups } = session.plan
     const maxWorkers = this.config.parallel.maxWorkers
 
+    console.log('[BvsOrchestrator] executeNextSections - sections:', sections.length, 'maxWorkers:', maxWorkers, 'currentSections:', session.currentSections?.length || 0)
+
+    // Log all section statuses for debugging
+    console.log('[BvsOrchestrator] Section statuses:')
+    sections.forEach(s => {
+      console.log(`  ${s.id}: status=${s.status}, deps=${JSON.stringify(s.dependencies)}`)
+    })
+
     // Find sections that can run (dependencies met, not completed)
+    // If selectedSectionIds is set, only run sections in that set
     const runnableSections = sections.filter(section => {
       if (section.status === 'done' || section.status === 'in_progress' || section.status === 'verifying') {
+        console.log(`[BvsOrchestrator] Section ${section.id} not runnable: status=${section.status}`)
         return false
       }
 
+      // If we have a selection filter, only run sections in the selection
+      if (session.selectedSectionIds && session.selectedSectionIds.size > 0) {
+        if (!session.selectedSectionIds.has(section.id)) {
+          console.log(`[BvsOrchestrator] Section ${section.id} not runnable: not in selected sections`)
+          return false
+        }
+      }
+
       // Check all dependencies are complete
-      return section.dependencies.every(depId => {
+      const depsCheck = section.dependencies.map(depId => {
         const dep = sections.find(s => s.id === depId)
-        return dep && dep.status === 'done'
+        const satisfied = dep && dep.status === 'done'
+        return { depId, found: !!dep, status: dep?.status, satisfied }
       })
+
+      const allDepsSatisfied = depsCheck.every(d => d.satisfied)
+      if (!allDepsSatisfied) {
+        console.log(`[BvsOrchestrator] Section ${section.id} not runnable: deps not satisfied:`, depsCheck)
+      }
+      return allDepsSatisfied
     })
 
+    console.log('[BvsOrchestrator] Runnable sections:', runnableSections.map(s => s.id))
+
     // Limit to max workers
-    const sectionsToStart = runnableSections.slice(0, maxWorkers - session.currentSections.length)
+    const sectionsToStart = runnableSections.slice(0, maxWorkers - (session.currentSections?.length || 0))
+
+    console.log('[BvsOrchestrator] Starting sections:', sectionsToStart.map(s => s.id))
 
     // Start each section
     for (const section of sectionsToStart) {
       await this.startSection(sessionId, section.id)
     }
 
-    // Check if all sections are complete
-    if (sections.every(s => s.status === 'done')) {
+    // Check if all selected sections are complete
+    // If selectedSectionIds is set, only check those; otherwise check all sections
+    const sectionsToCheck = session.selectedSectionIds && session.selectedSectionIds.size > 0
+      ? sections.filter(s => session.selectedSectionIds!.has(s.id))
+      : sections
+
+    if (sectionsToCheck.every(s => s.status === 'done')) {
+      // If we only ran selected sections, pause instead of complete
+      // so user can continue with remaining sections
+      if (session.selectedSectionIds && session.selectedSectionIds.size > 0) {
+        const pendingSections = sections.filter(s => s.status === 'pending' && !session.selectedSectionIds!.has(s.id))
+        if (pendingSections.length > 0) {
+          console.log(`[BvsOrchestrator] Selected sections complete. ${pendingSections.length} sections still pending.`)
+          session.status = 'paused'
+          session.selectedSectionIds = undefined  // Clear selection for next run
+          await this.saveProgress(sessionId)
+          this.emitSessionUpdate(sessionId)
+          return
+        }
+      }
       await this.completeExecution(sessionId)
     }
   }
@@ -980,8 +1271,11 @@ export class BvsOrchestratorService extends EventEmitter {
       throw new Error(`Section not found: ${sectionId}`)
     }
 
-    // Create worker CLI service
-    const workerService = new BvsWorkerCliService(this.configStore)
+    // Create worker CLI service with streaming JSON format
+    const workerService = new BvsWorkerSdkService(this.configStore)
+
+    // Accumulate worker output for persistence
+    let accumulatedOutput = ''
 
     // Forward worker progress events to UI
     workerService.on('progress', (data: any) => {
@@ -1000,6 +1294,20 @@ export class BvsOrchestratorService extends EventEmitter {
       })
     })
 
+    // Forward worker output for real-time streaming and accumulate for persistence
+    workerService.on('output', (data: any) => {
+      // Accumulate output for later storage on section
+      accumulatedOutput += data.output
+
+      this.emitBvsEvent({
+        type: 'worker_output',
+        sectionId: data.sectionId,
+        workerId: data.workerId,
+        output: data.output,
+        timestamp: data.timestamp
+      })
+    })
+
     // Build project context
     const projectContext: ProjectContext = {
       projectPath: session.projectPath,
@@ -1011,12 +1319,29 @@ export class BvsOrchestratorService extends EventEmitter {
       completedSections: [],
     }
 
-    // Get complexity analysis (default to medium)
+    // Get complexity analysis (default to medium-high for real work)
     const complexity: ComplexityAnalysis = {
       sectionId: section.id,
+      sectionName: section.name,
       score: 5,
-      model: 'sonnet',
-      maxTurns: 5,
+      model: BVS_MODELS.SONNET,  // Full model name required by SDK
+      maxTurns: 20,  // Increased from 5 to allow completing real tasks
+      factors: {
+        fileCount: section.files.length,
+        createCount: section.files.filter(f => f.action === 'create').length,
+        modifyCount: section.files.filter(f => f.action === 'modify').length,
+        deleteCount: section.files.filter(f => f.action === 'delete').length,
+        estimatedLOC: 0,
+        hasTests: false,
+        hasApiChanges: false,
+        hasDatabaseChanges: false,
+        hasSchemaChanges: false,
+        dependencyCount: section.dependencies?.length || 0,
+        dependentCount: section.dependents?.length || 0,
+        isNewFeature: true,
+        touchesSharedCode: false,
+        successCriteriaCount: section.successCriteria?.length || 0,
+      },
       reasoning: ['Standard complexity'],
       riskFlags: [],
     }
@@ -1038,10 +1363,18 @@ export class BvsOrchestratorService extends EventEmitter {
 
       const result = await workerService.executeSection(workerConfig)
 
+      // Extract metrics from result
+      const metrics = {
+        costUsd: result.costUsd ?? 0,
+        tokensInput: result.tokensInput ?? 0,
+        tokensOutput: result.tokensOutput ?? 0,
+        turnsUsed: result.turnsUsed ?? 0,
+      }
+
       // Quality gate validation - check if work was actually completed
       if (result.status === 'failed' || !result.qualityGatesPassed) {
         console.error(`[BVS] Worker ${workerId} section ${sectionId} failed quality gates:`, result.errors)
-        await this.completeSection(sessionId, sectionId, false, result.errors.join('; '))
+        await this.completeSection(sessionId, sectionId, false, result.errors.join('; '), accumulatedOutput, metrics)
 
         // Pause for user intervention in SEMI_ATTENDED or higher
         await this.shouldPauseForApproval(sessionId, 'issue', {
@@ -1054,7 +1387,7 @@ export class BvsOrchestratorService extends EventEmitter {
 
       // Mark as complete
       console.log(`[BVS] Worker ${workerId} completed section ${sectionId} ✓`)
-      await this.completeSection(sessionId, sectionId, true)
+      await this.completeSection(sessionId, sectionId, true, undefined, accumulatedOutput, metrics)
 
       // Checkpoint: Pause for approval after section completion
       await this.shouldPauseForApproval(sessionId, 'subtask', {
@@ -1063,7 +1396,7 @@ export class BvsOrchestratorService extends EventEmitter {
       })
     } catch (error) {
       console.error(`[BVS] Worker ${workerId} failed section ${sectionId}:`, error)
-      await this.completeSection(sessionId, sectionId, false, error instanceof Error ? error.message : 'Unknown error')
+      await this.completeSection(sessionId, sectionId, false, error instanceof Error ? error.message : 'Unknown error', accumulatedOutput, undefined)
 
       // Pause for user intervention on errors
       await this.shouldPauseForApproval(sessionId, 'issue', {
@@ -1092,7 +1425,14 @@ export class BvsOrchestratorService extends EventEmitter {
   /**
    * Mark section as complete
    */
-  async completeSection(sessionId: string, sectionId: string, success: boolean, error?: string): Promise<void> {
+  async completeSection(
+    sessionId: string,
+    sectionId: string,
+    success: boolean,
+    error?: string,
+    workerOutput?: string,
+    metrics?: { costUsd: number; tokensInput: number; tokensOutput: number; turnsUsed: number }
+  ): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session || !session.plan) return
 
@@ -1103,6 +1443,18 @@ export class BvsOrchestratorService extends EventEmitter {
     section.completedAt = Date.now()
     section.progress = success ? 100 : section.progress
     section.lastError = error
+    section.errorMessage = error  // For frontend display
+    if (workerOutput) {
+      (section as any).workerOutput = workerOutput  // Store worker output for UI display
+    }
+
+    // Store metrics for UI display
+    if (metrics) {
+      (section as any).costUsd = metrics.costUsd
+      ;(section as any).tokensInput = metrics.tokensInput
+      ;(section as any).tokensOutput = metrics.tokensOutput
+      ;(section as any).turnsUsed = metrics.turnsUsed
+    }
 
     // Update worker info
     const worker = session.workers.find(w => w.sectionId === sectionId)
@@ -1127,13 +1479,18 @@ export class BvsOrchestratorService extends EventEmitter {
     // Update overall progress
     session.overallProgress = Math.round((session.sectionsCompleted / session.sectionsTotal) * 100)
 
-    // Emit event
+    // Emit event with metrics
     this.emitBvsEvent({
       type: 'section_update',
       sectionId,
       status: section.status,
       progress: section.progress,
       workerId: section.workerId,
+      errorMessage: section.errorMessage,
+      costUsd: (section as any).costUsd,
+      tokensInput: (section as any).tokensInput,
+      tokensOutput: (section as any).tokensOutput,
+      turnsUsed: (section as any).turnsUsed,
     })
 
     // Save progress
@@ -1149,22 +1506,105 @@ export class BvsOrchestratorService extends EventEmitter {
    * Retry a failed section
    */
   async retrySection(sessionId: string, sectionId: string): Promise<void> {
+    console.log(`[BVS] retrySection called: sessionId=${sessionId}, sectionId=${sectionId}`)
+
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      console.error(`[BVS] retrySection: Session not found: ${sessionId}`)
+      console.log(`[BVS] Available sessions:`, Array.from(this.sessions.keys()))
+      throw new Error(`Session not found: ${sessionId}`)
+    }
+
+    if (!session.plan) {
+      console.error(`[BVS] retrySection: Session has no plan: ${sessionId}`)
+      throw new Error(`Session has no plan: ${sessionId}`)
+    }
+
+    const section = session.plan.sections.find(s => s.id === sectionId)
+    if (!section) {
+      console.error(`[BVS] retrySection: Section not found: ${sectionId}`)
+      console.log(`[BVS] Available sections:`, session.plan.sections.map(s => s.id))
+      throw new Error(`Section not found: ${sectionId}`)
+    }
+
+    // Allow retry for failed, retrying, or even done sections (to force re-run)
+    const retryableStatuses = ['failed', 'retrying', 'done', 'pending']
+    if (!retryableStatuses.includes(section.status)) {
+      console.error(`[BVS] retrySection: Section ${sectionId} has status '${section.status}' - cannot retry while in_progress or verifying`)
+      throw new Error(`Cannot retry section in status '${section.status}'. Wait for it to complete or fail first.`)
+    }
+
+    // Check if already running
+    if (section.status === 'in_progress' || section.status === 'verifying') {
+      console.warn(`[BVS] retrySection: Section ${sectionId} is already running (${section.status})`)
+      throw new Error(`Section is already running (${section.status})`)
+    }
+
+    if (section.retryCount >= (section.maxRetries || 3)) {
+      console.warn(`[BVS] retrySection: Max retries exceeded for ${sectionId}`)
+      throw new Error(`Max retries (${section.maxRetries || 3}) exceeded for section ${sectionId}`)
+    }
+
+    console.log(`[BVS] retrySection: Starting retry for ${sectionId}, attempt ${section.retryCount + 1}`)
+
+    section.retryCount = (section.retryCount || 0) + 1
+    section.status = 'retrying'
+    section.lastError = undefined
+    section.errorMessage = undefined
+    section.progress = 0
+
+    // Emit event so UI updates
+    this.emitBvsEvent({
+      type: 'section_update',
+      sectionId,
+      status: 'retrying',
+      progress: 0,
+      currentStep: `Retrying (attempt ${section.retryCount})...`,
+      workerId: section.workerId,
+    })
+
+    // Start the section again
+    await this.startSection(sessionId, sectionId)
+    console.log(`[BVS] retrySection: Section ${sectionId} started`)
+  }
+
+  /**
+   * Skip a failed section and continue with dependent sections
+   */
+  async skipSection(sessionId: string, sectionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session || !session.plan) return
 
     const section = session.plan.sections.find(s => s.id === sectionId)
     if (!section || section.status !== 'failed') return
 
-    if (section.retryCount >= section.maxRetries) {
-      throw new Error(`Max retries (${section.maxRetries}) exceeded for section ${sectionId}`)
+    // Mark as skipped (keep error history for reference)
+    section.status = 'done' // Mark as done so dependents can proceed
+    section.progress = 0 // But with 0% progress to indicate it was skipped
+    section.completedAt = Date.now()
+    session.sectionsSkipped = (session.sectionsSkipped || 0) + 1
+
+    // Emit event (keep errorMessage for history)
+    this.emitBvsEvent({
+      type: 'section_update',
+      sectionId,
+      status: section.status,
+      progress: section.progress,
+      workerId: section.workerId,
+      errorMessage: section.errorMessage, // Keep error for reference
+    })
+
+    // Save progress
+    await this.saveSessionProgress(session)
+
+    // Resume session if it was paused, then continue execution
+    if (session.status === 'paused') {
+      session.status = 'running'
+      session.pausedAt = undefined
     }
 
-    section.retryCount++
-    section.status = 'retrying'
-    section.lastError = undefined
-
-    // Start the section again
-    await this.startSection(sessionId, sectionId)
+    // Continue execution with dependent sections
+    this.executeNextSections(sessionId)
   }
 
   // ============================================================================
@@ -1192,19 +1632,32 @@ export class BvsOrchestratorService extends EventEmitter {
 
   /**
    * Save session progress to disk
+   * Saves to project-specific directory if projectId is set, otherwise to legacy location
    */
   private async saveSessionProgress(session: BvsSession): Promise<void> {
-    const progressPath = path.join(this.getBvsDir(session.projectPath), PROGRESS_FILE)
+    // Determine save path - prefer project-specific directory
+    let progressPath: string
+    if (session.projectId) {
+      const projectDir = this.getProjectDir(session.projectPath, session.projectId)
+      await fs.mkdir(projectDir, { recursive: true })
+      progressPath = path.join(projectDir, BVS_PROJECT_FILES.PROGRESS_JSON)
+    } else {
+      progressPath = path.join(this.getBvsDir(session.projectPath), PROGRESS_FILE)
+    }
+
     const progress = {
       sessionId: session.id,
+      projectId: session.projectId,
       status: session.status,
       phase: session.phase,
       sectionsTotal: session.sectionsTotal,
       sectionsCompleted: session.sectionsCompleted,
       sectionsFailed: session.sectionsFailed,
+      sectionsSkipped: session.sectionsSkipped || 0,
       overallProgress: session.overallProgress,
       startedAt: session.startedAt,
       totalElapsedSeconds: session.totalElapsedSeconds,
+      lastUpdatedAt: Date.now(),
       sections: session.plan?.sections.map(s => ({
         id: s.id,
         name: s.name,
@@ -1213,9 +1666,17 @@ export class BvsOrchestratorService extends EventEmitter {
         workerId: s.workerId,
         startedAt: s.startedAt,
         completedAt: s.completedAt,
+        errorMessage: s.errorMessage,
+        workerOutput: (s as any).workerOutput,
+        // Include metrics for UI display
+        costUsd: (s as any).costUsd,
+        tokensInput: (s as any).tokensInput,
+        tokensOutput: (s as any).tokensOutput,
+        turnsUsed: (s as any).turnsUsed,
       })),
     }
     await fs.writeFile(progressPath, JSON.stringify(progress, null, 2))
+    console.log(`[BvsOrchestrator] Saved progress to: ${progressPath}`)
   }
 
   // ============================================================================
@@ -1477,7 +1938,7 @@ export class BvsOrchestratorService extends EventEmitter {
       })
 
       // Create and execute worker
-      const workerService = new BvsWorkerCliService(this.configStore)
+      const workerService = new BvsWorkerSdkService(this.configStore)
 
       // Forward worker events
       workerService.on('progress', (data: any) => {
@@ -1691,6 +2152,252 @@ ${learning.preventionRule}
       return await fs.readFile(learningsPath, 'utf-8')
     } catch {
       return ''
+    }
+  }
+
+  // ============================================================================
+  // Execution Runs - Persistent storage for partial runs
+  // ============================================================================
+
+  /**
+   * Get the runs directory for a project
+   */
+  private getRunsDir(projectPath: string, projectId: string): string {
+    return path.join(
+      projectPath,
+      BVS_DIR,
+      BVS_GLOBAL_FILES.PROJECTS_DIR,
+      projectId,
+      BVS_PROJECT_FILES.RUNS_DIR
+    )
+  }
+
+  /**
+   * List all execution runs for a project
+   */
+  async listExecutionRuns(projectPath: string, projectId: string): Promise<BvsExecutionRun[]> {
+    const runsDir = this.getRunsDir(projectPath, projectId)
+
+    try {
+      await fs.access(runsDir)
+    } catch {
+      // Runs directory doesn't exist yet
+      return []
+    }
+
+    const files = await fs.readdir(runsDir)
+    const runs: BvsExecutionRun[] = []
+
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        try {
+          const content = await fs.readFile(path.join(runsDir, file), 'utf-8')
+          const run = JSON.parse(content) as BvsExecutionRun
+          runs.push(run)
+        } catch (error) {
+          console.warn(`[BvsOrchestrator] Failed to parse run file ${file}:`, error)
+        }
+      }
+    }
+
+    return runs
+  }
+
+  /**
+   * Get a specific execution run
+   */
+  async getExecutionRun(
+    projectPath: string,
+    projectId: string,
+    runId: string
+  ): Promise<BvsExecutionRun | null> {
+    const runPath = path.join(this.getRunsDir(projectPath, projectId), `${runId}.json`)
+
+    try {
+      const content = await fs.readFile(runPath, 'utf-8')
+      return JSON.parse(content) as BvsExecutionRun
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Create a new execution run
+   */
+  async createExecutionRun(
+    projectPath: string,
+    projectId: string,
+    selectedPhases: number[],
+    selectedSections: string[]
+  ): Promise<BvsExecutionRun> {
+    const runsDir = this.getRunsDir(projectPath, projectId)
+    await fs.mkdir(runsDir, { recursive: true })
+
+    const runId = `run-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+    const run: BvsExecutionRun = {
+      id: runId,
+      projectId,
+      startedAt: Date.now(),
+      status: 'in_progress',
+      selectedPhases,
+      selectedSections,
+      sectionsCompleted: [],
+      sectionsFailed: [],
+      sectionsInProgress: [],
+      currentLevel: 0,
+    }
+
+    await this.saveExecutionRun(projectPath, projectId, run)
+    return run
+  }
+
+  /**
+   * Save an execution run to disk
+   */
+  async saveExecutionRun(
+    projectPath: string,
+    projectId: string,
+    run: BvsExecutionRun
+  ): Promise<void> {
+    const runsDir = this.getRunsDir(projectPath, projectId)
+    await fs.mkdir(runsDir, { recursive: true })
+
+    const runPath = path.join(runsDir, `${run.id}.json`)
+    await fs.writeFile(runPath, JSON.stringify(run, null, 2))
+  }
+
+  /**
+   * Update an execution run
+   */
+  async updateExecutionRun(
+    projectPath: string,
+    projectId: string,
+    runId: string,
+    updates: Partial<BvsExecutionRun>
+  ): Promise<BvsExecutionRun | null> {
+    const run = await this.getExecutionRun(projectPath, projectId, runId)
+    if (!run) return null
+
+    const updatedRun = { ...run, ...updates }
+    await this.saveExecutionRun(projectPath, projectId, updatedRun)
+    return updatedRun
+  }
+
+  /**
+   * Delete an execution run
+   */
+  async deleteExecutionRun(
+    projectPath: string,
+    projectId: string,
+    runId: string
+  ): Promise<void> {
+    const runPath = path.join(this.getRunsDir(projectPath, projectId), `${runId}.json`)
+    try {
+      await fs.unlink(runPath)
+    } catch {
+      // File might not exist
+    }
+  }
+
+  /**
+   * Resume a previous execution run
+   * Creates a new session from the saved run state
+   */
+  async resumeExecutionRun(
+    projectPath: string,
+    projectId: string,
+    runId: string
+  ): Promise<string> {
+    const run = await this.getExecutionRun(projectPath, projectId, runId)
+    if (!run) {
+      throw new Error(`Execution run not found: ${runId}`)
+    }
+
+    // Load the plan
+    const plan = await this.loadPlan(projectPath, projectId)
+    if (!plan) {
+      throw new Error('Plan not found for project')
+    }
+
+    // Filter sections to only those that haven't been completed
+    const remainingSections = run.selectedSections.filter(
+      sectionId => !run.sectionsCompleted.includes(sectionId)
+    )
+
+    if (remainingSections.length === 0) {
+      throw new Error('All sections in this run are already completed')
+    }
+
+    // Create a new session with the remaining sections
+    const sessionId = await this.startExecutionWithSelection(
+      projectPath,
+      projectId,
+      remainingSections,
+      DEFAULT_BVS_EXECUTION_CONFIG
+    )
+
+    // Update the run with the new session ID
+    await this.updateExecutionRun(projectPath, projectId, runId, {
+      sessionId,
+      status: 'in_progress',
+    })
+
+    return sessionId
+  }
+
+  /**
+   * Called when sections complete during execution - updates the current run
+   */
+  async updateRunProgress(
+    projectPath: string,
+    projectId: string,
+    sectionId: string,
+    status: 'completed' | 'failed'
+  ): Promise<void> {
+    // Find the active run for this project
+    const runs = await this.listExecutionRuns(projectPath, projectId)
+    const activeRun = runs.find(r => r.status === 'in_progress')
+
+    if (!activeRun) return
+
+    const updates: Partial<BvsExecutionRun> = {}
+
+    if (status === 'completed') {
+      if (!activeRun.sectionsCompleted.includes(sectionId)) {
+        updates.sectionsCompleted = [...activeRun.sectionsCompleted, sectionId]
+      }
+    } else if (status === 'failed') {
+      if (!activeRun.sectionsFailed.includes(sectionId)) {
+        updates.sectionsFailed = [...activeRun.sectionsFailed, sectionId]
+      }
+    }
+
+    // Remove from in-progress
+    updates.sectionsInProgress = activeRun.sectionsInProgress.filter(id => id !== sectionId)
+
+    // Check if all sections are done
+    const totalDone = (updates.sectionsCompleted || activeRun.sectionsCompleted).length +
+                      (updates.sectionsFailed || activeRun.sectionsFailed).length
+    if (totalDone >= activeRun.selectedSections.length) {
+      updates.status = 'completed'
+      updates.completedAt = Date.now()
+    }
+
+    await this.updateExecutionRun(projectPath, projectId, activeRun.id, updates)
+  }
+
+  /**
+   * Pause the current run when execution is paused
+   */
+  async pauseCurrentRun(projectPath: string, projectId: string): Promise<void> {
+    const runs = await this.listExecutionRuns(projectPath, projectId)
+    const activeRun = runs.find(r => r.status === 'in_progress')
+
+    if (activeRun) {
+      await this.updateExecutionRun(projectPath, projectId, activeRun.id, {
+        status: 'paused',
+        pausedAt: Date.now(),
+      })
     }
   }
 }

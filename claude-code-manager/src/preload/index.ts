@@ -377,12 +377,13 @@ export interface ElectronAPI {
   // BVS (Bounded Verified Sections) Planning V2
   bvsPlanning: {
     // Session management
-    startSession: (projectPath: string) => Promise<BvsPlanningStartResult>
+    startSession: (projectPath: string, forceNew?: boolean, bvsProjectId?: string) => Promise<BvsPlanningStartResult>
     getSession: (sessionId: string) => Promise<{ success: boolean; session?: BvsPlanningSessionV2 }>
     clearSession: (projectPath: string) => Promise<{ success: boolean }>
 
     // Message handling
     sendMessage: (sessionId: string, message: string) => Promise<BvsPlanningMessageResult>
+    cancelRequest: (sessionId: string) => Promise<{ success: boolean; error?: string }>
 
     // Discovery actions (question/option button clicks)
     answerQuestions: (sessionId: string, answers: Record<string, string>) => Promise<BvsPlanningMessageResult>
@@ -411,10 +412,14 @@ export interface ElectronAPI {
 
     // Execution management
     startExecution: (projectPath: string, projectId: string) => Promise<{ success: boolean; sessionId?: string; error?: string }>
+    startExecutionWithSelection: (projectPath: string, projectId: string, selectedSectionIds: string[], config: any) => Promise<{ success: boolean; sessionId?: string; error?: string }>
     pauseExecution: (sessionId: string) => Promise<{ success: boolean; error?: string }>
     resumeExecution: (sessionId: string) => Promise<{ success: boolean; error?: string }>
+    retrySection: (sessionId: string, sectionId: string) => Promise<{ success: boolean; error?: string }>
+    skipSection: (sessionId: string, sectionId: string) => Promise<{ success: boolean; error?: string }>
     getExecutionSession: (sessionId: string) => Promise<{ success: boolean; session?: BvsSessionData }>
     listExecutionSessions: () => Promise<{ success: boolean; sessions?: BvsSessionData[] }>
+    restoreSession: (projectPath: string, projectId: string) => Promise<{ success: boolean; session?: BvsSessionData; error?: string }>
 
     // Parallel execution with merge points
     startParallelExecution: (sessionId: string) => Promise<{ success: boolean; error?: string }>
@@ -449,6 +454,7 @@ export interface ElectronAPI {
     onSectionsReady: (callback: (data: BvsSectionsReadyData) => void) => () => void
     onPlanWritten: (callback: (data: BvsPlanWrittenData) => void) => () => void
     onError: (callback: (data: BvsErrorData) => void) => () => void
+    onBvsEvent: (callback: (data: any) => void) => () => void
   }
 }
 
@@ -1482,8 +1488,8 @@ const electronAPI: ElectronAPI = {
   // BVS (Bounded Verified Sections) Planning V2
   bvsPlanning: {
     // Session management
-    startSession: (projectPath: string) =>
-      ipcRenderer.invoke('bvs:start-planning', projectPath),
+    startSession: (projectPath: string, forceNew?: boolean, bvsProjectId?: string) =>
+      ipcRenderer.invoke('bvs:start-planning', projectPath, forceNew ?? false, bvsProjectId),
     getSession: (sessionId: string) =>
       ipcRenderer.invoke('bvs:get-planning-session', sessionId),
     clearSession: (projectPath: string) =>
@@ -1492,6 +1498,8 @@ const electronAPI: ElectronAPI = {
     // Message handling
     sendMessage: (sessionId: string, message: string) =>
       ipcRenderer.invoke('bvs:send-planning-message', sessionId, message),
+    cancelRequest: (sessionId: string) =>
+      ipcRenderer.invoke('bvs:cancel-planning', sessionId),
 
     // Discovery actions (question/option button clicks)
     answerQuestions: (sessionId: string, answers: Record<string, string>) =>
@@ -1533,14 +1541,22 @@ const electronAPI: ElectronAPI = {
     // Execution management
     startExecution: (projectPath: string, projectId: string) =>
       ipcRenderer.invoke('bvs:start-execution-from-project', projectPath, projectId),
+    startExecutionWithSelection: (projectPath: string, projectId: string, selectedSectionIds: string[], config: any) =>
+      ipcRenderer.invoke('bvs:start-execution-with-selection', projectPath, projectId, selectedSectionIds, config),
     pauseExecution: (sessionId: string) =>
       ipcRenderer.invoke('bvs:pause-execution', sessionId),
     resumeExecution: (sessionId: string) =>
       ipcRenderer.invoke('bvs:resume-execution', sessionId),
+    retrySection: (sessionId: string, sectionId: string) =>
+      ipcRenderer.invoke('bvs:retry-section', sessionId, sectionId),
+    skipSection: (sessionId: string, sectionId: string) =>
+      ipcRenderer.invoke('bvs:skip-section', sessionId, sectionId),
     getExecutionSession: (sessionId: string) =>
       ipcRenderer.invoke('bvs:get-session', sessionId),
     listExecutionSessions: () =>
       ipcRenderer.invoke('bvs:list-sessions'),
+    restoreSession: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:restore-session', projectPath, projectId),
 
     // Parallel execution with merge points
     startParallelExecution: (sessionId: string) =>
@@ -1557,6 +1573,16 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('bvs:get-subtask-progress', sessionId, sectionId),
     approveContinue: (sessionId: string) =>
       ipcRenderer.invoke('bvs:approve-continue', sessionId),
+
+    // Execution runs - persistent storage for partial runs
+    listExecutionRuns: (projectPath: string, projectId: string) =>
+      ipcRenderer.invoke('bvs:list-execution-runs', projectPath, projectId),
+    getExecutionRun: (projectPath: string, projectId: string, runId: string) =>
+      ipcRenderer.invoke('bvs:get-execution-run', projectPath, projectId, runId),
+    deleteExecutionRun: (projectPath: string, projectId: string, runId: string) =>
+      ipcRenderer.invoke('bvs:delete-execution-run', projectPath, projectId, runId),
+    resumeExecutionRun: (projectPath: string, projectId: string, runId: string) =>
+      ipcRenderer.invoke('bvs:resume-execution-run', projectPath, projectId, runId),
 
     // Streaming event listeners
     onToolStart: (callback: (data: BvsToolStartData) => void) => {
@@ -1603,6 +1629,11 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: Electron.IpcRendererEvent, data: BvsErrorData) => callback(data)
       ipcRenderer.on('bvs-planning:error', handler)
       return () => ipcRenderer.removeListener('bvs-planning:error', handler)
+    },
+    onBvsEvent: (callback: (data: any) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data)
+      ipcRenderer.on('bvs:event', handler)
+      return () => ipcRenderer.removeListener('bvs:event', handler)
     }
   }
 }

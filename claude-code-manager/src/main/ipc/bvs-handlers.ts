@@ -28,12 +28,15 @@ export function registerBvsHandlers(): void {
 
   /**
    * Start or resume a planning session
+   * @param projectPath - Path to the project
+   * @param forceNew - If true, always create a new session (don't resume existing)
+   * @param bvsProjectId - If provided, resume this specific BVS project
    */
   ipcMain.handle(
     BVS_IPC_CHANNELS.BVS_START_PLANNING,
-    async (_event: IpcMainInvokeEvent, projectPath: string) => {
+    async (_event: IpcMainInvokeEvent, projectPath: string, forceNew: boolean = false, bvsProjectId?: string) => {
       try {
-        const session = await planningAgent.createSession(projectPath)
+        const session = await planningAgent.createSession(projectPath, forceNew, bvsProjectId)
         return { success: true, session }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error'
@@ -57,6 +60,21 @@ export function registerBvsHandlers(): void {
           session,
           phase: session?.phase || 'exploring'
         }
+      } catch (error) {
+        const errMessage = error instanceof Error ? error.message : 'Unknown error'
+        return { success: false, error: errMessage }
+      }
+    }
+  )
+
+  /**
+   * Cancel/abort an active planning request
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_CANCEL_PLANNING,
+    async (_event: IpcMainInvokeEvent, sessionId: string) => {
+      try {
+        return planningAgent.cancelSession(sessionId)
       } catch (error) {
         const errMessage = error instanceof Error ? error.message : 'Unknown error'
         return { success: false, error: errMessage }
@@ -228,6 +246,31 @@ export function registerBvsHandlers(): void {
   )
 
   /**
+   * Restore a session from progress file
+   * Used when app restarts and in-memory sessions are lost
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_RESTORE_SESSION,
+    async (_event: IpcMainInvokeEvent, projectPath: string, projectId: string) => {
+      try {
+        console.log('[BVS] Attempting to restore session for project:', projectId)
+        const session = await orchestrator.restoreSessionFromProgress(projectPath, projectId)
+        if (session) {
+          console.log('[BVS] Session restored:', session.id, 'status:', session.status)
+          return { success: true, session }
+        } else {
+          console.log('[BVS] No session to restore for project:', projectId)
+          return { success: true, session: null }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        console.error('[BVS] Error restoring session:', message)
+        return { success: false, error: message }
+      }
+    }
+  )
+
+  /**
    * Delete a session
    */
   ipcMain.handle(
@@ -348,6 +391,77 @@ export function registerBvsHandlers(): void {
   )
 
   /**
+   * Start execution with phase/section selection
+   */
+  ipcMain.handle(
+    'bvs:start-execution-with-selection',
+    async (
+      _event: IpcMainInvokeEvent,
+      projectPath: string,
+      projectId: string,
+      selectedSectionIds: string[],
+      config: any
+    ) => {
+      try {
+        console.log('[BVS] Starting execution with selection:', {
+          projectPath,
+          projectId,
+          selectedSectionIds,
+          config
+        })
+
+        // Load the plan from the project directory
+        const plan = await orchestrator.loadPlan(projectPath, projectId)
+        if (!plan) {
+          console.error('[BVS] Plan not found for project:', projectId)
+          return { success: false, error: 'Plan not found for project' }
+        }
+        console.log('[BVS] Plan loaded, total sections:', plan.sections?.length || 0)
+
+        // Validate selected sections exist in plan
+        const validSectionIds = selectedSectionIds.filter(id =>
+          plan.sections.some(s => s.id === id)
+        )
+        if (validSectionIds.length === 0) {
+          return { success: false, error: 'No valid sections selected for execution' }
+        }
+        console.log('[BVS] Valid selected sections:', validSectionIds.length)
+
+        // Create a session from the plan
+        console.log('[BVS] Creating session from plan...')
+        const sessionId = await orchestrator.createSessionFromPlan(projectPath, projectId, plan)
+        console.log('[BVS] Session created:', sessionId)
+
+        // Execute selected sections
+        console.log('[BVS] Starting execution with selected sections...')
+        await orchestrator.executeSelectedSections(
+          projectPath,
+          sessionId,
+          validSectionIds,
+          config
+        )
+        console.log('[BVS] Execution started')
+
+        // Update project status
+        try {
+          await planningAgent.updateProjectStatus(projectPath, projectId, 'in_progress', {
+            executionStartedAt: Date.now()
+          })
+          console.log('[BVS] Project status updated to in_progress')
+        } catch (statusError) {
+          console.warn('[BVS] Failed to update project status:', statusError)
+        }
+
+        return { success: true, sessionId }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        console.error('[BVS] Error in startExecutionWithSelection:', error)
+        return { success: false, error: message }
+      }
+    }
+  )
+
+  /**
    * Stop execution
    */
   ipcMain.handle(
@@ -371,6 +485,22 @@ export function registerBvsHandlers(): void {
     async (_event: IpcMainInvokeEvent, sessionId: string, sectionId: string) => {
       try {
         await orchestrator.retrySection(sessionId, sectionId)
+        return { success: true }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        return { success: false, error: message }
+      }
+    }
+  )
+
+  /**
+   * Skip a failed section
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_SKIP_SECTION,
+    async (_event: IpcMainInvokeEvent, sessionId: string, sectionId: string) => {
+      try {
+        await orchestrator.skipSection(sessionId, sectionId)
         return { success: true }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error'
@@ -919,6 +1049,77 @@ export function registerBvsHandlers(): void {
       try {
         await orchestrator.resumeExecution(sessionId)
         return { success: true }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        return { success: false, error: message }
+      }
+    }
+  )
+
+  // ============================================================================
+  // Execution Runs - Persistent storage for partial runs
+  // ============================================================================
+
+  /**
+   * List execution runs for a project
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_LIST_EXECUTION_RUNS,
+    async (_event: IpcMainInvokeEvent, projectPath: string, projectId: string) => {
+      try {
+        const runs = await orchestrator.listExecutionRuns(projectPath, projectId)
+        return { success: true, runs }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        return { success: false, error: message, runs: [] }
+      }
+    }
+  )
+
+  /**
+   * Get a specific execution run
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_GET_EXECUTION_RUN,
+    async (_event: IpcMainInvokeEvent, projectPath: string, projectId: string, runId: string) => {
+      try {
+        const run = await orchestrator.getExecutionRun(projectPath, projectId, runId)
+        if (!run) {
+          return { success: false, error: 'Run not found' }
+        }
+        return { success: true, run }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        return { success: false, error: message }
+      }
+    }
+  )
+
+  /**
+   * Delete an execution run
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_DELETE_EXECUTION_RUN,
+    async (_event: IpcMainInvokeEvent, projectPath: string, projectId: string, runId: string) => {
+      try {
+        await orchestrator.deleteExecutionRun(projectPath, projectId, runId)
+        return { success: true }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error'
+        return { success: false, error: message }
+      }
+    }
+  )
+
+  /**
+   * Resume a previous execution run
+   */
+  ipcMain.handle(
+    BVS_IPC_CHANNELS.BVS_RESUME_EXECUTION_RUN,
+    async (_event: IpcMainInvokeEvent, projectPath: string, projectId: string, runId: string) => {
+      try {
+        const sessionId = await orchestrator.resumeExecutionRun(projectPath, projectId, runId)
+        return { success: true, sessionId }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error'
         return { success: false, error: message }

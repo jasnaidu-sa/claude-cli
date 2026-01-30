@@ -28,6 +28,9 @@ import {
   AlertCircle,
   Edit3,
   RefreshCw,
+  Upload,
+  Paperclip,
+  X,
 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { cn } from '@renderer/lib/utils'
@@ -45,8 +48,17 @@ import type {
 
 interface BvsPlanningChatV2Props {
   projectPath: string
+  bvsProjectId?: string  // If provided, resume this specific BVS project
+  forceNew?: boolean  // If true, always create a new session (don't resume existing)
+  isPrdUpload?: boolean  // If true, show PRD upload UI with drag-drop
   onPlanReady?: (planPath: string) => void
   className?: string
+}
+
+interface AttachedFile {
+  name: string
+  path: string
+  content?: string
 }
 
 interface ToolActivity {
@@ -100,9 +112,10 @@ function getToolLabel(toolName: string, input: Record<string, unknown>): string 
 
 interface ToolActivityIndicatorProps {
   activities: ToolActivity[]
+  onCancel?: () => void
 }
 
-function ToolActivityIndicator({ activities }: ToolActivityIndicatorProps) {
+function ToolActivityIndicator({ activities, onCancel }: ToolActivityIndicatorProps) {
   if (activities.length === 0) return null
 
   const activeTools = activities.filter(a => a.status === 'running')
@@ -120,16 +133,26 @@ function ToolActivityIndicator({ activities }: ToolActivityIndicatorProps) {
 
   return (
     <div className="bg-muted/30 border border-border rounded-lg p-4">
-      <div className="flex items-center gap-3">
-        <Loader2 className="h-5 w-5 animate-spin text-purple-400" />
-        <div>
-          <div className="text-base font-medium">{statusMessage}</div>
-          <div className="text-sm text-muted-foreground">
-            {completedCount > 0 && `${completedCount} file${completedCount > 1 ? 's' : ''} analyzed`}
-            {activeTools.length > 0 && completedCount > 0 && ' • '}
-            {activeTools.length > 0 && `${activeTools.length} in progress`}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-5 w-5 animate-spin text-purple-400" />
+          <div>
+            <div className="text-base font-medium">{statusMessage}</div>
+            <div className="text-sm text-muted-foreground">
+              {completedCount > 0 && `${completedCount} file${completedCount > 1 ? 's' : ''} analyzed`}
+              {activeTools.length > 0 && completedCount > 0 && ' • '}
+              {activeTools.length > 0 && `${activeTools.length} in progress`}
+            </div>
           </div>
         </div>
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors"
+          >
+            Press Esc to cancel
+          </button>
+        )}
       </div>
     </div>
   )
@@ -626,6 +649,9 @@ function MessageBubble({
 
 export function BvsPlanningChatV2({
   projectPath,
+  bvsProjectId,
+  forceNew = false,
+  isPrdUpload = false,
   onPlanReady,
   className,
 }: BvsPlanningChatV2Props) {
@@ -639,10 +665,13 @@ export function BvsPlanningChatV2({
   const [error, setError] = useState<string | null>(null)
   const [showChangesInput, setShowChangesInput] = useState(false)
   const [changesInput, setChangesInput] = useState('')
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([])
+  const [isDragOver, setIsDragOver] = useState(false)
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -752,7 +781,9 @@ export function BvsPlanningChatV2({
   useEffect(() => {
     const initSession = async () => {
       try {
-        const result = await window.electron.bvsPlanning.startSession(projectPath)
+        // Pass forceNew to skip resuming existing sessions when user wants a new project
+        // Pass bvsProjectId to load a specific project's session when resuming
+        const result = await window.electron.bvsPlanning.startSession(projectPath, forceNew, bvsProjectId)
         if (result.success && result.session) {
           setSession(result.session)
           setMessages(result.session.messages)
@@ -769,33 +800,123 @@ export function BvsPlanningChatV2({
     }
 
     initSession()
-  }, [projectPath])
+  }, [projectPath, forceNew, bvsProjectId])
+
+  // Handle file selection via input
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    const newFiles: AttachedFile[] = []
+    for (const file of Array.from(files)) {
+      // Read file content
+      const content = await file.text()
+      newFiles.push({
+        name: file.name,
+        path: (file as any).path || file.name,
+        content
+      })
+    }
+    setAttachedFiles(prev => [...prev, ...newFiles])
+    // Reset input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [])
+
+  // Handle drag and drop
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }, [])
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+
+    const files = e.dataTransfer.files
+    if (!files || files.length === 0) return
+
+    const newFiles: AttachedFile[] = []
+    for (const file of Array.from(files)) {
+      // Only accept text-based files
+      if (file.type.startsWith('text/') ||
+          file.name.endsWith('.md') ||
+          file.name.endsWith('.txt') ||
+          file.name.endsWith('.json') ||
+          file.name.endsWith('.yaml') ||
+          file.name.endsWith('.yml')) {
+        const content = await file.text()
+        newFiles.push({
+          name: file.name,
+          path: (file as any).path || file.name,
+          content
+        })
+      }
+    }
+
+    if (newFiles.length > 0) {
+      setAttachedFiles(prev => [...prev, ...newFiles])
+    } else {
+      setError('Please drop text-based files (*.md, *.txt, *.json, *.yaml)')
+    }
+  }, [])
+
+  // Remove attached file
+  const removeAttachedFile = useCallback((index: number) => {
+    setAttachedFiles(prev => prev.filter((_, i) => i !== index))
+  }, [])
 
   // Send message
   const handleSend = useCallback(async () => {
-    if (!input.trim() || isProcessing || !session) return
+    if ((!input.trim() && attachedFiles.length === 0) || isProcessing || !session) return
+
+    // Build message content with attached files
+    let messageContent = input.trim()
+
+    if (attachedFiles.length > 0) {
+      // Prepend file contents to message
+      const fileContents = attachedFiles.map(f =>
+        `## PRD File: ${f.name}\n\n${f.content}`
+      ).join('\n\n---\n\n')
+
+      if (messageContent) {
+        messageContent = `${fileContents}\n\n---\n\n## Instructions:\n${messageContent}`
+      } else {
+        messageContent = `${fileContents}\n\n---\n\nPlease analyze this PRD and create a BVS execution plan with sections, dependencies, and file ownership.`
+      }
+    }
 
     const userMessage: BvsPlanningMessageV2 = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content: input.trim(),
+      content: input.trim() || `Uploaded ${attachedFiles.length} file(s): ${attachedFiles.map(f => f.name).join(', ')}`,
       timestamp: Date.now(),
     }
 
     setMessages((prev) => [...prev, userMessage])
     setInput('')
+    setAttachedFiles([])
     setIsProcessing(true)
     setError(null)
     setToolActivities([])
 
     try {
-      await window.electron.bvsPlanning.sendMessage(session.id, input.trim())
+      await window.electron.bvsPlanning.sendMessage(session.id, messageContent)
       // Response will come through streaming listeners
     } catch (err) {
       setError('Failed to send message')
       setIsProcessing(false)
     }
-  }, [input, isProcessing, session])
+  }, [input, attachedFiles, isProcessing, session])
 
   // Answer questions (discovery phase)
   const handleAnswerQuestions = useCallback(async (answers: Record<string, string>) => {
@@ -886,6 +1007,37 @@ export function BvsPlanningChatV2({
     }
   }
 
+  // Cancel/abort the current request
+  const handleCancel = useCallback(async () => {
+    if (!isProcessing || !session) return
+
+    try {
+      console.log('[BvsPlanningChat] Cancelling request...')
+      await window.electron.bvsPlanning.cancelRequest(session.id)
+
+      // Reset processing state locally
+      setIsProcessing(false)
+      setStreamingContent('')
+      setToolActivities([])
+      setError(null)
+    } catch (err) {
+      console.error('[BvsPlanningChat] Failed to cancel:', err)
+    }
+  }, [isProcessing, session])
+
+  // Global Escape key handler
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isProcessing) {
+        e.preventDefault()
+        handleCancel()
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [isProcessing, handleCancel])
+
   // Start fresh session
   const handleStartFresh = useCallback(async () => {
     if (isProcessing) return
@@ -903,8 +1055,8 @@ export function BvsPlanningChatV2({
       setShowChangesInput(false)
       setChangesInput('')
 
-      // Start a new session
-      const result = await window.electron.bvsPlanning.startSession(projectPath)
+      // Start a new session (forceNew=true to ensure we don't resume the old session)
+      const result = await window.electron.bvsPlanning.startSession(projectPath, true)
       if (result.success && result.session) {
         setSession(result.session)
         setMessages(result.session.messages)
@@ -942,18 +1094,46 @@ export function BvsPlanningChatV2({
         </Button>
       </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Messages (with drag-drop support) */}
+      <div
+        className={cn(
+          'flex-1 overflow-y-auto p-4 space-y-4 transition-colors',
+          isDragOver && 'bg-primary/5 border-2 border-dashed border-primary rounded-lg'
+        )}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         {/* Initial prompt if no messages */}
         {messages.length === 0 && !isProcessing && (
           <div className="text-center py-8 text-muted-foreground">
-            <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p className="text-sm">
-              Describe what you want to build or change.
-            </p>
-            <p className="text-xs mt-1">
-              I'll analyze the codebase and propose implementation options.
-            </p>
+            {isPrdUpload ? (
+              <>
+                <Upload className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p className="text-sm font-medium">
+                  Upload your PRD document
+                </p>
+                <p className="text-xs mt-2">
+                  Drag and drop a PRD file (.md, .txt, .json) into the chat below,
+                </p>
+                <p className="text-xs">
+                  or use the attach button to select a file.
+                </p>
+                <p className="text-xs mt-2 text-muted-foreground/70">
+                  The AI will analyze it and create a BVS execution plan.
+                </p>
+              </>
+            ) : (
+              <>
+                <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                <p className="text-sm">
+                  Describe what you want to build or change.
+                </p>
+                <p className="text-xs mt-1">
+                  I'll analyze the codebase and propose implementation options.
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -972,7 +1152,7 @@ export function BvsPlanningChatV2({
 
         {/* Tool activity */}
         {toolActivities.length > 0 && (
-          <ToolActivityIndicator activities={toolActivities} />
+          <ToolActivityIndicator activities={toolActivities} onCancel={handleCancel} />
         )}
 
         {/* Streaming content */}
@@ -1010,17 +1190,33 @@ export function BvsPlanningChatV2({
                     .replace(/\n{3,}/g, '\n\n')
                     .trim()}
                 </div>
-                <Loader2 className="h-3 w-3 animate-spin mt-2" />
+                <div className="flex items-center justify-between mt-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <button
+                    onClick={handleCancel}
+                    className="text-xs text-muted-foreground hover:text-foreground px-2 py-0.5 rounded hover:bg-muted/50 transition-colors"
+                  >
+                    Esc to cancel
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* Processing indicator */}
+        {/* Processing indicator with cancel hint */}
         {isProcessing && !streamingContent && toolActivities.length === 0 && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground p-3">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Thinking...</span>
+          <div className="flex items-center justify-between text-sm text-muted-foreground p-3">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Thinking...</span>
+            </div>
+            <button
+              onClick={handleCancel}
+              className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors"
+            >
+              Press Esc to cancel
+            </button>
           </div>
         )}
 
@@ -1065,26 +1261,82 @@ export function BvsPlanningChatV2({
 
       {/* Input */}
       {!showChangesInput && session?.phase !== 'complete' && (
-        <div className="p-4 border-t border-border">
+        <div className="p-4 border-t border-border relative">
+          {/* Attached files display */}
+          {attachedFiles.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              {attachedFiles.map((file, index) => (
+                <div
+                  key={index}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border border-primary/20 rounded-lg text-sm"
+                >
+                  <FileText className="h-4 w-4 text-primary" />
+                  <span className="truncate max-w-[200px]">{file.name}</span>
+                  <button
+                    onClick={() => removeAttachedFile(index)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-end gap-2">
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".md,.txt,.json,.yaml,.yml"
+              multiple
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+
+            {/* Attach button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isProcessing}
+              className="h-10 w-10 shrink-0"
+              title="Attach file"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+
             <textarea
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Describe what you want to build..."
+              placeholder={isPrdUpload && attachedFiles.length === 0
+                ? "Drop a PRD file here or click the attach button..."
+                : "Describe what you want to build..."
+              }
               className="flex-1 min-h-[80px] max-h-[200px] p-3 text-base bg-muted/30 border border-border rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/50"
               disabled={isProcessing}
             />
             <Button
               size="icon"
               onClick={handleSend}
-              disabled={!input.trim() || isProcessing}
+              disabled={(!input.trim() && attachedFiles.length === 0) || isProcessing}
               className="h-10 w-10"
             >
               <Send className="h-4 w-4" />
             </Button>
           </div>
+
+          {/* Drag-drop hint */}
+          {isDragOver && (
+            <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm rounded-lg pointer-events-none z-10">
+              <div className="text-center">
+                <Upload className="h-12 w-12 mx-auto mb-2 text-primary animate-bounce" />
+                <p className="text-lg font-medium text-primary">Drop file to attach</p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

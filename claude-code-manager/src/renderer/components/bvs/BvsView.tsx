@@ -73,6 +73,8 @@ export function BvsView({ onClose }: BvsViewProps) {
   const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null)
   const [selectedBvsProject, setSelectedBvsProject] = useState<BvsProjectItem | null>(null)
   const [isGreenfield, setIsGreenfield] = useState(false)
+  const [forceNewSession, setForceNewSession] = useState(false)  // Force new session, don't resume existing
+  const [isPrdUpload, setIsPrdUpload] = useState(false)  // Track if we're in PRD upload mode
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
   const [showProjectPicker, setShowProjectPicker] = useState(false)
   const [isSelectingFolder, setIsSelectingFolder] = useState(false)
@@ -125,16 +127,18 @@ export function BvsView({ onClose }: BvsViewProps) {
     setSelectedProjectName(name)
     setIsGreenfield(greenfield)
     setShowProjectPicker(false)
+    // Keep pendingAction to know if this was a PRD upload flow
     await saveToRecent(projectPath)
 
     // Show project list for this path
     setMode('project-list')
-    setPendingAction(null)
+    // Note: Don't reset pendingAction here - handleNewProject needs it
   }
 
   // Handle BVS project selection from project list
   const handleSelectBvsProject = (project: BvsProjectItem) => {
     setSelectedBvsProject(project)
+    setForceNewSession(false)  // Don't force new, allow resume of selected project
 
     // Route based on project status
     switch (project.status) {
@@ -164,6 +168,10 @@ export function BvsView({ onClose }: BvsViewProps) {
   // Start new project from project list
   const handleNewProject = () => {
     setSelectedBvsProject(null)
+    setForceNewSession(true)  // Force new session, don't resume existing
+    // Check if we came from PRD upload action
+    setIsPrdUpload(pendingAction === 'prd-upload')
+    setPendingAction(null)  // Reset after using
     setMode('planning')
   }
 
@@ -235,7 +243,11 @@ export function BvsView({ onClose }: BvsViewProps) {
     return (
       <div className="h-full flex flex-col">
         <div className="flex items-center gap-2 p-4 border-b border-border">
-          <Button variant="ghost" size="sm" onClick={() => setMode('project-list')}>
+          <Button variant="ghost" size="sm" onClick={() => {
+            setForceNewSession(false)
+            setIsPrdUpload(false)
+            setMode('project-list')
+          }}>
             <ChevronRight className="h-4 w-4 rotate-180" />
             Back
           </Button>
@@ -249,9 +261,14 @@ export function BvsView({ onClose }: BvsViewProps) {
         <div className="flex-1 overflow-hidden p-4">
           <BvsPlanningChatV2
             projectPath={selectedProject}
+            bvsProjectId={selectedBvsProject?.id}
+            forceNew={forceNewSession}
+            isPrdUpload={isPrdUpload}
             onPlanReady={(planPath) => {
               console.log('[BvsView] Plan created at:', planPath)
-              // Refresh project list and go to execution
+              // Reset flags and refresh project list
+              setForceNewSession(false)
+              setIsPrdUpload(false)
               setMode('project-list')
             }}
           />
@@ -260,65 +277,11 @@ export function BvsView({ onClose }: BvsViewProps) {
     )
   }
 
-  // Executing mode - Kanban/dashboard view for in-progress projects
+  // Executing mode - Kanban/dashboard view for all project statuses
+  // The BvsExecutionDashboard handles all cases: ready, in_progress, paused
+  // - For 'ready': Shows the kanban with Start button (phase selector)
+  // - For 'in_progress'/'paused': Shows action modal to continue/reset/view
   if (mode === 'executing' && selectedBvsProject && selectedProject) {
-    // For 'ready' status, show start button. For in_progress/paused, show dashboard
-    if (selectedBvsProject.status === 'ready') {
-      return (
-        <div className="h-full flex flex-col">
-          <div className="flex items-center gap-2 p-4 border-b border-border">
-            <Button variant="ghost" size="sm" onClick={() => setMode('project-list')}>
-              <ChevronRight className="h-4 w-4 rotate-180" />
-              Back
-            </Button>
-            <h2 className="text-lg font-semibold">{selectedBvsProject.name}</h2>
-            <span className="text-sm text-muted-foreground ml-2">
-              Ready to Execute
-            </span>
-          </div>
-          <div className="flex-1 overflow-hidden p-4">
-            <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-              <Play className="h-12 w-12 mb-4 opacity-50" />
-              <h3 className="text-lg font-medium mb-2">Ready to Execute</h3>
-              <p className="text-sm text-center max-w-md mb-4">
-                {selectedBvsProject.sectionsTotal} sections planned
-              </p>
-              <Button variant="default" onClick={async () => {
-                try {
-                  console.log('Starting execution for:', selectedBvsProject.id)
-                  const result = await window.electron.bvsPlanning.startExecution(
-                    selectedProject,
-                    selectedBvsProject.id
-                  )
-                  if (result.success) {
-                    console.log('Execution started, sessionId:', result.sessionId)
-                    // Refresh the project to see updated status
-                    const projectResult = await window.electron.bvsPlanning.getProject(
-                      selectedProject,
-                      selectedBvsProject.id
-                    )
-                    if (projectResult.success && projectResult.project) {
-                      setSelectedBvsProject(projectResult.project)
-                    }
-                  } else {
-                    console.error('Failed to start execution:', result.error)
-                    alert(`Failed to start execution: ${result.error}`)
-                  }
-                } catch (err) {
-                  console.error('Error starting execution:', err)
-                  alert(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`)
-                }
-              }}>
-                <Play className="h-4 w-4 mr-2" />
-                Start Execution
-              </Button>
-            </div>
-          </div>
-        </div>
-      )
-    }
-
-    // For in_progress or paused, show the dashboard with plan details
     return (
       <BvsExecutionDashboard
         project={selectedBvsProject}

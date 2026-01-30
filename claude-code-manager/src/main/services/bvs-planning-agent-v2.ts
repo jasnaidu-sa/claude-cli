@@ -15,6 +15,7 @@ import { randomUUID } from 'crypto'
 import * as path from 'path'
 import * as fs from 'fs/promises'
 import { glob } from 'glob'
+import { z } from 'zod'
 import { getMainWindow } from '../index'
 
 // Types for Agent SDK (dynamic import)
@@ -42,8 +43,9 @@ import {
 
 const SONNET_MODEL = 'claude-sonnet-4-20250514'
 const HAIKU_MODEL = 'claude-haiku-4-20250514' // For quick tasks like name generation
-const MAX_TURNS = 8 // 5 base + 3 buffer for clarifications
+const MAX_TURNS = 30 // High limit to allow extensive tool usage during exploration
 const BVS_DIR = '.bvs'
+const PLAN_FILE = 'plan.md' // Legacy plan file name (now using plan.json via BVS_PROJECT_FILES)
 
 // IPC Channels for streaming
 export const BVS_PLANNING_CHANNELS = {
@@ -128,6 +130,9 @@ export interface PlanningSessionV2 {
   projectName?: string            // AI-generated: "Budgeting Module"
   projectSlug?: string            // kebab-case: "budgeting-module"
   projectDir?: string             // Full path to project directory
+
+  // Cancellation support
+  abortController?: AbortController
 }
 
 // ============================================================================
@@ -180,12 +185,22 @@ Respond ONLY with JSON in this exact format:
     }
   } catch (error) {
     console.error('[BvsPlanningV2] Error generating project name:', error)
-    // Fallback: extract first few words
-    const words = userMessage.slice(0, 50).split(/\s+/).slice(0, 3).join(' ')
+    // Fallback: extract meaningful text (skip markdown headers and formatting)
+    const cleanText = userMessage
+      .replace(/^#+\s*/gm, '') // Remove markdown headers
+      .replace(/\*\*/g, '')    // Remove bold markers
+      .replace(/[#*_`]/g, '')  // Remove other markdown
+      .trim()
+    const words = cleanText.slice(0, 50).split(/\s+/).slice(0, 4).join(' ')
     const slug = words.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+    // Add timestamp suffix to make unique
+    const timestamp = new Date().toISOString().slice(11, 19).replace(/:/g, '')
+    const uniqueName = words ? `${words} (${timestamp})` : `Project ${timestamp}`
+
     return {
-      name: words || 'Unnamed Project',
-      slug: slug || 'unnamed-project',
+      name: uniqueName,
+      slug: slug || `project-${timestamp}`,
       description: 'Project created from planning session'
     }
   }
@@ -291,91 +306,9 @@ function getProjectDir(session: PlanningSessionV2): string {
 // ============================================================================
 // Tool Definitions
 // ============================================================================
-
-const PLANNING_TOOLS = [
-  {
-    name: 'read_file',
-    description: 'Read the contents of a file. Use this to examine source code, configuration files, or any text file.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        path: {
-          type: 'string',
-          description: 'Absolute path to the file to read'
-        }
-      },
-      required: ['path']
-    }
-  },
-  {
-    name: 'list_files',
-    description: 'List files matching a glob pattern. Use this to discover project structure and find relevant files.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        pattern: {
-          type: 'string',
-          description: 'Glob pattern (e.g., "**/*.ts", "src/components/**/*.tsx")'
-        },
-        cwd: {
-          type: 'string',
-          description: 'Directory to search from (absolute path)'
-        }
-      },
-      required: ['pattern', 'cwd']
-    }
-  },
-  {
-    name: 'search_code',
-    description: 'Search for text patterns in files. Use this to find specific code patterns, imports, or usages.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        pattern: {
-          type: 'string',
-          description: 'Text or regex pattern to search for'
-        },
-        path: {
-          type: 'string',
-          description: 'Directory to search in (absolute path)'
-        },
-        filePattern: {
-          type: 'string',
-          description: 'Optional glob pattern to filter files (e.g., "*.ts")'
-        }
-      },
-      required: ['pattern', 'path']
-    }
-  },
-  {
-    name: 'web_search',
-    description: 'Search the web for information about best practices, libraries, or implementation approaches.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query'
-        }
-      },
-      required: ['query']
-    }
-  },
-  {
-    name: 'write_plan',
-    description: 'Write the final plan to .bvs/plan.md. Only call this after user approves the plan.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        content: {
-          type: 'string',
-          description: 'Full markdown content for plan.md'
-        }
-      },
-      required: ['content']
-    }
-  }
-]
+// NOTE: Planning tools are created using createSdkMcpServer in processMessage()
+// CRITICAL: Custom tools MUST use sdk.tool() + Zod schemas + mcpServers option
+// Using raw JSON schema with `tools: [...]` is IGNORED by Agent SDK
 
 // ============================================================================
 // Tool Implementations
@@ -515,6 +448,45 @@ function convertToExecutionPlan(
     maxRetries: 3,
     commits: [],
   }))
+
+  // Add mandatory build verification section as final step
+  const allSectionIds = sections.map(s => s.id)
+  const buildVerificationSection: BvsSection = {
+    id: 'final-build-verification',
+    name: 'Build Verification',
+    description: 'Verify the entire project builds without errors after all changes. This section runs npm run build and fixes any compilation errors. It ensures no missing imports, type errors, or broken dependencies.',
+    files: [], // No files to create, just verification
+    dependencies: allSectionIds, // Depends on ALL other sections
+    dependents: [],
+    status: 'pending' as const,
+    successCriteria: [
+      {
+        id: 'build-verification_sc1',
+        description: 'npm run build completes with exit code 0',
+        passed: false,
+      },
+      {
+        id: 'build-verification_sc2',
+        description: 'No TypeScript compilation errors (npx tsc --noEmit)',
+        passed: false,
+      },
+      {
+        id: 'build-verification_sc3',
+        description: 'No missing imports or uninstalled packages',
+        passed: false,
+      },
+      {
+        id: 'build-verification_sc4',
+        description: 'All @ts-expect-error comments for imports are removed',
+        passed: false,
+      },
+    ],
+    progress: 0,
+    retryCount: 0,
+    maxRetries: 5, // More retries for build fixes
+    commits: [],
+  }
+  sections.push(buildVerificationSection)
 
   // Compute dependents (inverse of dependencies)
   for (const section of sections) {
@@ -995,10 +967,28 @@ export class BvsPlanningAgentV2 extends EventEmitter {
 
   /**
    * Load session from disk - checks project directories first, then legacy location
+   * @param projectPath - Path to the codebase
+   * @param bvsProjectId - If provided, load this specific project's session
    */
-  private async loadSession(projectPath: string): Promise<PlanningSessionV2 | null> {
-    // First, try to find an in-progress project in the projects directory
+  private async loadSession(projectPath: string, bvsProjectId?: string): Promise<PlanningSessionV2 | null> {
     const projectsDir = path.join(projectPath, BVS_DIR, BVS_GLOBAL_FILES.PROJECTS_DIR)
+
+    // If specific project ID provided, load that one directly
+    if (bvsProjectId) {
+      const projectDir = path.join(projectsDir, bvsProjectId)
+      const sessionPath = path.join(projectDir, BVS_PROJECT_FILES.PLANNING_SESSION)
+      try {
+        const content = await fs.readFile(sessionPath, 'utf-8')
+        const session = JSON.parse(content) as PlanningSessionV2
+        console.log('[BvsPlanningV2] Loading specific project session:', bvsProjectId)
+        return session
+      } catch (error) {
+        console.warn('[BvsPlanningV2] Failed to load specific project:', bvsProjectId, error)
+        return null
+      }
+    }
+
+    // Otherwise, try to find an in-progress project in the projects directory
     try {
       const projects = await fs.readdir(projectsDir)
       for (const projectId of projects) {
@@ -1037,14 +1027,21 @@ export class BvsPlanningAgentV2 extends EventEmitter {
 
   /**
    * Create or resume a planning session
+   * @param projectPath - Path to the project
+   * @param forceNew - If true, always create a new session (don't resume existing)
+   * @param bvsProjectId - If provided, resume this specific BVS project
    */
-  async createSession(projectPath: string): Promise<PlanningSessionV2> {
-    // Try to load existing session
-    const existing = await this.loadSession(projectPath)
-    if (existing && existing.phase !== 'complete') {
-      console.log('[BvsPlanningV2] Resuming existing session:', existing.id)
-      this.sessions.set(existing.id, existing)
-      return existing
+  async createSession(projectPath: string, forceNew: boolean = false, bvsProjectId?: string): Promise<PlanningSessionV2> {
+    // Try to load existing session (unless forceNew is true)
+    if (!forceNew) {
+      const existing = await this.loadSession(projectPath, bvsProjectId)
+      if (existing && existing.phase !== 'complete') {
+        console.log('[BvsPlanningV2] Resuming existing session:', existing.id, 'for project:', bvsProjectId || 'auto-detect')
+        this.sessions.set(existing.id, existing)
+        return existing
+      }
+    } else {
+      console.log('[BvsPlanningV2] Force new session requested, skipping resume check')
     }
 
     // Create new session
@@ -1069,6 +1066,34 @@ export class BvsPlanningAgentV2 extends EventEmitter {
    */
   getSession(sessionId: string): PlanningSessionV2 | undefined {
     return this.sessions.get(sessionId)
+  }
+
+  /**
+   * Cancel/abort an active session's processing
+   * This will abort the current API call and reset processing state
+   */
+  cancelSession(sessionId: string): { success: boolean; error?: string } {
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      return { success: false, error: `Session ${sessionId} not found` }
+    }
+
+    // Abort the controller if it exists
+    if (session.abortController) {
+      console.log('[BvsPlanningV2] Cancelling session:', sessionId)
+      session.abortController.abort()
+      session.abortController = undefined
+
+      // Send cancelled event to renderer
+      this.sendToRenderer(BVS_PLANNING_CHANNELS.ERROR, {
+        sessionId,
+        error: 'Request cancelled by user'
+      })
+
+      return { success: true }
+    }
+
+    return { success: false, error: 'No active request to cancel' }
   }
 
   /**
@@ -1122,10 +1147,12 @@ export class BvsPlanningAgentV2 extends EventEmitter {
     // Get SDK
     const sdk = await getSDK()
 
-    // Build conversation history for context
+    // Build full conversation history for context
+    // NOTE: SDK resume is disabled, so we include full context here
     const conversationContext = session.messages
       .map(m => `${m.role}: ${m.content}`)
       .join('\n\n')
+    console.log(`[BvsPlanningV2] Full context: ${session.messages.length} messages`)
 
     // Build system prompt with project path
     const systemPrompt = PLANNING_SYSTEM_PROMPT.replace('{PROJECT_PATH}', session.projectPath)
@@ -1141,18 +1168,164 @@ ${this.getPhaseInstructions(session)}
 
 Respond appropriately for the current phase.`
 
-    // Configure SDK options
+    // Create abort controller for this request
+    const abortController = new AbortController()
+    session.abortController = abortController
+
+    // Track tool calls for UI
+    let toolCalls: PlanningMessage['toolCalls'] = []
+    const projectPath = session.projectPath
+
+    // Helper to create CallToolResult format for MCP tools
+    const toolResult = (text: string) => ({
+      content: [{ type: 'text' as const, text }]
+    })
+
+    // Create MCP server with planning tools
+    // CRITICAL: Custom tools MUST use sdk.tool() + Zod schemas + createSdkMcpServer
+    // Using raw JSON schema with `tools: [...]` is IGNORED by Agent SDK
+    const planningMcpServer = sdk.createSdkMcpServer({
+      name: 'bvs-planning-tools',
+      tools: [
+        sdk.tool(
+          'read_file',
+          'Read the contents of a file. Use this to examine source code, configuration files, or any text file.',
+          { path: z.string().describe('Absolute path to the file to read') },
+          async (input) => {
+            console.log('[BvsPlanningV2] Tool: read_file', input.path)
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_START, {
+              sessionId,
+              tool: 'read_file',
+              input
+            })
+            const result = await executeReadFile(input.path)
+            toolCalls.push({ name: 'read_file', input, result })
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_RESULT, {
+              sessionId,
+              tool: 'read_file',
+              result: result.substring(0, 500)
+            })
+            return toolResult(result)
+          }
+        ),
+        sdk.tool(
+          'list_files',
+          'List files matching a glob pattern. Use this to discover project structure and find relevant files.',
+          {
+            pattern: z.string().describe('Glob pattern (e.g., "**/*.ts", "src/components/**/*.tsx")'),
+            cwd: z.string().describe('Directory to search from (absolute path)')
+          },
+          async (input) => {
+            console.log('[BvsPlanningV2] Tool: list_files', input.pattern, input.cwd)
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_START, {
+              sessionId,
+              tool: 'list_files',
+              input
+            })
+            const result = await executeListFiles(input.pattern, input.cwd)
+            toolCalls.push({ name: 'list_files', input, result })
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_RESULT, {
+              sessionId,
+              tool: 'list_files',
+              result: result.substring(0, 500)
+            })
+            return toolResult(result)
+          }
+        ),
+        sdk.tool(
+          'search_code',
+          'Search for text patterns in files. Use this to find specific code patterns, imports, or usages.',
+          {
+            pattern: z.string().describe('Text or regex pattern to search for'),
+            path: z.string().describe('Directory to search in (absolute path)'),
+            filePattern: z.string().optional().describe('Optional glob pattern to filter files (e.g., "*.ts")')
+          },
+          async (input) => {
+            console.log('[BvsPlanningV2] Tool: search_code', input.pattern, input.path)
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_START, {
+              sessionId,
+              tool: 'search_code',
+              input
+            })
+            const result = await executeSearchCode(input.pattern, input.path, input.filePattern)
+            toolCalls.push({ name: 'search_code', input, result })
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_RESULT, {
+              sessionId,
+              tool: 'search_code',
+              result: result.substring(0, 500)
+            })
+            return toolResult(result)
+          }
+        ),
+        sdk.tool(
+          'web_search',
+          'Search the web for information about best practices, libraries, or implementation approaches.',
+          { query: z.string().describe('Search query') },
+          async (input) => {
+            console.log('[BvsPlanningV2] Tool: web_search', input.query)
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_START, {
+              sessionId,
+              tool: 'web_search',
+              input
+            })
+            const result = await executeWebSearch(input.query)
+            toolCalls.push({ name: 'web_search', input, result })
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_RESULT, {
+              sessionId,
+              tool: 'web_search',
+              result: result.substring(0, 500)
+            })
+            return toolResult(result)
+          }
+        ),
+        sdk.tool(
+          'write_plan',
+          'Write the final plan to .bvs/plan.md. Only call this after user approves the plan.',
+          { content: z.string().describe('Full markdown content for plan.md') },
+          async (input) => {
+            console.log('[BvsPlanningV2] Tool: write_plan')
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_START, {
+              sessionId,
+              tool: 'write_plan',
+              input: { content: '[content truncated]' }
+            })
+            const result = await executeWritePlan(projectPath, input.content)
+            session.phase = 'complete'
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.PLAN_WRITTEN, {
+              sessionId,
+              planPath: path.join(projectPath, BVS_DIR, PLAN_FILE)
+            })
+            toolCalls.push({ name: 'write_plan', input: { content: '[truncated]' }, result })
+            this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_RESULT, {
+              sessionId,
+              tool: 'write_plan',
+              result: result.substring(0, 500)
+            })
+            return toolResult(result)
+          }
+        )
+      ]
+    })
+
+    // Configure SDK options - use mcpServers NOT tools
+    // CRITICAL: tools: [...] is IGNORED by Agent SDK - must use mcpServers
     const options: Options = {
       model: SONNET_MODEL,
       maxTurns: MAX_TURNS,
       cwd: session.projectPath,
       includePartialMessages: true,
-      permissionMode: 'default',
-      tools: PLANNING_TOOLS,
-      ...(session.sdkSessionId ? { resume: session.sdkSessionId } : {})
+      permissionMode: 'bypassPermissions',  // Auto-approve tool use (no interactive prompts)
+      mcpServers: {
+        'bvs-planning-tools': planningMcpServer
+      },
+      allowedTools: ['mcp__*'], // Allow all MCP tools
+      abortController,
+      // NOTE: SDK resume disabled - it loads full conversation history internally
+      // which combined with our prompt causes "Prompt is too long" errors
+      // ...(session.sdkSessionId ? { resume: session.sdkSessionId } : {})
     }
 
-    // Create message generator
+    // Create message generator (AsyncGenerator required for MCP tools to work)
     async function* generateMessages(): AsyncGenerator<SDKUserMessage> {
       yield {
         type: 'user' as const,
@@ -1161,9 +1334,19 @@ Respond appropriately for the current phase.`
           content: fullPrompt
         },
         parent_tool_use_id: null,
-        session_id: sessionId
-      }
+        session_id: ''  // Empty string - SDK will assign actual session_id
+      } as SDKUserMessage
     }
+
+    // Log SDK options for debugging
+    console.log('[BvsPlanningV2] SDK Options:', {
+      model: options.model,
+      maxTurns: options.maxTurns,
+      cwd: options.cwd,
+      permissionMode: options.permissionMode,
+      mcpServers: Object.keys(options.mcpServers || {}),
+      allowedTools: options.allowedTools
+    })
 
     // Execute query
     const queryResult = sdk.query({
@@ -1173,63 +1356,42 @@ Respond appropriately for the current phase.`
 
     // Process streaming response
     let responseContent = ''
-    let toolCalls: PlanningMessage['toolCalls'] = []
+    // toolCalls is already declared above in the MCP server section
     let parsedQuestions: PlanningQuestion[] | undefined
     let parsedOptions: PlanningOption[] | undefined
     let parsedSections: PlannedSection[] | undefined
 
     try {
       for await (const message of queryResult) {
+        // Debug: Log all message types
+        console.log('[BvsPlanningV2] SDK message:', message.type, (message as any).subtype || '',
+          message.type === 'assistant' ? `content_length=${(message as any).message?.content?.[0]?.text?.length || 0}` : '')
+
         // Capture SDK session ID
         if (message.type === 'system' && message.subtype === 'init') {
           session.sdkSessionId = message.session_id
         }
 
-        // Handle tool calls
+        // Handle final assistant message (contains full text)
+        if (message.type === 'assistant' && (message as any).message?.content) {
+          const content = (message as any).message.content
+          for (const block of content) {
+            if (block.type === 'text' && block.text) {
+              // If we got the full text here and responseContent is empty, use it
+              if (!responseContent && block.text.length > 0) {
+                console.log('[BvsPlanningV2] Using assistant message text, length:', block.text.length, 'content:', block.text.substring(0, 100))
+                responseContent = block.text
+              }
+            }
+          }
+        }
+
+        // Handle tool_use events for logging (tools are executed by MCP server handlers)
         if (message.type === 'tool_use') {
           const toolName = (message as any).name || 'unknown'
-          const toolInput = (message as any).input || {}
-
-          this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_START, {
-            sessionId,
-            tool: toolName,
-            input: toolInput
-          })
-
-          // Execute tool
-          let result: string
-          switch (toolName) {
-            case 'read_file':
-              result = await executeReadFile(toolInput.path)
-              break
-            case 'list_files':
-              result = await executeListFiles(toolInput.pattern, toolInput.cwd)
-              break
-            case 'search_code':
-              result = await executeSearchCode(toolInput.pattern, toolInput.path, toolInput.filePattern)
-              break
-            case 'web_search':
-              result = await executeWebSearch(toolInput.query)
-              break
-            case 'write_plan':
-              result = await executeWritePlan(session.projectPath, toolInput.content)
-              session.phase = 'complete'
-              this.sendToRenderer(BVS_PLANNING_CHANNELS.PLAN_WRITTEN, {
-                sessionId,
-                planPath: path.join(session.projectPath, BVS_DIR, PLAN_FILE)
-              })
-              break
-            default:
-              result = `Unknown tool: ${toolName}`
-          }
-
-          toolCalls.push({ name: toolName, input: toolInput, result })
-
-          this.sendToRenderer(BVS_PLANNING_CHANNELS.TOOL_RESULT, {
-            sessionId,
-            tool: toolName,
-            result: result.substring(0, 500) // Truncate for UI
-          })
+          console.log('[BvsPlanningV2] Tool use detected:', toolName)
+          // Tool execution happens in the MCP server handlers above
+          // No manual switch statement needed
         }
 
         // Handle streaming text
@@ -1251,6 +1413,12 @@ Respond appropriately for the current phase.`
         if (message.type === 'result') {
           session.totalCostUsd = (session.totalCostUsd || 0) + ((message as any).total_cost_usd || 0)
         }
+      }
+
+      // Log response content status
+      console.log('[BvsPlanningV2] Response complete, content length:', responseContent.length)
+      if (responseContent.length === 0) {
+        console.warn('[BvsPlanningV2] WARNING: Empty response content!')
       }
 
       // Parse structured data from response
@@ -1281,13 +1449,42 @@ Respond appropriately for the current phase.`
       }
 
     } catch (error) {
-      console.error('[BvsPlanningV2] Error processing message:', error)
-      this.sendToRenderer(BVS_PLANNING_CHANNELS.ERROR, {
-        sessionId,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      })
-      throw error
+      // Clean up abort controller
+      session.abortController = undefined
+
+      // Check if this was an abort (user cancellation)
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[BvsPlanningV2] Request cancelled by user')
+        // Don't throw for user cancellation, just return empty response
+        return {
+          id: `msg-${randomUUID().slice(0, 8)}`,
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+        }
+      }
+
+      // Check if we have content despite the error (exit code 1 after success)
+      // This happens when CLI process exits with code 1 after completing successfully
+      if (responseContent && responseContent.length > 100) {
+        console.log('[BvsPlanningV2] Error occurred but have response content, continuing...', responseContent.length, 'chars')
+        // Parse the content we have
+        parsedQuestions = this.parseQuestions(responseContent)
+        parsedOptions = this.parseOptions(responseContent)
+        parsedSections = this.parseSections(responseContent)
+        // Don't throw - continue to save the response
+      } else {
+        console.error('[BvsPlanningV2] Error processing message:', error)
+        this.sendToRenderer(BVS_PLANNING_CHANNELS.ERROR, {
+          sessionId,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        })
+        throw error
+      }
     }
+
+    // Clean up abort controller after successful completion
+    session.abortController = undefined
 
     // Create response message
     const response: PlanningMessage = {
@@ -1455,16 +1652,36 @@ CRITICAL: Each section MUST include:
 
 If they ask questions, answer conversationally. If they want to go back and discuss more, present additional QUESTIONS_START.`
       case 'planning':
-        return `Generate DETAILED sections based on the selected approach.
+        return `CRITICAL: The user has selected an implementation option. You MUST now generate the implementation sections.
+
+DO NOT explore the codebase again - you already did that in the conversation above. The exploration results are in the conversation history.
+
+YOUR ONLY TASK NOW: Generate sections using the SECTIONS_START/END format.
+
+---SECTIONS_START---
+[
+  {
+    "id": "S1",
+    "name": "Section Name",
+    "description": "What this section implements",
+    "files": [{"path": "path/to/file.ts", "action": "create|modify"}],
+    "dependencies": [],
+    "successCriteria": ["Criteria 1", "Criteria 2"],
+    "implementation": {
+      "details": "Detailed implementation notes",
+      "codePatterns": "Reference existing patterns"
+    }
+  }
+]
+---SECTIONS_END---
 
 Each section MUST contain:
-1. Specific file contents or code patterns (not generic descriptions)
-2. For DB: actual column definitions, types, constraints, foreign keys
-3. For API: endpoint paths, HTTP methods, TypeScript interfaces for req/res
-4. For UI: component props interface, state shape, key interactions
-5. References to existing code patterns from the project
+1. Specific file paths based on the codebase you explored
+2. For DB: actual column definitions, types, constraints
+3. For API: endpoint paths, HTTP methods, TypeScript interfaces
+4. For UI: component props, state shape, key interactions
 
-Use the SECTIONS_START/END format. Each section should be 3-5 files max with clear success criteria.`
+Generate 5-15 sections covering all aspects of the selected approach. Output ONLY the SECTIONS_START/END block.`
       case 'approval':
         return `The user is reviewing the proposed sections.
 

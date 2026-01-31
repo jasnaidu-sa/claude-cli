@@ -66,6 +66,10 @@ import {
 } from './bvs-merge-point-service'
 import { ConfigStore } from './config-store'
 
+// UltraQA-style services for quality assurance
+import { goalReviewer, type GoalReviewResult } from './bvs-goal-reviewer-service'
+import { fixLoop, type FixLoopConfig, type FixLoopResult } from './bvs-fix-loop-service'
+
 // Directory structure constants
 const BVS_DIR = '.bvs'
 const CONFIG_FILE = 'config.json'
@@ -1374,15 +1378,65 @@ export class BvsOrchestratorService extends EventEmitter {
       // Quality gate validation - check if work was actually completed
       if (result.status === 'failed' || !result.qualityGatesPassed) {
         console.error(`[BVS] Worker ${workerId} section ${sectionId} failed quality gates:`, result.errors)
-        await this.completeSection(sessionId, sectionId, false, result.errors.join('; '), accumulatedOutput, metrics)
 
-        // Pause for user intervention in SEMI_ATTENDED or higher
+        // UltraQA: Try Fix Loop before giving up
+        const fixResult = await this.runFixLoopForSection(session, section, result.errors)
+
+        if (fixResult && fixResult.success) {
+          console.log(`[BVS] Fix Loop succeeded for section ${sectionId} after ${fixResult.totalCycles} cycles`)
+          // Re-run verification after fix
+        } else {
+          await this.completeSection(sessionId, sectionId, false, result.errors.join('; '), accumulatedOutput, metrics)
+
+          // Pause for user intervention in SEMI_ATTENDED or higher
+          await this.shouldPauseForApproval(sessionId, 'issue', {
+            sectionId,
+            issue: `Section ${sectionId} failed quality gates: ${result.errors.join(', ')}`
+          })
+
+          return
+        }
+      }
+
+      // UltraQA: Run Goal Reviewer BEFORE marking as complete
+      // This verifies the implementation matches the original user intent
+      const goalReviewResult = await this.runGoalReviewForSection(session, section, result.filesChanged || [])
+
+      if (goalReviewResult && goalReviewResult.verdict === 'REJECTED') {
+        console.warn(`[BVS] Goal review REJECTED for section ${sectionId}: ${goalReviewResult.reasoning}`)
+
+        // Emit goal review event for UI
+        this.emitBvsEvent({
+          type: 'goal_review_result',
+          sectionId,
+          verdict: goalReviewResult.verdict,
+          coveragePercent: goalReviewResult.coveragePercent,
+          reasoning: goalReviewResult.reasoning,
+          issuestoFix: goalReviewResult.issuestoFix,
+        })
+
+        await this.completeSection(sessionId, sectionId, false,
+          `Goal alignment failed: ${goalReviewResult.issuestoFix.join(', ')}`,
+          accumulatedOutput, metrics)
+
         await this.shouldPauseForApproval(sessionId, 'issue', {
           sectionId,
-          issue: `Section ${sectionId} failed quality gates: ${result.errors.join(', ')}`
+          issue: `Goal alignment check failed: ${goalReviewResult.reasoning}`
         })
 
         return
+      }
+
+      // Emit successful goal review
+      if (goalReviewResult) {
+        this.emitBvsEvent({
+          type: 'goal_review_result',
+          sectionId,
+          verdict: goalReviewResult.verdict,
+          coveragePercent: goalReviewResult.coveragePercent,
+          reasoning: goalReviewResult.reasoning,
+          issuestoFix: goalReviewResult.issuestoFix,
+        })
       }
 
       // Mark as complete
@@ -2094,6 +2148,147 @@ export class BvsOrchestratorService extends EventEmitter {
 
     // All retries exhausted
     return lastResult!
+  }
+
+  // ============================================================================
+  // UltraQA: Goal Review and Fix Loop
+  // ============================================================================
+
+  /**
+   * Run Goal Reviewer to verify implementation matches user intent
+   *
+   * This runs BEFORE code review to ensure we built the right thing.
+   * A section that builds and passes tests but doesn't match user intent is a FAILURE.
+   */
+  private async runGoalReviewForSection(
+    session: BvsSession,
+    section: BvsSection,
+    filesChanged: string[]
+  ): Promise<GoalReviewResult | null> {
+    if (!session.plan) return null
+
+    try {
+      console.log(`[BVS] Running Goal Review for section ${section.id}...`)
+
+      this.emitBvsEvent({
+        type: 'goal_review_started',
+        sectionId: section.id,
+        sectionName: section.name,
+      })
+
+      const result = await goalReviewer.reviewSection(
+        section,
+        session.plan,
+        session.projectPath,
+        filesChanged
+      )
+
+      console.log(`[BVS] Goal Review complete: ${result.verdict} (${result.coveragePercent}% coverage)`)
+
+      return result
+    } catch (error) {
+      console.error(`[BVS] Goal Review failed for section ${section.id}:`, error)
+      // Don't fail the section if goal review itself fails - just log and continue
+      return null
+    }
+  }
+
+  /**
+   * Run Fix Loop to attempt automated fixes when quality gates fail
+   *
+   * UltraQA pattern: test → diagnose → fix → repeat (max cycles)
+   * Exits early if same failure is detected 3 times (stuck in loop)
+   */
+  private async runFixLoopForSection(
+    session: BvsSession,
+    section: BvsSection,
+    errors: string[]
+  ): Promise<FixLoopResult | null> {
+    // Only run fix loop for build/typecheck failures
+    const isBuildError = errors.some(e =>
+      e.toLowerCase().includes('build') ||
+      e.toLowerCase().includes('typescript') ||
+      e.toLowerCase().includes('type error') ||
+      e.toLowerCase().includes('ts2')
+    )
+
+    if (!isBuildError) {
+      console.log(`[BVS] Fix Loop skipped - not a build/typecheck error`)
+      return null
+    }
+
+    try {
+      console.log(`[BVS] Running Fix Loop for section ${section.id}...`)
+
+      this.emitBvsEvent({
+        type: 'fix_loop_started',
+        sectionId: section.id,
+        errors,
+      })
+
+      // Subscribe to fix loop events
+      fixLoop.on('cycle-start', (data) => {
+        this.emitBvsEvent({
+          type: 'fix_loop_cycle',
+          sectionId: section.id,
+          cycle: data.cycle,
+          maxCycles: data.maxCycles,
+        })
+      })
+
+      fixLoop.on('diagnosing', (data) => {
+        this.emitBvsEvent({
+          type: 'fix_loop_diagnosing',
+          sectionId: section.id,
+          cycle: data.cycle,
+        })
+      })
+
+      fixLoop.on('fixing', (data) => {
+        this.emitBvsEvent({
+          type: 'fix_loop_fixing',
+          sectionId: section.id,
+          cycle: data.cycle,
+          diagnosis: data.diagnosis,
+        })
+      })
+
+      const config: FixLoopConfig = {
+        maxCycles: 3,  // Conservative - don't waste tokens on hopeless fixes
+        sameFailureThreshold: 2,  // Exit if stuck on same error twice
+        timeoutPerCycleMs: 60000,  // 1 minute per cycle
+        projectPath: session.projectPath,
+        goal: 'typecheck',  // Most common BVS failure mode
+      }
+
+      const result = await fixLoop.runFixLoop(config)
+
+      console.log(`[BVS] Fix Loop complete: ${result.exitReason} after ${result.totalCycles} cycles`)
+
+      this.emitBvsEvent({
+        type: 'fix_loop_completed',
+        sectionId: section.id,
+        success: result.success,
+        exitReason: result.exitReason,
+        totalCycles: result.totalCycles,
+      })
+
+      // Clean up event listeners
+      fixLoop.removeAllListeners('cycle-start')
+      fixLoop.removeAllListeners('diagnosing')
+      fixLoop.removeAllListeners('fixing')
+
+      return result
+    } catch (error) {
+      console.error(`[BVS] Fix Loop failed for section ${section.id}:`, error)
+
+      // Clean up event listeners
+      fixLoop.removeAllListeners('cycle-start')
+      fixLoop.removeAllListeners('diagnosing')
+      fixLoop.removeAllListeners('fixing')
+
+      return null
+    }
   }
 
   // ============================================================================

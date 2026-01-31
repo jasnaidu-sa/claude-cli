@@ -64,7 +64,8 @@ export interface CodeReviewConfig {
 }
 
 const DEFAULT_REVIEW_CONFIG: CodeReviewConfig = {
-  reviewers: ['correctness', 'typescript', 'conventions', 'simplicity'],
+  // Security reviewer now enabled by default - OWASP Top 10, secrets detection
+  reviewers: ['correctness', 'typescript', 'conventions', 'simplicity', 'security'],
   maxFixAttempts: 2,
   blockOnP0: true,
   blockOnP1: true,

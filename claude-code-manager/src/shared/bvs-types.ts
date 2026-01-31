@@ -749,6 +749,59 @@ export interface BvsWorkerOutputEvent {
   timestamp: number
 }
 
+// ============================================================================
+// UltraQA Events: Goal Review and Fix Loop
+// ============================================================================
+
+export interface BvsGoalReviewStartedEvent {
+  type: 'goal_review_started'
+  sectionId: string
+  sectionName: string
+}
+
+export interface BvsGoalReviewResultEvent {
+  type: 'goal_review_result'
+  sectionId: string
+  verdict: 'APPROVED' | 'REJECTED' | 'PARTIAL'
+  coveragePercent: number
+  reasoning: string
+  issuestoFix: string[]
+}
+
+export interface BvsFixLoopStartedEvent {
+  type: 'fix_loop_started'
+  sectionId: string
+  errors: string[]
+}
+
+export interface BvsFixLoopCycleEvent {
+  type: 'fix_loop_cycle'
+  sectionId: string
+  cycle: number
+  maxCycles: number
+}
+
+export interface BvsFixLoopDiagnosingEvent {
+  type: 'fix_loop_diagnosing'
+  sectionId: string
+  cycle: number
+}
+
+export interface BvsFixLoopFixingEvent {
+  type: 'fix_loop_fixing'
+  sectionId: string
+  cycle: number
+  diagnosis: string
+}
+
+export interface BvsFixLoopCompletedEvent {
+  type: 'fix_loop_completed'
+  sectionId: string
+  success: boolean
+  exitReason: 'goal_met' | 'max_cycles' | 'same_failure' | 'error' | 'cancelled'
+  totalCycles: number
+}
+
 export type BvsEvent =
   | BvsSectionUpdateEvent
   | BvsTypeCheckEvent
@@ -768,6 +821,14 @@ export type BvsEvent =
   | BvsWorkerCompletedEvent
   | BvsWorkerFailedEvent
   | BvsWorkerOutputEvent
+  // UltraQA Events
+  | BvsGoalReviewStartedEvent
+  | BvsGoalReviewResultEvent
+  | BvsFixLoopStartedEvent
+  | BvsFixLoopCycleEvent
+  | BvsFixLoopDiagnosingEvent
+  | BvsFixLoopFixingEvent
+  | BvsFixLoopCompletedEvent
 
 // ============================================================================
 // Configuration

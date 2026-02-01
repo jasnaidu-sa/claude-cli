@@ -640,9 +640,18 @@ export class ApiServer {
    * Start the API server
    */
   async start(): Promise<void> {
+    console.log(`[ApiServer] Starting server on port ${this.config.port}...`)
     return new Promise((resolve, reject) => {
       try {
-        this.server.listen(this.config.port, () => {
+        this.server.on('error', (err: NodeJS.ErrnoException) => {
+          console.error(`[ApiServer] Server error:`, err.message)
+          if (err.code === 'EADDRINUSE') {
+            console.error(`[ApiServer] Port ${this.config.port} is already in use!`)
+          }
+          reject(err)
+        })
+
+        this.server.listen(this.config.port, '0.0.0.0', () => {
           this.isRunning = true
           console.log(`[ApiServer] HTTP server listening on port ${this.config.port}`)
           console.log(`[ApiServer] WebSocket server ready`)
@@ -652,6 +661,7 @@ export class ApiServer {
           resolve()
         })
       } catch (error) {
+        console.error(`[ApiServer] Failed to start:`, error)
         reject(error)
       }
     })

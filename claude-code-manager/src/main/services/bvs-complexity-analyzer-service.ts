@@ -8,6 +8,7 @@
  */
 
 import type { BvsSection } from '../../shared/bvs-types'
+import { getBvsLearningCaptureService } from './bvs-learning-capture-service'
 
 // ============================================================================
 // Constants
@@ -159,12 +160,69 @@ export class BvsComplexityAnalyzerService {
   }
 
   /**
+   * Analyze a section with learning-based adjustments
+   *
+   * Uses historical data from the learning capture service to adjust
+   * complexity estimates based on past performance.
+   */
+  async analyzeWithLearnings(section: BvsSection): Promise<ComplexityAnalysis> {
+    // Get base analysis
+    const analysis = this.analyze(section)
+
+    try {
+      const learningService = await getBvsLearningCaptureService()
+
+      // Get complexity history for similar file patterns
+      const filePatterns = section.files.map(f => {
+        // Extract pattern from file path (e.g., "api", "migration", "component")
+        const parts = f.path.split('/')
+        return parts.filter(p => !p.includes('.')).slice(-2).join('/')
+      })
+
+      const history = await learningService.getComplexityHistory({
+        filePatterns,
+        limit: 5
+      })
+
+      // Adjust estimates if we have historical data
+      if (history.samples >= 2) {
+        // If historical actual turns exceed our estimate by 50%+, increase estimate
+        if (history.avgActualTurns > analysis.maxTurns * 1.5) {
+          const adjustedTurns = Math.ceil(history.avgActualTurns * 1.1)
+          analysis.maxTurns = Math.min(adjustedTurns, TURN_CAP_SONNET)
+          analysis.reasoning.push(`Adjusted turns based on historical data (${history.samples} samples)`)
+          analysis.riskFlags.push(`Historical sections of this type averaged ${Math.round(history.avgActualTurns)} turns`)
+        }
+
+        // If historical costs were high, consider upgrading model
+        if (history.avgCost > 0.50 && analysis.model === BVS_MODELS.HAIKU) {
+          analysis.model = BVS_MODELS.SONNET
+          analysis.reasoning.push(`Upgraded to Sonnet based on historical cost data`)
+        }
+      }
+    } catch (error) {
+      console.warn('[ComplexityAnalyzer] Failed to apply learnings:', error)
+      // Continue with base analysis
+    }
+
+    return analysis
+  }
+
+  /**
    * Analyze multiple sections and return sorted by complexity
    */
   analyzeAll(sections: BvsSection[]): ComplexityAnalysis[] {
     return sections
       .map(s => this.analyze(s))
       .sort((a, b) => b.score - a.score) // Highest complexity first
+  }
+
+  /**
+   * Analyze multiple sections with learning-based adjustments
+   */
+  async analyzeAllWithLearnings(sections: BvsSection[]): Promise<ComplexityAnalysis[]> {
+    const analyses = await Promise.all(sections.map(s => this.analyzeWithLearnings(s)))
+    return analyses.sort((a, b) => b.score - a.score)
   }
 
   /**

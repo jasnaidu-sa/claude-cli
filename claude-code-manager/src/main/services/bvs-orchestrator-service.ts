@@ -42,6 +42,7 @@ import {
   type BvsProject,
   type BvsExecutionConfig,
   type BvsExecutionRun,
+  type BvsE2EResult,
 } from '@shared/bvs-types'
 
 // Import new execution services
@@ -58,6 +59,7 @@ import {
   type WorkerResult,
   type ProjectContext,
 } from './bvs-worker-sdk-service'
+import { getBvsE2ETestingService } from './bvs-e2e-testing-service'
 import {
   mergePointService,
   type MergePointConfig,
@@ -69,6 +71,22 @@ import { ConfigStore } from './config-store'
 // UltraQA-style services for quality assurance
 import { goalReviewer, type GoalReviewResult } from './bvs-goal-reviewer-service'
 import { fixLoop, type FixLoopConfig, type FixLoopResult } from './bvs-fix-loop-service'
+
+// Subagent service for architect diagnosis and code review
+import { getBvsSubagentService } from './bvs-subagent-service'
+import type { BvsArchitectDiagnosis } from '@shared/bvs-types'
+
+// Operational verification for runtime testing
+import {
+  getBvsOperationalVerificationService,
+  type OperationalVerificationReport,
+} from './bvs-operational-verification-service'
+
+// Database migration service for auto-applying migrations
+import {
+  getBvsDatabaseMigrationService,
+  type MigrationReport,
+} from './bvs-database-migration-service'
 
 // Directory structure constants
 const BVS_DIR = '.bvs'
@@ -604,7 +622,8 @@ export class BvsOrchestratorService extends EventEmitter {
         id: sessionId,
         projectPath,
         projectId,
-        config: this.config,
+        projectName: projectData.name || plan.title || 'Restored Session',
+        // Note: BvsSession doesn't have config field - configuration is stored in orchestrator's this.config
         status: 'paused', // Always restore as paused
         phase: 'executing',
         plan,
@@ -617,7 +636,8 @@ export class BvsOrchestratorService extends EventEmitter {
         totalElapsedSeconds: progress.totalElapsedSeconds || 0,
         workers: [], // Array of BvsWorkerInfo
         currentSections: [], // Track current running sections
-        eventHistory: [],
+        sessionLearnings: [], // Required by BvsSession
+        consecutiveFailures: 0, // Required by BvsSession
       }
 
       // Add to sessions map
@@ -865,18 +885,43 @@ export class BvsOrchestratorService extends EventEmitter {
     session.status = 'paused'
     session.pausedAt = Date.now()
 
+    // Stop all running workers
+    await this.stopAllWorkers(sessionId)
+
+    // Reset in_progress sections to 'pending' so they can be retried or re-run on resume
+    // This prevents sections from being stuck in 'in_progress' state after pause
+    if (session.plan) {
+      for (const section of session.plan.sections) {
+        if (section.status === 'in_progress' || section.status === 'verifying') {
+          console.log(`[BvsOrchestrator] Resetting paused section ${section.id} from ${section.status} to pending`)
+          section.status = 'pending'
+          // Preserve any partial progress/output but allow retry
+          section.lastError = `Paused: ${reason || 'User requested pause'}`
+          // Remove from current sections
+          session.currentSections = session.currentSections?.filter(id => id !== section.id) || []
+          // Emit update so UI reflects the change
+          this.emitBvsEvent({
+            type: 'section_update',
+            sectionId: section.id,
+            status: 'pending',
+            progress: section.progress,
+            workerId: section.workerId,
+          })
+        }
+      }
+      // Save progress after resetting sections
+      await this.saveSessionProgress(session)
+    }
+
     // RALPH-012: Emit pause event with reason
     this.emitBvsEvent({
       type: 'session_paused',
       sessionId,
       reason: reason || 'User requested pause',
       timestamp: Date.now(),
-    } as any)
+    })
 
     console.log(`[BvsOrchestrator] Session paused: ${reason || 'User requested'}`)
-
-    // Pause all running workers
-    // (Workers will check pause flag and stop at next checkpoint)
   }
 
   /**
@@ -1195,8 +1240,13 @@ export class BvsOrchestratorService extends EventEmitter {
           console.log(`[BvsOrchestrator] Selected sections complete. ${pendingSections.length} sections still pending.`)
           session.status = 'paused'
           session.selectedSectionIds = undefined  // Clear selection for next run
-          await this.saveProgress(sessionId)
-          this.emitSessionUpdate(sessionId)
+          await this.saveSessionProgress(session)
+          // Emit session paused event
+          this.emitBvsEvent({
+            type: 'session_paused',
+            sessionId,
+            reason: 'Selected sections complete, remaining sections pending',
+          })
           return
         }
       }
@@ -1439,6 +1489,42 @@ export class BvsOrchestratorService extends EventEmitter {
         })
       }
 
+      // Run E2E tests if this section has UI components
+      let e2eResult: BvsE2EResult | null = null
+      if (this.shouldRunE2ETests(section)) {
+        try {
+          console.log(`[BVS] Running E2E tests for section ${sectionId}...`)
+          e2eResult = await this.runE2ETestsForSection(session, section, result.filesChanged || [])
+
+          // Log E2E result (don't fail section on E2E failure - just warn)
+          if (e2eResult && !e2eResult.passed) {
+            console.warn(`[BVS] E2E tests failed for section ${sectionId}:`, e2eResult.consoleErrors)
+          }
+        } catch (e2eError: unknown) {
+          console.error(`[BVS] E2E test error for section ${sectionId}:`, e2eError instanceof Error ? e2eError.message : e2eError)
+          // Continue without E2E results - don't fail the section
+        }
+      }
+
+      // Run operational verification if section has API endpoints, pages, or components
+      if (this.shouldRunOperationalVerification(section)) {
+        try {
+          console.log(`[BVS] Running operational verification for section ${sectionId}...`)
+          const opResult = await this.runOperationalVerification(session, section, result.filesChanged || [])
+
+          // Log operational verification result (don't fail section on verification failure - just warn)
+          if (opResult && opResult.overallStatus !== 'operational') {
+            console.warn(`[BVS] Operational verification ${opResult.overallStatus} for section ${sectionId}:`, opResult.blockers)
+          }
+        } catch (opError: unknown) {
+          console.error(`[BVS] Operational verification error for section ${sectionId}:`, opError instanceof Error ? opError.message : opError)
+          // Continue without operational verification results - don't fail the section
+        }
+      }
+
+      // Process database migrations if section created any
+      await this.processDatabaseMigrations(session, section, result.filesChanged || [])
+
       // Mark as complete
       console.log(`[BVS] Worker ${workerId} completed section ${sectionId} ✓`)
       await this.completeSection(sessionId, sectionId, true, undefined, accumulatedOutput, metrics)
@@ -1583,13 +1669,24 @@ export class BvsOrchestratorService extends EventEmitter {
 
     // Allow retry for failed, retrying, or even done sections (to force re-run)
     const retryableStatuses = ['failed', 'retrying', 'done', 'pending']
+
+    // Special case: if session is paused and section is in_progress, allow retry by resetting it
+    // This handles cases where pause didn't properly reset the section
+    if ((section.status === 'in_progress' || section.status === 'verifying') && session.status === 'paused') {
+      console.log(`[BVS] retrySection: Section ${sectionId} is ${section.status} but session is paused - resetting to allow retry`)
+      section.status = 'pending'
+      section.lastError = 'Reset from paused in_progress state'
+      // Remove from current sections
+      session.currentSections = session.currentSections?.filter(id => id !== sectionId) || []
+    }
+
     if (!retryableStatuses.includes(section.status)) {
       console.error(`[BVS] retrySection: Section ${sectionId} has status '${section.status}' - cannot retry while in_progress or verifying`)
       throw new Error(`Cannot retry section in status '${section.status}'. Wait for it to complete or fail first.`)
     }
 
-    // Check if already running
-    if (section.status === 'in_progress' || section.status === 'verifying') {
+    // Double-check: shouldn't reach here for in_progress/verifying if session is running
+    if ((section.status === 'in_progress' || section.status === 'verifying') && session.status === 'running') {
       console.warn(`[BVS] retrySection: Section ${sectionId} is already running (${section.status})`)
       throw new Error(`Section is already running (${section.status})`)
     }
@@ -1949,6 +2046,9 @@ export class BvsOrchestratorService extends EventEmitter {
 
   /**
    * Execute a single worker with retry support
+   *
+   * Enhanced with architect diagnosis: Before retry, spawns an architect agent
+   * to diagnose the failure and suggest a different approach.
    */
   private async executeWorkerWithRetry(
     session: BvsSession,
@@ -1958,8 +2058,40 @@ export class BvsOrchestratorService extends EventEmitter {
   ): Promise<WorkerResult> {
     const maxRetries = 3
     let lastResult: WorkerResult | null = null
+    let architectDiagnosis: BvsArchitectDiagnosis | null = null
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      // On retry (attempt > 0), run architect diagnosis if we have previous errors
+      if (attempt > 0 && lastResult && lastResult.errors.length > 0) {
+        try {
+          console.log(`[BVS] Running architect diagnosis before retry attempt ${attempt + 1}...`)
+
+          this.emitBvsEvent({
+            type: 'architect_diagnosis_started',
+            sectionId: section.id,
+            attempt,
+          })
+
+          architectDiagnosis = await this.runArchitectDiagnosis(session, section, lastResult)
+
+          if (architectDiagnosis) {
+            console.log(`[BVS] Architect diagnosis: ${architectDiagnosis.failureType} - ${architectDiagnosis.rootCause}`)
+
+            this.emitBvsEvent({
+              type: 'architect_diagnosis_complete',
+              sectionId: section.id,
+              diagnosis: architectDiagnosis,
+            })
+
+            // Store diagnosis on section for UI display
+            section.lastDiagnosis = architectDiagnosis
+          }
+        } catch (diagError) {
+          console.error(`[BVS] Architect diagnosis failed:`, diagError)
+          // Continue with retry even if diagnosis fails
+        }
+      }
+
       // Update section status
       section.status = attempt === 0 ? 'in_progress' : 'retrying'
       section.workerId = workerId
@@ -1973,7 +2105,7 @@ export class BvsOrchestratorService extends EventEmitter {
         worktreePath: path.join(session.projectPath, '.bvs', 'worktrees', `worker-${workerId}`),
         state: 'running',
         progress: 0,
-        currentStep: attempt === 0 ? 'Starting...' : `Retrying (attempt ${attempt + 1})...`,
+        currentStep: attempt === 0 ? 'Starting...' : `Retrying with guidance (attempt ${attempt + 1})...`,
         commits: [],
         startedAt: Date.now(),
       }
@@ -1989,6 +2121,7 @@ export class BvsOrchestratorService extends EventEmitter {
         attempt,
         maxTurns: complexity.maxTurns,
         model: complexity.model,
+        hasDiagnosis: !!architectDiagnosis,
       })
 
       // Create and execute worker
@@ -2031,12 +2164,14 @@ export class BvsOrchestratorService extends EventEmitter {
         maxTurns: complexity.maxTurns,
         projectContext,
         complexity,
+        // Pass architect diagnosis for retry attempts - worker prompt will include this
+        architectDiagnosis: architectDiagnosis || undefined,
       }
 
       try {
         // RALPH-010: Check limits before execution
         try {
-          this.checkSessionLimits(sessionId, section.id)
+          this.checkSessionLimits(session.id, section.id)
         } catch (error) {
           if (error instanceof SessionLimitError) {
             console.error(`[BvsOrchestrator] Session limit exceeded:`, error.message)
@@ -2068,12 +2203,12 @@ export class BvsOrchestratorService extends EventEmitter {
           throw error
         }
 
-        lastResult = await workerService.executeSectionWithSubtasks(workerConfig) // Use new subtask method
+        lastResult = await workerService.executeSection(workerConfig)
 
         // RALPH-010: Track cost after execution
         const sectionCost = this.calculateSectionCost(lastResult)
         try {
-          this.checkSessionLimits(sessionId, section.id, sectionCost)
+          this.checkSessionLimits(session.id, section.id, sectionCost)
         } catch (error) {
           if (error instanceof SessionLimitError) {
             // RALPH-015: Capture learning from post-execution limit violation
@@ -2095,6 +2230,43 @@ export class BvsOrchestratorService extends EventEmitter {
           workerInfo.state = 'completed'
           workerInfo.completedAt = Date.now()
 
+          // Run E2E tests if this section has UI components
+          let e2eResult = null
+          if (this.shouldRunE2ETests(section)) {
+            try {
+              console.log(`[BVS] Running E2E tests for section ${section.id}...`)
+              e2eResult = await this.runE2ETestsForSection(session, section, lastResult.filesChanged)
+
+              // If E2E fails, don't fail the section but log the issue
+              if (e2eResult && !e2eResult.passed) {
+                console.warn(`[BVS] E2E tests failed for section ${section.id}:`, e2eResult.consoleErrors)
+              }
+            } catch (e2eError) {
+              console.error(`[BVS] E2E test error for section ${section.id}:`, e2eError)
+              // Continue without E2E results - don't fail the section
+            }
+          }
+
+          // Run operational verification if section has API endpoints, pages, or components
+          let operationalResult = null
+          if (this.shouldRunOperationalVerification(section)) {
+            try {
+              console.log(`[BVS] Running operational verification for section ${section.id}...`)
+              operationalResult = await this.runOperationalVerification(session, section, lastResult.filesChanged)
+
+              // If operational verification fails, don't fail the section but log the issue
+              if (operationalResult && operationalResult.overallStatus !== 'operational') {
+                console.warn(`[BVS] Operational verification ${operationalResult.overallStatus} for section ${section.id}:`, operationalResult.blockers)
+              }
+            } catch (opError) {
+              console.error(`[BVS] Operational verification error for section ${section.id}:`, opError)
+              // Continue without operational verification results - don't fail the section
+            }
+          }
+
+          // Process database migrations if section created any
+          await this.processDatabaseMigrations(session, section, lastResult.filesChanged)
+
           this.emitBvsEvent({
             type: 'worker_completed',
             sectionId: section.id,
@@ -2105,6 +2277,7 @@ export class BvsOrchestratorService extends EventEmitter {
               filesChanged: lastResult.filesChanged,
               qualityGatesPassed: lastResult.qualityGatesPassed,
               errors: lastResult.errors,
+              e2eResult: e2eResult || undefined,
             },
           })
 
@@ -2217,42 +2390,42 @@ export class BvsOrchestratorService extends EventEmitter {
       return null
     }
 
-    try {
-      console.log(`[BVS] Running Fix Loop for section ${section.id}...`)
+    console.log(`[BVS] Running Fix Loop for section ${section.id}...`)
 
+    this.emitBvsEvent({
+      type: 'fix_loop_started',
+      sectionId: section.id,
+      errors,
+    })
+
+    // Subscribe to fix loop events
+    fixLoop.on('cycle-start', (data) => {
       this.emitBvsEvent({
-        type: 'fix_loop_started',
+        type: 'fix_loop_cycle',
         sectionId: section.id,
-        errors,
+        cycle: data.cycle,
+        maxCycles: data.maxCycles,
       })
+    })
 
-      // Subscribe to fix loop events
-      fixLoop.on('cycle-start', (data) => {
-        this.emitBvsEvent({
-          type: 'fix_loop_cycle',
-          sectionId: section.id,
-          cycle: data.cycle,
-          maxCycles: data.maxCycles,
-        })
+    fixLoop.on('diagnosing', (data) => {
+      this.emitBvsEvent({
+        type: 'fix_loop_diagnosing',
+        sectionId: section.id,
+        cycle: data.cycle,
       })
+    })
 
-      fixLoop.on('diagnosing', (data) => {
-        this.emitBvsEvent({
-          type: 'fix_loop_diagnosing',
-          sectionId: section.id,
-          cycle: data.cycle,
-        })
+    fixLoop.on('fixing', (data) => {
+      this.emitBvsEvent({
+        type: 'fix_loop_fixing',
+        sectionId: section.id,
+        cycle: data.cycle,
+        diagnosis: data.diagnosis,
       })
+    })
 
-      fixLoop.on('fixing', (data) => {
-        this.emitBvsEvent({
-          type: 'fix_loop_fixing',
-          sectionId: section.id,
-          cycle: data.cycle,
-          diagnosis: data.diagnosis,
-        })
-      })
-
+    try {
       const config: FixLoopConfig = {
         maxCycles: 3,  // Conservative - don't waste tokens on hopeless fixes
         sameFailureThreshold: 2,  // Exit if stuck on same error twice
@@ -2273,20 +2446,367 @@ export class BvsOrchestratorService extends EventEmitter {
         totalCycles: result.totalCycles,
       })
 
-      // Clean up event listeners
-      fixLoop.removeAllListeners('cycle-start')
-      fixLoop.removeAllListeners('diagnosing')
-      fixLoop.removeAllListeners('fixing')
-
       return result
     } catch (error) {
       console.error(`[BVS] Fix Loop failed for section ${section.id}:`, error)
-
-      // Clean up event listeners
+      return null
+    } finally {
+      // CRITICAL: Always clean up event listeners to prevent memory leaks
+      // This runs whether runFixLoop succeeds, fails, or throws
       fixLoop.removeAllListeners('cycle-start')
       fixLoop.removeAllListeners('diagnosing')
       fixLoop.removeAllListeners('fixing')
+    }
+  }
 
+  // ============================================================================
+  // Architect Diagnosis (Smart Retry)
+  // ============================================================================
+
+  /**
+   * Run architect diagnosis before retry
+   *
+   * Spawns an architect agent to analyze why the previous attempt failed
+   * and suggest a different approach for the retry.
+   */
+  private async runArchitectDiagnosis(
+    session: BvsSession,
+    section: BvsSection,
+    lastResult: WorkerResult
+  ): Promise<BvsArchitectDiagnosis | null> {
+    const subagentService = getBvsSubagentService()
+
+    // Build the diagnosis prompt with context about the failure
+    const prompt = this.buildArchitectPrompt(section, lastResult)
+
+    try {
+      const result = await subagentService.spawn({
+        type: 'architect',
+        prompt,
+        projectPath: session.projectPath,
+        files: section.files.map(f => f.path),
+        model: 'sonnet',  // Use Sonnet for complex reasoning
+        maxTurns: 1,
+      })
+
+      if (result.status !== 'completed') {
+        console.warn(`[BVS] Architect agent failed: ${result.error}`)
+        return null
+      }
+
+      const diagnosis = subagentService.parseArchitectDiagnosis(result)
+      if (!diagnosis) {
+        console.warn(`[BVS] Could not parse architect diagnosis from output`)
+        return null
+      }
+
+      return diagnosis
+    } catch (error) {
+      console.error(`[BVS] Architect diagnosis error:`, error)
+      return null
+    }
+  }
+
+  /**
+   * Build prompt for architect diagnosis agent
+   */
+  private buildArchitectPrompt(section: BvsSection, lastResult: WorkerResult): string {
+    const successCriteria = section.successCriteria
+      .map((c, i) => `${i + 1}. ${c.description}`)
+      .join('\n')
+
+    const fileActions = section.files
+      .map(f => `- ${f.action.toUpperCase()}: ${f.path}`)
+      .join('\n')
+
+    const errors = lastResult.errors.join('\n')
+    const filesChanged = lastResult.filesChanged.join('\n') || 'None'
+
+    return `You are an architect agent diagnosing a failed code generation task.
+
+FAILED SECTION: ${section.name}
+DESCRIPTION: ${section.description}
+
+SUCCESS CRITERIA:
+${successCriteria}
+
+FILES TO CREATE/MODIFY:
+${fileActions}
+
+PREVIOUS ATTEMPT RESULTS:
+- Status: ${lastResult.status}
+- Turns Used: ${lastResult.turnsUsed}
+- Files Changed: ${filesChanged}
+- Quality Gates Passed: ${lastResult.qualityGatesPassed}
+
+ERRORS:
+${errors}
+
+DIAGNOSIS TASK:
+1. Identify the ROOT CAUSE of the failure
+2. Determine if this is a:
+   - Approach problem (wrong strategy)
+   - Implementation problem (right strategy, wrong execution)
+   - Environment problem (missing deps, permissions, config)
+   - Specification problem (unclear requirements)
+3. Suggest a DIFFERENT approach that avoids the same failure
+4. Identify any files the worker should read first to understand context
+5. Provide specific warnings for the worker
+
+Output format (JSON):
+{
+  "rootCause": "Brief description of why it failed",
+  "failureType": "approach|implementation|environment|specification",
+  "diagnosis": "Detailed analysis of what went wrong...",
+  "suggestedApproach": "What the worker should do differently...",
+  "filesToReadFirst": ["path/to/file.ts"],
+  "warningsForWorker": ["Don't use X because...", "Make sure to Y..."]
+}`
+  }
+
+  // ============================================================================
+  // E2E Testing Integration
+  // ============================================================================
+
+  /**
+   * Determine if a section should have E2E tests run
+   *
+   * E2E tests are run for sections that modify UI components, pages,
+   * or other user-facing code.
+   */
+  private shouldRunE2ETests(section: BvsSection): boolean {
+    // Check if section has UI-related files
+    const uiPatterns = [
+      /\.tsx$/,                     // React components
+      /\.jsx$/,                     // React components
+      /\/pages?\//,                 // Pages directory
+      /\/app\//,                    // Next.js app router
+      /\/components?\//,            // Components
+      /\/views?\//,                 // Views
+      /\/layouts?\//,               // Layouts
+    ]
+
+    const hasUiFiles = section.files.some(f =>
+      uiPatterns.some(pattern => pattern.test(f.path))
+    )
+
+    // Check if success criteria mention UI/visual/user interaction
+    const uiKeywords = ['ui', 'display', 'render', 'show', 'page', 'component', 'button', 'form', 'input', 'click', 'visible']
+    const hasUiCriteria = section.successCriteria.some(c =>
+      uiKeywords.some(kw => c.description.toLowerCase().includes(kw))
+    )
+
+    // Check if explicit E2E URLs are set
+    const hasExplicitUrls = !!(section.e2eTestUrls && section.e2eTestUrls.length > 0)
+
+    return hasUiFiles || hasUiCriteria || hasExplicitUrls
+  }
+
+  /**
+   * Run E2E tests for a completed section
+   *
+   * Uses the BvsE2ETestingService to:
+   * 1. Ensure dev server is running
+   * 2. Navigate to affected URLs
+   * 3. Check for console errors
+   * 4. Optionally capture screenshots
+   */
+  private async runE2ETestsForSection(
+    session: BvsSession,
+    section: BvsSection,
+    filesChanged: string[]
+  ): Promise<BvsE2EResult | null> {
+    try {
+      const e2eService = getBvsE2ETestingService()
+
+      // Initialize if needed
+      await e2eService.initialize(session.projectPath)
+
+      // Emit E2E test started event
+      this.emitBvsEvent({
+        type: 'section_update',
+        sectionId: section.id,
+        status: section.status as BvsSectionStatus,
+        progress: section.progress,
+        currentStep: 'Running E2E tests...',
+      })
+
+      // Run E2E tests
+      const result = await e2eService.runE2ETest(section, {
+        captureScreenshot: true,
+      })
+
+      // Log result
+      if (result.passed) {
+        console.log(`[BVS] E2E tests passed for section ${section.id}`)
+      } else {
+        console.warn(`[BVS] E2E tests failed for section ${section.id}:`)
+        if (result.consoleErrors.length > 0) {
+          console.warn(`  Console errors: ${result.consoleErrors.join('; ')}`)
+        }
+        if (result.networkErrors.length > 0) {
+          console.warn(`  Network errors: ${result.networkErrors.join('; ')}`)
+        }
+      }
+
+      return result
+    } catch (error) {
+      console.error(`[BVS] E2E test error:`, error)
+      return null
+    }
+  }
+
+  // ============================================================================
+  // Operational Verification Integration
+  // ============================================================================
+
+  /**
+   * Determine if a section should have operational verification run
+   *
+   * Operational verification is run for sections that create user-facing functionality
+   * like API endpoints, pages, or components that need runtime testing.
+   */
+  private shouldRunOperationalVerification(section: BvsSection): boolean {
+    // Check if section creates API endpoints, pages, or components
+    const operationalPatterns = [
+      /\/api\//,                     // API routes
+      /\/routes?\//,                 // Route handlers
+      /\/pages?\//,                  // Pages
+      /\/app\/.*\/page\./,           // Next.js app router pages
+      /\/components?\//,             // Components
+    ]
+
+    const hasOperationalFiles = section.files.some(file =>
+      file.action === 'create' &&
+      operationalPatterns.some(pattern => pattern.test(file.path))
+    )
+
+    // Also run if section has explicit e2e test URLs
+    const hasExplicitUrls = !!(section.e2eTestUrls && section.e2eTestUrls.length > 0)
+
+    return hasOperationalFiles || hasExplicitUrls
+  }
+
+  /**
+   * Run operational verification for a section
+   *
+   * Uses the BvsOperationalVerificationService to:
+   * 1. Ensure dev server is running
+   * 2. Verify API endpoints respond
+   * 3. Verify pages load
+   * 4. Check for runtime errors
+   */
+  private async runOperationalVerification(
+    session: BvsSession,
+    section: BvsSection,
+    filesChanged: string[]
+  ): Promise<OperationalVerificationReport | null> {
+    try {
+      const opVerifyService = getBvsOperationalVerificationService()
+
+      // Emit verification started event
+      this.emitBvsEvent({
+        type: 'section_update',
+        sectionId: section.id,
+        status: section.status as BvsSectionStatus,
+        progress: section.progress,
+        currentStep: 'Running operational verification...',
+      })
+
+      // Get base URL from plan's codebase context or default
+      const baseUrl = session.plan?.codebaseContext?.devCommand?.includes('3000')
+        ? 'http://localhost:3000'
+        : 'http://localhost:3000'  // Default to port 3000
+
+      // Run verification
+      const result = await opVerifyService.verifySection(
+        session.projectPath,
+        section,
+        baseUrl
+      )
+
+      // Log result
+      if (result.overallStatus === 'operational') {
+        console.log(`[BVS] Operational verification passed for section ${section.id}`)
+      } else {
+        console.warn(`[BVS] Operational verification ${result.overallStatus} for section ${section.id}:`)
+        for (const blocker of result.blockers) {
+          console.warn(`  - ${blocker}`)
+        }
+      }
+
+      return result
+    } catch (error) {
+      console.error(`[BVS] Operational verification error:`, error)
+      return null
+    }
+  }
+
+  // ============================================================================
+  // Database Migration Integration
+  // ============================================================================
+
+  /**
+   * Process database migrations for a section
+   *
+   * Detects and auto-applies migrations created by the section using Supabase MCP.
+   * Migrations are applied automatically to ensure they're not just created as files.
+   */
+  private async processDatabaseMigrations(
+    session: BvsSession,
+    section: BvsSection,
+    filesChanged: string[]
+  ): Promise<MigrationReport | null> {
+    try {
+      const migrationService = getBvsDatabaseMigrationService()
+
+      // Quick check if any migrations were created
+      const hasMigrations = await migrationService.sectionHasMigrations(
+        session.projectPath,
+        filesChanged
+      )
+
+      if (!hasMigrations) {
+        return null
+      }
+
+      console.log(`[BVS] Processing database migrations for section ${section.id}...`)
+
+      // Emit migration started event
+      this.emitBvsEvent({
+        type: 'section_update',
+        sectionId: section.id,
+        status: section.status as BvsSectionStatus,
+        progress: section.progress,
+        currentStep: 'Applying database migrations...',
+      })
+
+      // Process migrations
+      const result = await migrationService.processMigrations({
+        projectPath: session.projectPath,
+        sectionId: section.id,
+        sectionName: section.name,
+        filesChanged,
+        autoApply: true,      // Auto-apply migrations via Supabase MCP
+        verifySchema: true,   // Verify schema after apply
+        rollbackOnFailure: false,  // Don't rollback (too risky without transaction support)
+      })
+
+      // Log result
+      if (result.overallStatus === 'success') {
+        console.log(`[BVS] Database migrations applied for section ${section.id}`)
+        console.log(migrationService.formatReport(result))
+      } else if (result.overallStatus === 'failed') {
+        console.warn(`[BVS] Database migration failed for section ${section.id}:`)
+        console.warn(migrationService.formatReport(result))
+      } else if (result.overallStatus === 'partial') {
+        console.warn(`[BVS] Database migration partially applied for section ${section.id}:`)
+        console.warn(migrationService.formatReport(result))
+      }
+
+      return result
+    } catch (error) {
+      console.error(`[BVS] Database migration error:`, error)
       return null
     }
   }
@@ -2492,6 +3012,45 @@ ${learning.preventionRule}
     } catch {
       // File might not exist
     }
+  }
+
+  /**
+   * Start execution with a specific set of sections selected
+   * Creates a session from the plan and executes only the selected sections
+   */
+  async startExecutionWithSelection(
+    projectPath: string,
+    projectId: string,
+    selectedSectionIds: string[],
+    config?: BvsExecutionConfig
+  ): Promise<string> {
+    // Load the plan
+    const plan = await this.loadPlan(projectPath, projectId)
+    if (!plan) {
+      throw new Error('Plan not found for project')
+    }
+
+    // Create a session from the plan - returns session ID
+    const sessionId = await this.createSessionFromPlan(projectPath, projectId, plan)
+
+    // Get the actual session object
+    const session = this.sessions.get(sessionId)
+    if (!session) {
+      throw new Error('Failed to create session')
+    }
+
+    // Set the selected sections
+    session.selectedSectionIds = new Set(selectedSectionIds)
+
+    // Apply execution config if provided
+    if (config && session.plan) {
+      session.plan.executionConfig = config
+    }
+
+    // Start execution - will only run sections in selectedSectionIds
+    await this.startExecution(sessionId)
+
+    return sessionId
   }
 
   /**

@@ -39,7 +39,7 @@ export interface BvsSectionData {
   id: string
   name: string
   description?: string
-  status: 'pending' | 'in_progress' | 'verifying' | 'done' | 'failed'
+  status: 'pending' | 'in_progress' | 'verifying' | 'done' | 'failed' | 'retrying' | 'skipped'
   progress: number
   workerId?: string
   currentStep?: string
@@ -50,6 +50,7 @@ export interface BvsSectionData {
   dependents?: string[]
   elapsedSeconds?: number
   errorMessage?: string
+  workerOutput?: string  // Accumulated worker output for logs display
   successCriteria?: Array<{ description: string; passed: boolean }>
   // Ralph Loop subtasks (RALPH-004, RALPH-006)
   subtasks?: Array<{
@@ -113,10 +114,14 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
         return <Clock className="h-4 w-4 text-gray-400" />
       case 'in_progress':
         return <Loader2 className={cn('h-4 w-4 animate-spin', colors.text)} />
+      case 'retrying':
+        return <RotateCcw className={cn('h-4 w-4 animate-spin', colors.text)} />
       case 'verifying':
         return <Search className="h-4 w-4 text-cyan-500 animate-pulse" />
       case 'done':
         return <CheckCircle2 className="h-4 w-4 text-green-500" />
+      case 'skipped':
+        return <AlertCircle className="h-4 w-4 text-yellow-500" />
       case 'failed':
         return <XCircle className="h-4 w-4 text-red-500" />
       default:
@@ -132,6 +137,7 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
         }
         return 'Pending'
       case 'in_progress':
+      case 'retrying':
         if (section.currentStep) {
           return section.currentStep
         }
@@ -139,7 +145,7 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
           const fileName = section.currentFile.split('/').pop()
           return `Working on: ${fileName}${section.currentLine ? `:${section.currentLine}` : ''}`
         }
-        return 'In progress...'
+        return section.status === 'retrying' ? 'Retrying...' : 'In progress...'
       case 'verifying':
         return section.currentStep || 'Running verification...'
       case 'done':
@@ -155,11 +161,14 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
     switch (section.status) {
       case 'done':
         return 'bg-green-500'
+      case 'skipped':
+        return 'bg-yellow-500'
       case 'failed':
         return 'bg-red-500'
       case 'verifying':
         return 'bg-cyan-500'
       case 'in_progress':
+      case 'retrying':
         return colors.text.replace('text-', 'bg-')
       default:
         return 'bg-gray-300'
@@ -174,9 +183,10 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
         'hover:shadow-md hover:scale-[1.02]',
         isSelected && 'ring-2 ring-primary ring-offset-2',
         section.status === 'pending' && 'opacity-70 border-gray-200 dark:border-gray-700',
-        section.status === 'in_progress' && cn(colors.border, 'shadow-sm'),
+        (section.status === 'in_progress' || section.status === 'retrying') && cn(colors.border, 'shadow-sm'),
         section.status === 'verifying' && 'border-cyan-500 animate-pulse',
         section.status === 'done' && 'border-green-500/50',
+        section.status === 'skipped' && 'border-yellow-500/50 opacity-80',
         section.status === 'failed' && 'border-red-500 bg-red-50/50 dark:bg-red-900/20'
       )}
     >
@@ -230,7 +240,7 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
           <span className="text-[10px] text-muted-foreground">
             {section.progress}%
           </span>
-          {section.workerId && section.status === 'in_progress' && (
+          {section.workerId && (section.status === 'in_progress' || section.status === 'retrying') && (
             <span className={cn('text-[10px] font-medium', colors.text)}>
               {section.workerId.replace('worker-', 'W')}
             </span>
@@ -240,7 +250,7 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
 
       {/* Current Step / Status Text */}
       <div className="text-xs text-muted-foreground truncate">
-        {section.status === 'in_progress' && (
+        {(section.status === 'in_progress' || section.status === 'retrying') && (
           <span className="flex items-center gap-1">
             <span className={cn('inline-block w-1.5 h-1.5 rounded-full animate-pulse', colors.text.replace('text-', 'bg-'))} />
             {getStatusText()}
@@ -259,6 +269,12 @@ export function BvsKanbanCard({ section, onClick, onRetry, isSelected }: BvsKanb
           <span className="text-green-600 flex items-center gap-1">
             <CheckCircle2 className="h-3 w-3" />
             {getStatusText()}
+          </span>
+        )}
+        {section.status === 'skipped' && (
+          <span className="text-yellow-600 flex items-center gap-1">
+            <AlertCircle className="h-3 w-3" />
+            Skipped
           </span>
         )}
         {section.status === 'failed' && (

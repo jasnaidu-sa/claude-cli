@@ -174,6 +174,13 @@ export interface BvsFile {
   editsCompleted?: number
 }
 
+// Simplified file info for planning phase (before execution details are added)
+export interface BvsFileInfo {
+  path: string
+  action?: 'create' | 'modify' | 'delete'
+  reason?: string  // Why this file is included
+}
+
 export interface BvsSuccessCriteria {
   id: string
   description: string
@@ -185,6 +192,9 @@ export interface BvsSection {
   id: string
   name: string
   description?: string
+
+  // Estimated complexity for planning phase
+  estimatedComplexity?: 'low' | 'medium' | 'high'
 
   // Files in this section
   files: BvsFile[]
@@ -224,12 +234,30 @@ export interface BvsSection {
   lastError?: string
   errorMessage?: string  // For frontend display (same as lastError)
 
+  // Architect diagnosis (from smart retry)
+  lastDiagnosis?: BvsArchitectDiagnosis
+
   // Worker output (accumulated for display)
   workerOutput?: string
 
   // Commits made in this section
   commits: string[]
 }
+
+/**
+ * Architect diagnosis result from smart retry
+ */
+export interface BvsArchitectDiagnosis {
+  rootCause: string
+  failureType: 'approach' | 'implementation' | 'environment' | 'specification'
+  diagnosis: string
+  suggestedApproach: string
+  filesToReadFirst: string[]
+  warningsForWorker: string[]
+}
+
+// Type alias for UI components that work with section data
+export type BvsSectionData = BvsSection
 
 // ============================================================================
 // Dependency Graph
@@ -274,6 +302,9 @@ export interface BvsWorkerInfo {
   startedAt?: number
   completedAt?: number
   error?: string
+
+  // Worker output logs for display
+  logs?: string[]
 
   // Ralph Loop: Aggregated metrics across subtasks
   metrics?: BvsWorkerMetrics
@@ -426,6 +457,7 @@ export interface BvsReviewerResult {
   error?: string
   completedAt?: number
   reviewData?: string  // Raw JSON output from reviewer agent
+  cost?: number        // Cost in USD for this reviewer
 }
 
 export interface BvsCodeReviewResult {
@@ -604,6 +636,12 @@ export interface BvsSectionUpdateEvent {
   currentStep?: string
   currentFile?: string
   workerId?: BvsWorkerId
+  // Metrics (optional, added when section completes)
+  errorMessage?: string
+  costUsd?: number
+  tokensInput?: number
+  tokensOutput?: number
+  turnsUsed?: number
 }
 
 export interface BvsTypeCheckEvent {
@@ -710,6 +748,13 @@ export interface BvsSessionFailedEvent {
   errors: string[]
 }
 
+export interface BvsSessionPausedEvent {
+  type: 'session_paused'
+  sessionId: string
+  reason: string
+  timestamp?: number
+}
+
 export interface BvsWorkerStartedEvent {
   type: 'worker_started'
   sectionId: string
@@ -717,6 +762,19 @@ export interface BvsWorkerStartedEvent {
   attempt: number
   maxTurns: number
   model: string
+  hasDiagnosis?: boolean
+}
+
+export interface BvsArchitectDiagnosisStartedEvent {
+  type: 'architect_diagnosis_started'
+  sectionId: string
+  attempt: number
+}
+
+export interface BvsArchitectDiagnosisCompleteEvent {
+  type: 'architect_diagnosis_complete'
+  sectionId: string
+  diagnosis: BvsArchitectDiagnosis
 }
 
 export interface BvsWorkerCompletedEvent {
@@ -729,6 +787,8 @@ export interface BvsWorkerCompletedEvent {
     filesChanged: string[]
     qualityGatesPassed: boolean
     errors: string[]
+    /** E2E test result if tests were run for this section */
+    e2eResult?: BvsE2EResult
   }
 }
 
@@ -817,6 +877,7 @@ export type BvsEvent =
   | BvsLevelStartedEvent
   | BvsMergePointCompletedEvent
   | BvsSessionFailedEvent
+  | BvsSessionPausedEvent
   | BvsWorkerStartedEvent
   | BvsWorkerCompletedEvent
   | BvsWorkerFailedEvent
@@ -829,6 +890,9 @@ export type BvsEvent =
   | BvsFixLoopDiagnosingEvent
   | BvsFixLoopFixingEvent
   | BvsFixLoopCompletedEvent
+  // Architect Diagnosis Events
+  | BvsArchitectDiagnosisStartedEvent
+  | BvsArchitectDiagnosisCompleteEvent
 
 // ============================================================================
 // Configuration

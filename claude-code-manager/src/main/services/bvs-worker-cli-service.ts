@@ -134,11 +134,14 @@ export class BvsWorkerCliService extends EventEmitter {
     console.log(`[BvsWorker:${workerId}] CWD: ${cwd}`)
     console.log(`[BvsWorker:${workerId}] MCP Config: ${mcpConfigPath}`)
 
-    // Spawn Claude CLI
+    // Spawn Claude CLI with MCP tools enabled
+    // Use bypassPermissions to allow tool execution without prompts
     const proc = spawn(command, [
       '--print',
       `--mcp-config=${mcpConfigPath}`,
       '--strict-mcp-config',
+      '--permission-mode=bypassPermissions',
+      '--verbose', // Required for proper tool output capture
       '-'
     ], {
       cwd,
@@ -179,7 +182,7 @@ export class BvsWorkerCliService extends EventEmitter {
       })
     }, 2000)
 
-    // Stream stdout and collect output
+    // Stream stdout and collect output (plain text)
     proc.stdout?.on('data', (data: Buffer) => {
       const text = data.toString()
       output += text
@@ -188,6 +191,14 @@ export class BvsWorkerCliService extends EventEmitter {
       if (text.trim()) {
         console.log(`[BvsWorker:${workerId}]`, text.substring(0, 200))
       }
+
+      // Emit output chunk for real-time streaming
+      this.emit('output', {
+        workerId,
+        sectionId,
+        output: text,
+        timestamp: Date.now()
+      })
 
       // Parse for tool usage and file changes
       const toolMatches = text.match(/\b(read_file|write_file|edit_file|list_files|run_command|mark_complete)\(/g)
@@ -206,8 +217,7 @@ export class BvsWorkerCliService extends EventEmitter {
         })
       }
 
-      // Track mark_complete tool calls (actual completion, not just mentions)
-      // Parse for actual tool call structure, not just text mentions
+      // Track mark_complete tool calls
       try {
         const lines = text.split('\n')
         for (const line of lines) {
@@ -307,40 +317,98 @@ export class BvsWorkerCliService extends EventEmitter {
     isComplete: boolean
   ): Promise<{ valid: boolean; errors: string[] }> {
     const errors: string[] = []
+    let allFilesExistAndValid = true
 
-    // 1. Check if worker called mark_complete
-    if (!isComplete) {
-      errors.push('Worker did not call mark_complete tool')
-    }
-
-    // 2. Verify all expected files exist
+    // 1. First verify all expected files exist (check exact path and similar paths)
     for (const fileSpec of section.files) {
       const filePath = path.join(cwd, fileSpec.path)
+      let fileFound = false
+      let foundFilePath = ''
+
       try {
         await fs.access(filePath)
         console.log(`[BVS Validation] ✓ File exists: ${fileSpec.path}`)
+        fileFound = true
+        foundFilePath = filePath
       } catch {
-        errors.push(`Missing required file: ${fileSpec.path}`)
-        console.error(`[BVS Validation] ✗ Missing file: ${fileSpec.path}`)
+        // File not found at exact path, check for similar files
+        const dirPath = path.dirname(filePath)
+        const fileName = path.basename(fileSpec.path)
+
+        try {
+          const dirExists = await fs.access(dirPath).then(() => true).catch(() => false)
+          if (dirExists) {
+            const files = await fs.readdir(dirPath)
+
+            // For migrations, be smart about matching
+            if (fileName.endsWith('.sql') || dirPath.includes('migration')) {
+              // Extract key parts from expected filename
+              // e.g., "20260121000001_budgets_core.sql" -> timestamp: "20260121", keywords: ["budgets", "core"]
+              const expectedParts = fileName.replace('.sql', '').split('_')
+              const timestamp = expectedParts[0] // Usually the date/timestamp
+              const keywords = expectedParts.slice(1).map(k => k.toLowerCase())
+
+              // Find files with same timestamp OR similar keywords
+              const similarFile = files.find(f => {
+                if (!f.endsWith('.sql')) return false
+                const fParts = f.replace('.sql', '').split('_')
+                const fTimestamp = fParts[0]
+                const fKeywords = fParts.slice(1).map(k => k.toLowerCase())
+
+                // Match by timestamp prefix (same day)
+                const sameDay = timestamp.substring(0, 8) === fTimestamp.substring(0, 8)
+
+                // Match by keywords (budgets_core matches create_budgets)
+                const keywordMatch = keywords.some(kw =>
+                  fKeywords.some(fkw => fkw.includes(kw) || kw.includes(fkw))
+                )
+
+                return sameDay && keywordMatch
+              })
+
+              if (similarFile) {
+                console.log(`[BVS Validation] ✓ Found equivalent file: ${similarFile} (expected: ${fileName})`)
+                fileFound = true
+                foundFilePath = path.join(dirPath, similarFile)
+              }
+            }
+          }
+        } catch (e) {
+          // Directory doesn't exist or error reading it
+        }
+
+        if (!fileFound) {
+          allFilesExistAndValid = false
+          errors.push(`Missing required file: ${fileSpec.path} (checked for similar files, none found)`)
+          console.error(`[BVS Validation] ✗ Missing file: ${fileSpec.path}`)
+        }
+      }
+
+      // Store found file path for later content validation
+      if (fileFound && foundFilePath) {
+        (fileSpec as any)._resolvedPath = foundFilePath
       }
     }
 
     // 3. For SQL migrations, do basic validation
     const sqlFiles = section.files.filter(f => f.path.endsWith('.sql'))
     for (const sqlFile of sqlFiles) {
-      const filePath = path.join(cwd, sqlFile.path)
+      // Use resolved path if available (for similar file matches)
+      const filePath = (sqlFile as any)._resolvedPath || path.join(cwd, sqlFile.path)
       try {
         const content = await fs.readFile(filePath, 'utf-8')
 
         // Check for RLS without policies (P0 issue we found)
         if (content.includes('ENABLE ROW LEVEL SECURITY')) {
           if (!content.includes('CREATE POLICY')) {
+            allFilesExistAndValid = false
             errors.push(`${sqlFile.path}: RLS enabled but no policies defined`)
           }
         }
 
         // Check for basic SQL syntax
         if (!content.trim()) {
+          allFilesExistAndValid = false
           errors.push(`${sqlFile.path}: File is empty`)
         }
 
@@ -353,9 +421,64 @@ export class BvsWorkerCliService extends EventEmitter {
       }
     }
 
-    // 4. For TypeScript/JavaScript files, check for syntax errors
+    // 4. For TypeScript/JavaScript files, check for syntax errors and forbidden patterns
     const tsFiles = section.files.filter(f => f.path.endsWith('.ts') || f.path.endsWith('.tsx'))
     if (tsFiles.length > 0) {
+      // 4a. Check for forbidden @ts-expect-error on imports (P0 violation)
+      for (const tsFile of tsFiles) {
+        const filePath = (tsFile as any)._resolvedPath || path.join(cwd, tsFile.path)
+        try {
+          const content = await fs.readFile(filePath, 'utf-8')
+
+          // Check for @ts-expect-error or @ts-ignore before import statements
+          const lines = content.split('\n')
+          for (let i = 0; i < lines.length - 1; i++) {
+            const currentLine = lines[i].trim()
+            const nextLine = lines[i + 1].trim()
+
+            // Check if current line has @ts-expect-error or @ts-ignore
+            // and next line is an import statement
+            if ((currentLine.includes('@ts-expect-error') || currentLine.includes('@ts-ignore')) &&
+                (nextLine.startsWith('import ') || nextLine.startsWith('import{'))) {
+              allFilesExistAndValid = false
+              errors.push(`${tsFile.path}:${i + 1}: FORBIDDEN - @ts-expect-error/@ts-ignore used on import. Install the package or use alternative.`)
+              console.error(`[BVS Validation] ✗ Forbidden pattern in ${tsFile.path}:${i + 1} - @ts-expect-error on import`)
+            }
+          }
+
+          // Check for imports from @/components/* that might not exist
+          const componentImportPattern = /from\s+['"]@\/components\/ui\/([^'"]+)['"]/g
+          let match
+          while ((match = componentImportPattern.exec(content)) !== null) {
+            const componentName = match[1]
+            const componentPath = path.join(cwd, 'src', 'components', 'ui', componentName)
+
+            // Check if component exists
+            const exists = await Promise.any([
+              fs.access(componentPath + '.tsx'),
+              fs.access(componentPath + '/index.tsx'),
+              fs.access(path.join(cwd, 'src', 'components', 'ui', componentName + '.tsx')),
+            ]).then(() => true).catch(() => false)
+
+            if (!exists) {
+              // Check if it's a shadcn component that should be installed
+              const shadcnComponents = ['button', 'card', 'dialog', 'dropdown-menu', 'input', 'label', 'radio-group', 'select', 'textarea', 'tabs', 'table', 'badge', 'alert', 'avatar', 'checkbox', 'switch', 'tooltip', 'popover', 'accordion', 'separator', 'sheet', 'skeleton', 'slider', 'progress', 'scroll-area']
+              const baseName = componentName.replace('.tsx', '').replace('/index', '')
+
+              if (shadcnComponents.includes(baseName)) {
+                errors.push(`${tsFile.path}: Missing shadcn/ui component '${baseName}'. Run: npx shadcn@latest add ${baseName}`)
+                console.error(`[BVS Validation] ✗ Missing shadcn component: ${baseName}`)
+              } else {
+                console.warn(`[BVS Validation] ⚠ Component @/components/ui/${componentName} may not exist`)
+              }
+            }
+          }
+        } catch {
+          // File doesn't exist, already handled above
+        }
+      }
+
+      // 4b. Run TypeScript validation (using execFile for security - no shell injection)
       try {
         // Run quick type check if tsconfig exists
         const tsconfigPath = path.join(cwd, 'tsconfig.json')
@@ -368,14 +491,18 @@ export class BvsWorkerCliService extends EventEmitter {
           const execFile = promisify(execFileCb)
 
           try {
+            // Using execFile (not exec) with array args prevents command injection
             await execFile('npx', ['tsc', '--noEmit', '--skipLibCheck'], {
               cwd,
               timeout: 60000
             })
             console.log('[BVS Validation] ✓ TypeScript validation passed')
-          } catch (tscError: any) {
+          } catch (tscError: unknown) {
             // Type errors are warnings, not failures (too strict for BVS workers)
-            console.warn('[BVS Validation] ⚠ TypeScript errors found (non-blocking):', tscError.stdout?.substring(0, 500))
+            const errorOutput = tscError && typeof tscError === 'object' && 'stdout' in tscError
+              ? String((tscError as { stdout?: unknown }).stdout).substring(0, 500)
+              : 'Unknown error'
+            console.warn('[BVS Validation] ⚠ TypeScript errors found (non-blocking):', errorOutput)
           }
         } catch {
           // No tsconfig, skip type checking
@@ -395,6 +522,22 @@ export class BvsWorkerCliService extends EventEmitter {
         // Already checked in SQL validation
       }
       // Other criteria would need manual validation
+    }
+
+    // 6. Check mark_complete was called, OR auto-complete if all files exist and are valid
+    // This handles the case where files already existed before the worker ran.
+    if (!isComplete) {
+      if (allFilesExistAndValid && section.files.length > 0) {
+        // All required files exist and passed content validation - auto-approve
+        console.log('[BVS Validation] ✓ All files exist and are valid - auto-completing section (worker did not call mark_complete)')
+        return {
+          valid: errors.length === 0,
+          errors
+        }
+      } else {
+        // Files are missing or invalid, so mark_complete was required
+        errors.push('Worker did not call mark_complete tool')
+      }
     }
 
     return {
@@ -442,6 +585,9 @@ export class BvsWorkerCliService extends EventEmitter {
       ? `\n\nCOMPLETED SECTIONS:\n${context.completedSections.map(s => `- ${s.name}: ${s.summary}`).join('\n')}`
       : ''
 
+    // Get framework-specific warnings
+    const frameworkWarnings = this.getFrameworkWarnings(context)
+
     return `You are a BVS worker implementing a section of code.
 
 SECTION: ${section.name}
@@ -455,8 +601,46 @@ PROJECT CONTEXT:
 - Framework: ${context.framework}
 - Database: ${context.database}
 - Patterns: ${context.patterns.join(', ')}${completedSummary}
+${frameworkWarnings}
 
-TOOLS AVAILABLE:
+==============================================================================
+FORBIDDEN PATTERNS - VIOLATION CAUSES SECTION FAILURE
+==============================================================================
+- NEVER use @ts-expect-error or @ts-ignore for import errors
+- NEVER use @ts-expect-error to suppress "Cannot find module" errors
+- NEVER import packages that aren't installed in package.json
+- NEVER import components from @/components/* that don't exist
+- NEVER assume a package will be "installed later" - install it NOW
+- NEVER write code that relies on packages you haven't verified exist
+
+If you use @ts-expect-error on an import statement, the section will FAIL validation.
+
+==============================================================================
+DEPENDENCY MANAGEMENT - REQUIRED BEFORE USING ANY PACKAGE
+==============================================================================
+Before importing ANY external package (not @/ or ./ paths):
+
+1. CHECK if package exists:
+   run_command("npm list <package-name> 2>&1 || echo NOT_INSTALLED")
+
+2. If NOT_INSTALLED, install it FIRST:
+   run_command("npm install <package-name>")
+
+3. For shadcn/ui components (@/components/ui/*):
+   - First check: list_files("src/components/ui/<name>*")
+   - If not found: run_command("npx shadcn@latest add <name> --yes")
+
+4. Only AFTER installation succeeds, write the import statement
+
+COMMON PACKAGES THAT MUST BE INSTALLED:
+- cron -> npm install cron
+- openai -> npm install openai
+- date-fns -> npm install date-fns
+- zod -> npm install zod (usually already installed)
+
+==============================================================================
+TOOLS AVAILABLE
+==============================================================================
 - read_file(path): Read file contents
 - write_file(path, content): Create or replace file
 - edit_file(path, old_string, new_string): Make targeted edits
@@ -469,21 +653,46 @@ ${successCriteria}
 
 CRITICAL REQUIREMENTS:
 - You have ${maxTurns} turns to complete this section
-- ALL ${section.files.length} files listed above MUST be created/modified
+- ALL ${section.files.length} files listed above MUST exist with correct content
 - Focus ONLY on the files listed above
+- BEFORE creating files: Check if they already exist (similar names/paths)
+- If files exist: Review them to ensure they meet ALL success criteria
+- If existing files are satisfactory: Mark section complete WITHOUT recreating them
+- If files don't exist or are incomplete: Create/modify them
 - Read files before editing them to understand the context
 - Match existing code patterns and conventions
 
+FILE HANDLING STRATEGY:
+1. First, check if each required file already exists (check exact path and similar paths)
+2. If file exists:
+   - Read and review its contents
+   - Verify it meets ALL success criteria
+   - If satisfactory: No changes needed, note it in your summary
+   - If insufficient: Modify it to meet requirements
+3. If file doesn't exist: Create it according to specifications
+
 COMPLETION VALIDATION:
 - After creating/modifying files, verify they exist and are not empty
-- For SQL migrations: Check for RLS policies if you enable RLS
-- For TypeScript files: Ensure no syntax errors
+- For SQL migrations: Check for RLS policies if you enable RLS, verify schema matches requirements
+- For TypeScript files: Ensure no syntax errors AND no @ts-expect-error on imports
 - Verify each success criterion is met
+- If existing work is already correct, that counts as completion
+- Run a quick build check: run_command("npx tsc --noEmit 2>&1 | head -20")
 
-WHEN COMPLETE:
-- Call mark_complete(summary, files_changed) with:
-  - summary: What you implemented
-  - files_changed: List of ALL files you created/modified
+WHEN COMPLETE - CRITICAL:
+You MUST use the mark_complete tool to signal completion. This is a real MCP tool, not just documentation.
+
+CORRECT way to complete:
+1. Use the mark_complete tool with these arguments:
+   - summary: "What you implemented or verified"
+   - files_changed: ["list", "of", "files"] (can be empty if you verified existing files)
+
+IMPORTANT:
+- If existing files already satisfy requirements, you STILL MUST call mark_complete
+- Example: mark_complete("Verified existing migration meets all criteria", [])
+- Do NOT just write text saying you're done - you MUST invoke the tool
+- Writing "SECTION COMPLETE" or "I should call mark_complete" does NOT count
+- The section will FAIL if you don't actually use the mark_complete tool
 
 IF YOU CANNOT COMPLETE:
 - DO NOT call mark_complete()
@@ -492,6 +701,51 @@ IF YOU CANNOT COMPLETE:
 - Better to fail and retry than report incomplete work as complete
 
 Start implementing now.`
+  }
+
+  /**
+   * Get framework-specific warnings based on project context
+   */
+  private getFrameworkWarnings(context: ProjectContext): string {
+    const warnings: string[] = []
+
+    // Check for Next.js and provide version-specific guidance
+    if (context.framework?.toLowerCase().includes('next')) {
+      warnings.push(`
+==============================================================================
+NEXT.JS FRAMEWORK REQUIREMENTS
+==============================================================================`)
+
+      // Check for Next.js 15+ patterns (async params)
+      warnings.push(`
+NEXT.JS 15+ API ROUTE PATTERNS (REQUIRED):
+- API route params are Promise-based and MUST be awaited
+- WRONG: export async function GET(req, { params }: { params: { id: string } })
+- RIGHT: export async function GET(req, { params }: { params: Promise<{ id: string }> })
+- Then await: const { id } = await params
+
+SERVER ACTIONS:
+- All Server Actions MUST be async functions
+- Must have 'use server' directive at top of file or function
+- WRONG: export function myAction() { ... }
+- RIGHT: export async function myAction() { ... }
+
+SERVER VS CLIENT COMPONENTS:
+- Server Components (default): Cannot use useState, useEffect, onClick
+- Client Components: Must have 'use client' at top of file
+- If you need interactivity, add 'use client' directive`)
+    }
+
+    // Check for React 19 patterns
+    if (context.framework?.toLowerCase().includes('react')) {
+      warnings.push(`
+REACT PATTERNS:
+- Use functional components with hooks
+- Avoid class components
+- Use proper TypeScript types for props`)
+    }
+
+    return warnings.length > 0 ? '\n' + warnings.join('\n') : ''
   }
 
   /**

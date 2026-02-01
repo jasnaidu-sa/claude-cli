@@ -37,6 +37,16 @@ import {
   BVS_GLOBAL_FILES,
 } from '../../shared/bvs-types'
 
+// Learning capture service for applying historical learnings
+import { getBvsLearningCaptureService } from './bvs-learning-capture-service'
+
+// User workflow service for UX analysis
+import {
+  getBvsUserWorkflowService,
+  type UserWorkflowAnalysis,
+  type WorkflowAnalysisConfig,
+} from './bvs-user-workflow-service'
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -58,6 +68,10 @@ export const BVS_PLANNING_CHANNELS = {
   SECTIONS_READY: 'bvs-planning:sections-ready',
   PLAN_WRITTEN: 'bvs-planning:plan-written',
   ERROR: 'bvs-planning:error',
+  // User workflow analysis channels
+  WORKFLOW_ANALYSIS_STARTED: 'bvs-planning:workflow-analysis-started',
+  WORKFLOW_ANALYSIS_COMPLETE: 'bvs-planning:workflow-analysis-complete',
+  WORKFLOW_VALIDATION_COMPLETE: 'bvs-planning:workflow-validation-complete',
 } as const
 
 // ============================================================================
@@ -133,6 +147,23 @@ export interface PlanningSessionV2 {
 
   // Cancellation support
   abortController?: AbortController
+
+  // User workflow analysis
+  workflowAnalysis?: UserWorkflowAnalysis
+  workflowValidation?: {
+    isValid: boolean
+    missingElements: Array<{
+      type: 'entry_point' | 'journey_step' | 'exit_point' | 'routing'
+      description: string
+      recommendation: string
+    }>
+    planAdjustments: Array<{
+      sectionId: string
+      adjustment: string
+      reason: string
+    }>
+    summary: string
+  }
 }
 
 // ============================================================================
@@ -1132,6 +1163,9 @@ export class BvsPlanningAgentV2 extends EventEmitter {
       session.projectDir = projectDir
 
       console.log('[BvsPlanningV2] Project created:', { projectId, name, projectDir })
+
+      // Run workflow analysis on first message to inform planning
+      await this.runWorkflowAnalysis(session, name, description, userMessage)
     }
 
     // Add user message
@@ -1157,9 +1191,70 @@ export class BvsPlanningAgentV2 extends EventEmitter {
     // Build system prompt with project path
     const systemPrompt = PLANNING_SYSTEM_PROMPT.replace('{PROJECT_PATH}', session.projectPath)
 
-    // Build full prompt
-    const fullPrompt = `${systemPrompt}
+    // Load relevant learnings for planning context
+    let learningsSection = ''
+    try {
+      const learningService = await getBvsLearningCaptureService()
 
+      // Extract patterns from the user message for learning matching
+      const sectionPatterns = this.extractSectionPatterns(userMessage)
+
+      const relevantLearnings = await learningService.getRelevantLearnings({
+        projectPath: session.projectPath,
+        sectionPatterns,
+        limit: 5
+      })
+
+      if (relevantLearnings.length > 0) {
+        learningsSection = learningService.formatLearningsForPrompt(relevantLearnings)
+        console.log(`[BvsPlanningV2] Injecting ${relevantLearnings.length} relevant learnings into planning prompt`)
+      }
+    } catch (error) {
+      console.warn('[BvsPlanningV2] Failed to load learnings:', error)
+      // Continue without learnings
+    }
+
+    // Build workflow context section if analysis exists
+    let workflowSection = ''
+    if (session.workflowAnalysis) {
+      const analysis = session.workflowAnalysis
+      workflowSection = `
+## USER WORKFLOW ANALYSIS
+
+The following workflow analysis was performed for this feature. Use this to ensure your plan covers all UX requirements:
+
+**Feature:** ${analysis.featureName}
+
+**Entry Points Required (how users will access this feature):**
+${analysis.entryPoints.map(ep => `- ${ep.location}: ${ep.proposedChange} (${ep.priority}) - File: ${ep.file}`).join('\n') || '- No entry points identified yet'}
+
+**User Journey Steps:**
+${analysis.userJourney.map(step => `${step.step}. ${step.action} → ${step.screen} [${step.needsCreation ? 'NEEDS CREATION' : 'exists'}]`).join('\n') || '- No journey mapped yet'}
+
+**Exit Points:**
+${analysis.exitPoints.map(ep => `- ${ep.action} → ${ep.destination} (${ep.type})`).join('\n') || '- No exit points identified'}
+
+**Workflow Gaps (CRITICAL - must address in plan):**
+${analysis.workflowGaps.map(gap => `- [${gap.severity.toUpperCase()}] ${gap.description}\n  → ${gap.recommendation}`).join('\n') || '- No gaps detected'}
+
+**Routing Changes Needed:**
+${analysis.routingChanges.map(rc => `- ${rc.type.toUpperCase()}: ${rc.path} → ${rc.component} (${rc.reason})`).join('\n') || '- No routing changes needed'}
+
+**Workflow Status:** ${analysis.isComplete ? 'Complete' : 'INCOMPLETE - ensure plan addresses gaps'}
+**Confidence:** ${analysis.confidence}%
+
+IMPORTANT: Your sections MUST include:
+1. Entry point modifications (users MUST be able to access this feature)
+2. All components in the user journey
+3. Proper exit points and navigation
+4. Address ALL workflow gaps marked as 'critical' or 'major'
+`
+    }
+
+    // Build full prompt with learnings and workflow
+    const fullPrompt = `${systemPrompt}
+${learningsSection}
+${workflowSection}
 ## Conversation So Far
 ${conversationContext}
 
@@ -1348,11 +1443,21 @@ Respond appropriately for the current phase.`
       allowedTools: options.allowedTools
     })
 
-    // Execute query
-    const queryResult = sdk.query({
-      prompt: generateMessages(),
-      options
-    })
+    // Execute query - wrapped in try-catch to handle SDK subprocess errors
+    let queryResult: ReturnType<typeof sdk.query>
+    try {
+      queryResult = sdk.query({
+        prompt: generateMessages(),
+        options
+      })
+    } catch (initError) {
+      console.error('[BvsPlanningV2] SDK query initialization failed:', initError)
+      this.sendToRenderer(BVS_PLANNING_CHANNELS.ERROR, {
+        sessionId,
+        error: `Failed to start planning agent: ${initError instanceof Error ? initError.message : 'Unknown error'}`
+      })
+      throw initError
+    }
 
     // Process streaming response
     let responseContent = ''
@@ -1442,9 +1547,14 @@ Respond appropriately for the current phase.`
       } else if (parsedSections && parsedSections.length > 0) {
         session.phase = 'approval'
         session.proposedSections = parsedSections
+
+        // Validate workflow coverage before showing sections
+        await this.validateWorkflow(session, parsedSections)
+
         this.sendToRenderer(BVS_PLANNING_CHANNELS.SECTIONS_READY, {
           sessionId,
-          sections: parsedSections
+          sections: parsedSections,
+          workflowValidation: session.workflowValidation, // Include validation result
         })
       }
 
@@ -1524,6 +1634,44 @@ Respond appropriately for the current phase.`
   /**
    * Get phase-specific instructions
    */
+  /**
+   * Extract section patterns from user message for learning matching
+   * Identifies keywords that might match historical learnings
+   */
+  private extractSectionPatterns(userMessage: string): string[] {
+    const patterns: string[] = []
+    const lowercaseMsg = userMessage.toLowerCase()
+
+    // Common feature patterns
+    const featureKeywords = [
+      'auth', 'authentication', 'login', 'signup',
+      'api', 'endpoint', 'route',
+      'database', 'schema', 'migration', 'table',
+      'dashboard', 'admin', 'settings',
+      'user', 'profile', 'account',
+      'payment', 'billing', 'subscription',
+      'notification', 'email', 'messaging',
+      'upload', 'file', 'storage',
+      'search', 'filter', 'sort',
+      'chart', 'graph', 'analytics',
+      'integration', 'webhook', 'sync'
+    ]
+
+    for (const keyword of featureKeywords) {
+      if (lowercaseMsg.includes(keyword)) {
+        patterns.push(keyword)
+      }
+    }
+
+    // Also extract capitalized words that might be feature names
+    const capitalizedWords = userMessage.match(/\b[A-Z][a-z]+(?:[A-Z][a-z]+)*\b/g)
+    if (capitalizedWords) {
+      patterns.push(...capitalizedWords.map(w => w.toLowerCase()))
+    }
+
+    return [...new Set(patterns)] // Remove duplicates
+  }
+
   private getPhaseInstructions(session: PlanningSessionV2): string {
     const userMessages = session.messages.filter(m => m.role === 'user')
     const messageCount = userMessages.length
@@ -1752,6 +1900,147 @@ If they want changes:
       }
     }
     return undefined
+  }
+
+  /**
+   * Run workflow analysis on first message to understand UX requirements
+   * This runs during planning to inform the agent about entry points, user journey, etc.
+   */
+  private async runWorkflowAnalysis(
+    session: PlanningSessionV2,
+    featureName: string,
+    featureDescription: string,
+    userMessage: string
+  ): Promise<void> {
+    try {
+      console.log('[BvsPlanningV2] Running workflow analysis for:', featureName)
+
+      this.sendToRenderer(BVS_PLANNING_CHANNELS.WORKFLOW_ANALYSIS_STARTED, {
+        sessionId: session.id,
+        featureName,
+      })
+
+      const workflowService = getBvsUserWorkflowService()
+
+      const config: WorkflowAnalysisConfig = {
+        projectPath: session.projectPath,
+        featureName,
+        featureDescription: featureDescription || userMessage.slice(0, 500),
+        mode: 'planning',
+      }
+
+      const analysis = await workflowService.analyzeWorkflow(config)
+
+      // Store in session
+      session.workflowAnalysis = analysis
+
+      console.log('[BvsPlanningV2] Workflow analysis complete:', {
+        entryPoints: analysis.entryPoints.length,
+        journeySteps: analysis.userJourney.length,
+        gaps: analysis.workflowGaps.length,
+        isComplete: analysis.isComplete,
+      })
+
+      this.sendToRenderer(BVS_PLANNING_CHANNELS.WORKFLOW_ANALYSIS_COMPLETE, {
+        sessionId: session.id,
+        analysis: {
+          entryPointsCount: analysis.entryPoints.length,
+          journeyStepsCount: analysis.userJourney.length,
+          gapsCount: analysis.workflowGaps.length,
+          isComplete: analysis.isComplete,
+          summary: analysis.summary,
+        },
+      })
+
+      // Save session with workflow analysis
+      await this.saveSession(session)
+
+    } catch (error) {
+      console.warn('[BvsPlanningV2] Workflow analysis failed (non-fatal):', error)
+      // Don't throw - workflow analysis failure shouldn't block planning
+    }
+  }
+
+  /**
+   * Validate that proposed sections cover workflow requirements
+   * Called when sections are ready, before approval
+   */
+  private async validateWorkflow(
+    session: PlanningSessionV2,
+    sections: PlannedSection[]
+  ): Promise<void> {
+    if (!session.workflowAnalysis) {
+      console.log('[BvsPlanningV2] No workflow analysis to validate against')
+      return
+    }
+
+    try {
+      console.log('[BvsPlanningV2] Validating plan against workflow requirements')
+
+      const workflowService = getBvsUserWorkflowService()
+
+      // Convert PlannedSection to BvsSection for validation
+      const bvsSections = sections.map(s => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        files: s.files.map(f => ({
+          path: f.path,
+          action: f.action,
+          status: 'pending' as const,
+        })),
+        dependencies: s.dependencies,
+        dependents: [],
+        status: 'pending' as const,
+        successCriteria: s.successCriteria.map((sc, idx) => ({
+          id: `${s.id}_sc${idx}`,
+          description: sc,
+          passed: false,
+        })),
+        progress: 0,
+        retryCount: 0,
+        maxRetries: 3,
+        commits: [],
+      }))
+
+      const config: WorkflowAnalysisConfig = {
+        projectPath: session.projectPath,
+        featureName: session.workflowAnalysis.featureName,
+        featureDescription: session.workflowAnalysis.featureDescription,
+        plannedSections: bvsSections,
+        mode: 'validation',
+      }
+
+      const validation = await workflowService.validatePlanWorkflow(
+        config,
+        session.workflowAnalysis
+      )
+
+      // Store validation results
+      session.workflowValidation = {
+        isValid: validation.isValid,
+        missingElements: validation.missingElements,
+        planAdjustments: validation.planAdjustments,
+        summary: validation.summary,
+      }
+
+      console.log('[BvsPlanningV2] Workflow validation complete:', {
+        isValid: validation.isValid,
+        missingCount: validation.missingElements.length,
+        adjustmentsCount: validation.planAdjustments.length,
+      })
+
+      this.sendToRenderer(BVS_PLANNING_CHANNELS.WORKFLOW_VALIDATION_COMPLETE, {
+        sessionId: session.id,
+        validation: session.workflowValidation,
+      })
+
+      await this.saveSession(session)
+
+    } catch (error) {
+      console.warn('[BvsPlanningV2] Workflow validation failed (non-fatal):', error)
+      // Don't throw - validation failure shouldn't block planning
+    }
   }
 
   /**

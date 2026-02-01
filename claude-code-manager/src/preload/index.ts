@@ -523,6 +523,7 @@ export interface BvsPlanningMessageV2 {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: number
+  category?: 'question' | 'exploration' | 'planning' | 'approval' | 'general'
   questions?: BvsPlanningQuestion[]
   options?: BvsPlanningOption[]
   sections?: BvsPlannedSection[]
@@ -557,6 +558,7 @@ export interface BvsPlanningMessageResult {
   response?: BvsPlanningMessageV2
   session?: BvsPlanningSessionV2
   phase?: string
+  proposedSections?: BvsPlannedSection[]
   error?: string
 }
 

@@ -630,7 +630,8 @@ export class BvsWorkerAgentService extends EventEmitter {
       sonnet: { input: 3.0, output: 15.0 },
     }
 
-    const modelPricing = pricing[model === 'haiku' ? 'haiku' : 'sonnet']
+    const isHaiku = model === BVS_MODELS.HAIKU || model.includes('haiku')
+    const modelPricing = pricing[isHaiku ? 'haiku' : 'sonnet']
 
     const costInput = (tokensInput / 1_000_000) * modelPricing.input
     const costOutput = (tokensOutput / 1_000_000) * modelPricing.output
@@ -659,11 +660,11 @@ export class BvsWorkerAgentService extends EventEmitter {
 
     // Haiku for simple subtasks (fast, cheap)
     if (subtaskComplexity <= 4) {
-      return 'haiku'
+      return BVS_MODELS.HAIKU
     }
 
     // Sonnet for complex subtasks (slower, more capable)
-    return 'sonnet'
+    return BVS_MODELS.SONNET
   }
 
   /**

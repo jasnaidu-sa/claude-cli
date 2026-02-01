@@ -35,6 +35,11 @@ import {
   createReviewIndex,
   type ReviewResult
 } from './bvs-review-formatter'
+import {
+  getBvsSubagentService,
+  type ReviewerVariant,
+  type ReviewerOutput
+} from './bvs-subagent-service'
 
 /**
  * Mapping of reviewer types to agent SDK subagent types
@@ -194,10 +199,10 @@ export class BvsCodeReviewService extends EventEmitter {
   }
 
   /**
-   * Run a single reviewer agent
+   * Run a single reviewer agent using BvsSubagentService
    *
-   * NOTE: This is a placeholder implementation.
-   * In the full implementation, this would spawn a Task agent using the Agent SDK.
+   * Spawns a specialized reviewer agent that analyzes the files and returns
+   * structured issues with priorities (P0/P1/P2).
    */
   private async runSingleReviewer(
     projectPath: string,
@@ -206,7 +211,7 @@ export class BvsCodeReviewService extends EventEmitter {
     sectionId: string
   ): Promise<BvsReviewerResult> {
     const startTime = Date.now()
-    const agentType = REVIEWER_AGENT_MAP[reviewerType]
+    const subagentService = getBvsSubagentService()
 
     // Emit reviewer started event
     this.sendToRenderer(BVS_IPC_CHANNELS.BVS_EVENT, {
@@ -217,28 +222,50 @@ export class BvsCodeReviewService extends EventEmitter {
     })
 
     try {
-      // NOTE: This is where we would spawn the actual Task agent
-      // For now, we return a mock result
-      //
-      // Full implementation would be:
-      // const taskResult = await spawnTaskAgent({
-      //   subagent_type: agentType,
-      //   prompt: buildReviewPrompt(projectPath, files, reviewerType),
-      //   run_in_background: false,
-      // })
-      // const issues = parseReviewerOutput(taskResult.output)
+      // Build the review prompt
+      const prompt = this.buildReviewPrompt(projectPath, files, reviewerType)
 
-      // Mock implementation - returns empty issues
-      const issues: BvsReviewIssue[] = []
+      // Spawn the reviewer subagent
+      console.log(`[BvsCodeReview] Spawning ${reviewerType} reviewer for section ${sectionId}`)
+
+      const subagentResult = await subagentService.spawn({
+        type: 'reviewer',
+        variant: reviewerType as ReviewerVariant,
+        prompt,
+        files,
+        projectPath,
+        model: 'haiku',  // Use Haiku for faster, cheaper reviews
+        maxTurns: 1,     // Single turn for analysis
+      })
+
+      // Parse the reviewer output
+      const reviewerOutput: ReviewerOutput = subagentService.parseReviewerOutput(subagentResult)
+
+      // Convert to BvsReviewIssue format
+      const issues: BvsReviewIssue[] = reviewerOutput.issues.map((issue, index) => ({
+        id: `${reviewerType}-${sectionId}-${index + 1}`,
+        reviewer: reviewerType,
+        priority: issue.priority as BvsReviewPriority,
+        file: issue.file,
+        line: issue.line,
+        message: issue.message,
+        suggestion: issue.suggestion,
+        fixApplied: false,
+      }))
 
       const duration = Date.now() - startTime
 
+      console.log(`[BvsCodeReview] ${reviewerType} found ${issues.length} issues (cost: $${subagentResult.cost.toFixed(4)})`)
+
       const result: BvsReviewerResult = {
         reviewer: reviewerType,
-        status: 'completed',
+        status: subagentResult.status === 'completed' ? 'completed' : 'failed',
         issues,
         duration,
         completedAt: Date.now(),
+        // Store raw review data for markdown report generation
+        reviewData: subagentResult.structuredOutput ? JSON.stringify(subagentResult.structuredOutput) : undefined,
+        cost: subagentResult.cost,
       }
 
       // Emit reviewer completed event
@@ -248,6 +275,7 @@ export class BvsCodeReviewService extends EventEmitter {
         reviewer: reviewerType,
         status: 'completed',
         issuesFound: issues.length,
+        cost: subagentResult.cost,
       })
 
       return result
@@ -255,12 +283,15 @@ export class BvsCodeReviewService extends EventEmitter {
       const duration = Date.now() - startTime
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
 
+      console.error(`[BvsCodeReview] ${reviewerType} reviewer failed:`, errorMessage)
+
       // Emit reviewer failed event
       this.sendToRenderer(BVS_IPC_CHANNELS.BVS_EVENT, {
         type: 'reviewer_update',
         sectionId,
         reviewer: reviewerType,
         status: 'failed',
+        error: errorMessage,
       })
 
       return {

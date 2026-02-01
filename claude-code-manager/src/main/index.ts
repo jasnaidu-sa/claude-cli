@@ -95,6 +95,21 @@ function createWindow(): void {
   }
 }
 
+// Global error handlers to prevent app crashes from unhandled errors
+// These catch errors from Agent SDK subprocess issues (write EOF, etc.)
+process.on('uncaughtException', (error) => {
+  console.error('[Main] Uncaught exception:', error.message)
+  console.error('[Main] Stack:', error.stack)
+  // Don't crash the app - just log it
+  // Common errors like "write EOF" from Agent SDK are non-fatal
+})
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Main] Unhandled rejection at:', promise)
+  console.error('[Main] Reason:', reason)
+  // Don't crash the app - just log it
+})
+
 // App lifecycle
 app.whenReady().then(() => {
   // Set app user model id for windows

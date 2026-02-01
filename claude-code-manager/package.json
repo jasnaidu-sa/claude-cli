@@ -1,6 +1,6 @@
 {
   "name": "claude-code-manager",
-  "version": "1.0.0",
+  "version": "1.3.2",
   "description": "Multi-project frontend for Claude Code CLI",
   "main": "dist/main/index.js",
   "author": "Personal",
@@ -75,6 +75,7 @@
     ],
     "asarUnpack": [
       "node_modules/node-pty/**/*",
+      "node_modules/@anthropic-ai/claude-agent-sdk/**/*",
       "python/autocoder/**/*"
     ],
     "npmRebuild": false,

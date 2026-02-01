@@ -20,14 +20,18 @@ import {
   RefreshCw,
   AlertCircle,
   MessageSquare,
-  AlertTriangle
+  AlertTriangle,
+  CheckCircle2
 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { cn } from '@renderer/lib/utils'
 import { BvsKanbanCard, type BvsSectionData } from './BvsKanbanCard'
 import { BvsSectionDetailPanel } from './BvsSectionDetailPanel'
 import { BvsPlanRevisionChat, type PlanIssue, type PlanChange } from './BvsPlanRevisionChat'
+import { BvsPhaseSelector, type ExecutionConfig } from './BvsPhaseSelector'
+import { BvsExecutionStartModal } from './BvsExecutionStartModal'
 import type { BvsProjectItem } from '@preload/index'
+import type { BvsExecutionPlan } from '@shared/bvs-types'
 
 interface BvsExecutionDashboardProps {
   project: BvsProjectItem
@@ -57,12 +61,27 @@ export function BvsExecutionDashboard({
   const [selectedSection, setSelectedSection] = useState<BvsSectionData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [hasActiveSession, setHasActiveSession] = useState(false)
+  const [sessionStatus, setSessionStatus] = useState<'running' | 'paused' | 'completed' | 'failed' | null>(null)
   const [elapsedTime, setElapsedTime] = useState(0)
   const [showRevisionChat, setShowRevisionChat] = useState(false)
   const [planIssues, setPlanIssues] = useState<PlanIssue[]>([])
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [showStartModal, setShowStartModal] = useState(false)
+  const [currentPlan, setCurrentPlan] = useState<BvsExecutionPlan | null>(null)
   const pollInterval = useRef<NodeJS.Timeout | null>(null)
   const timerInterval = useRef<NodeJS.Timeout | null>(null)
+
+  // Show start modal after plan is loaded - allows user to choose phases or resume a run
+  useEffect(() => {
+    // Only show modal when:
+    // 1. Plan is loaded (currentPlan is not null)
+    // 2. Not currently loading
+    // 3. No active running session
+    if (currentPlan && !isLoading && !hasActiveSession) {
+      console.log('[BvsExecutionDashboard] Plan loaded, showing start modal')
+      setShowStartModal(true)
+    }
+  }, [currentPlan, isLoading, hasActiveSession])
 
   // Group sections by status for Kanban columns
   const sectionsByColumn = useMemo(() => {
@@ -76,9 +95,9 @@ export function BvsExecutionDashboard({
     sections.forEach((section) => {
       // Map section status to column
       let columnId: ColumnId = 'pending'
-      if (section.status === 'in_progress') columnId = 'in_progress'
+      if (section.status === 'in_progress' || (section.status as string) === 'retrying') columnId = 'in_progress'
       else if (section.status === 'verifying') columnId = 'verifying'
-      else if (section.status === 'done' || section.status === 'failed') columnId = 'done'
+      else if (section.status === 'done' || section.status === 'failed' || (section.status as string) === 'skipped') columnId = 'done'
       else columnId = 'pending'
 
       grouped[columnId].push(section)
@@ -98,87 +117,304 @@ export function BvsExecutionDashboard({
     return workers.size
   }, [sections])
 
-  // Load sections from plan.json as fallback
+  // Check if all sections are completed (done or failed, but none pending/in_progress)
+  const allSectionsComplete = useMemo(() => {
+    if (sections.length === 0) return false
+    return sections.every(s => s.status === 'done' || s.status === 'failed')
+  }, [sections])
+
+  // Check if execution finished successfully (all done, none failed)
+  const executionSuccessful = useMemo(() => {
+    if (sections.length === 0) return false
+    return sections.every(s => s.status === 'done')
+  }, [sections])
+
+  // Helper function to map section data
+  const mapSectionData = (s: any): BvsSectionData => ({
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    status: s.status || 'pending',
+    progress: s.progress || 0,
+    workerId: s.workerId,
+    currentStep: s.currentStep,
+    currentFile: s.currentFile,
+    currentLine: s.currentLine,
+    files: s.files?.map((f: any) => ({
+      path: f.path,
+      status: f.status || 'pending'
+    })),
+    dependencies: s.dependencies || [],
+    dependents: s.dependents || [],
+    elapsedSeconds: s.elapsedSeconds,
+    errorMessage: s.errorMessage,
+    workerOutput: s.workerOutput || '',
+    successCriteria: s.successCriteria?.map((c: any) => ({
+      description: typeof c === 'string' ? c : c.description,
+      passed: c.passed || false
+    }))
+  })
+
+  // Load plan on mount and auto-restore session if there's progress
+  // This ensures retry/skip buttons work even after app restart
   useEffect(() => {
-    const loadPlanSections = async () => {
+    const loadInitialData = async () => {
       try {
         setIsLoading(true)
+
+        // Always load the plan first - needed for phase selector
         const planResult = await window.electron.bvsPlanning.loadPlan(projectPath, project.id)
         if (planResult.success && planResult.plan?.sections) {
+          // Store the full plan for phase selector
+          setCurrentPlan(planResult.plan)
+
           // Map plan sections to display format
-          const mappedSections: BvsSectionData[] = planResult.plan.sections.map((s: any) => ({
-            id: s.id,
-            name: s.name,
-            description: s.description,
-            status: s.status || 'pending',
-            progress: s.progress || 0,
-            workerId: s.workerId,
-            currentStep: s.currentStep,
-            currentFile: s.currentFile,
-            currentLine: s.currentLine,
-            files: s.files?.map((f: any) => ({
-              path: f.path,
-              status: f.status || 'pending'
-            })),
-            dependencies: s.dependencies || [],
-            dependents: s.dependents || [],
-            elapsedSeconds: s.elapsedSeconds,
-            errorMessage: s.errorMessage,
-            successCriteria: s.successCriteria?.map((c: any) => ({
-              description: typeof c === 'string' ? c : c.description,
-              passed: c.passed || false
-            }))
-          }))
+          const mappedSections: BvsSectionData[] = planResult.plan.sections.map(mapSectionData)
           setSections(mappedSections)
 
           // Auto-analyze plan for issues on first load
           analyzePlanForIssues()
         }
+
+        // Check for existing execution session in memory (for live updates)
+        // When multiple sessions exist for the same project, prefer the most recent running one
+        const sessionResult = await window.electron.bvsPlanning.listExecutionSessions()
+        let existingSession: any = null
+        if (sessionResult.success && sessionResult.sessions) {
+          const projectSessions = sessionResult.sessions
+            .filter((s: any) => s.projectId === project.id)
+            .sort((a: any, b: any) => (b.startedAt || 0) - (a.startedAt || 0))
+          // Prefer a running session, otherwise take the most recent
+          existingSession = projectSessions.find((s: any) => s.status === 'running') || projectSessions[0] || null
+        }
+
+        // If no session in memory but project has progress (was started before),
+        // restore the session so retry/skip buttons work
+        if (!existingSession && planResult.success && planResult.plan?.sections) {
+          const hasProgress = planResult.plan.sections.some(
+            (s: any) => s.status === 'done' || s.status === 'failed' || s.status === 'in_progress'
+          )
+
+          if (hasProgress) {
+            console.log('[BvsExecutionDashboard] Project has progress but no session in memory, restoring...')
+            try {
+              const restoreResult = await window.electron.bvsPlanning.restoreSession(projectPath, project.id)
+              if (restoreResult.success && restoreResult.session) {
+                existingSession = restoreResult.session
+                console.log('[BvsExecutionDashboard] Session restored:', existingSession.id)
+              } else {
+                console.warn('[BvsExecutionDashboard] Failed to restore session:', restoreResult.error)
+              }
+            } catch (restoreError) {
+              console.error('[BvsExecutionDashboard] Error restoring session:', restoreError)
+            }
+          }
+        }
+
+        if (existingSession) {
+          console.log('[BvsExecutionDashboard] Found existing session:', existingSession.id, 'status:', existingSession.status)
+          setHasActiveSession(true)
+          setExecutionSessionId(existingSession.id)
+          setSessionStatus(existingSession.status || 'running')
+
+          // Update sections with live status from session
+          if (existingSession.plan?.sections) {
+            const sessionSections: BvsSectionData[] = existingSession.plan.sections.map(mapSectionData)
+            setSections(sessionSections)
+          }
+        }
       } catch (error) {
-        console.error('[BvsExecutionDashboard] Error loading plan:', error)
+        console.error('[BvsExecutionDashboard] Error loading initial data:', error)
       } finally {
         setIsLoading(false)
       }
     }
 
-    loadPlanSections()
+    loadInitialData()
   }, [project.id, projectPath])
 
-  // Poll for session updates
+  // Listen for real-time BVS events with debouncing to prevent flashing
+  useEffect(() => {
+    // Queue for batching updates to reduce re-renders
+    let pendingUpdates: Map<string, any> = new Map()
+    let updateTimer: NodeJS.Timeout | null = null
+
+    const flushUpdates = () => {
+      if (pendingUpdates.size === 0) return
+
+      const updates = new Map(pendingUpdates)
+      pendingUpdates.clear()
+
+      setSections(prevSections => {
+        return prevSections.map(s => {
+          const update = updates.get(s.id)
+          if (!update) return s
+
+          // Only apply changes if there are actual differences
+          const newSection = {
+            ...s,
+            status: update.status || s.status,
+            progress: update.progress ?? s.progress,
+            currentStep: update.currentStep || s.currentStep,
+            currentFile: update.currentFile || s.currentFile,
+            currentLine: update.currentLine || s.currentLine,
+            workerId: update.workerId || s.workerId,
+            elapsedSeconds: update.elapsedSeconds || s.elapsedSeconds,
+            errorMessage: update.errorMessage || s.errorMessage,
+            workerOutput: update.workerOutput !== undefined
+              ? (s.workerOutput || '') + update.workerOutput
+              : s.workerOutput
+          }
+          return newSection
+        })
+      })
+
+      // Also update selectedSection if it's one of the updated sections
+      setSelectedSection(prev => {
+        if (prev && updates.has(prev.id)) {
+          const update = updates.get(prev.id)
+          return {
+            ...prev,
+            status: update.status || prev.status,
+            progress: update.progress ?? prev.progress,
+            currentStep: update.currentStep || prev.currentStep,
+            currentFile: update.currentFile || prev.currentFile,
+            currentLine: update.currentLine || prev.currentLine,
+            workerId: update.workerId || prev.workerId,
+            elapsedSeconds: update.elapsedSeconds || prev.elapsedSeconds,
+            errorMessage: update.errorMessage || prev.errorMessage,
+            workerOutput: update.workerOutput !== undefined
+              ? (prev.workerOutput || '') + update.workerOutput
+              : prev.workerOutput
+          }
+        }
+        return prev
+      })
+    }
+
+    const handleBvsEvent = (eventData: any) => {
+      // Track event time so polling doesn't double-update
+      lastEventTimeRef.current = Date.now()
+
+      // Only log significant events, not progress updates
+      if (eventData.type !== 'worker_output') {
+        console.log('[BvsExecutionDashboard] Received BVS event:', eventData.type, eventData.sectionId || '', eventData.status || '')
+      }
+
+      // Handle session completion - update session status and force final state sync
+      if (eventData.type === 'session_complete') {
+        console.log('[BvsExecutionDashboard] Session completed!', eventData)
+        setSessionStatus('completed')
+
+        // Update project progress counts
+        if (eventData.sectionsCompleted !== undefined) {
+          onProjectUpdate({
+            ...project,
+            sectionsCompleted: (project.sectionsCompleted || 0) + (eventData.sectionsCompleted || 0),
+            sectionsFailed: eventData.sectionsFailed || 0,
+          })
+        }
+
+        // Force flush any pending section updates immediately
+        if (updateTimer) {
+          clearTimeout(updateTimer)
+        }
+        flushUpdates()
+
+        // Also force a poll to sync final section statuses from backend
+        lastEventTimeRef.current = 0  // Reset so poll doesn't skip
+        return
+      }
+
+      // Update sections based on event type
+      if (eventData.type === 'section_update' || eventData.type === 'worker_update') {
+        // Merge with any pending update for this section
+        const existing = pendingUpdates.get(eventData.sectionId) || {}
+        pendingUpdates.set(eventData.sectionId, {
+          ...existing,
+          status: eventData.status || existing.status,
+          progress: eventData.progress ?? existing.progress,
+          currentStep: eventData.currentStep || existing.currentStep,
+          currentFile: eventData.currentFile || existing.currentFile,
+          currentLine: eventData.currentLine || existing.currentLine,
+          workerId: eventData.workerId || existing.workerId,
+          elapsedSeconds: eventData.elapsedSeconds || existing.elapsedSeconds,
+          errorMessage: eventData.errorMessage || existing.errorMessage
+        })
+      }
+
+      // Capture worker output in section data
+      if (eventData.type === 'worker_output' && eventData.sectionId) {
+        const existing = pendingUpdates.get(eventData.sectionId) || {}
+        pendingUpdates.set(eventData.sectionId, {
+          ...existing,
+          workerOutput: (existing.workerOutput || '') + eventData.output
+        })
+      }
+
+      // Debounce: flush updates after 100ms of no new events
+      if (updateTimer) {
+        clearTimeout(updateTimer)
+      }
+      updateTimer = setTimeout(flushUpdates, 100)
+    }
+
+    // Subscribe to BVS events using the exposed API
+    const unsubscribe = window.electron.bvsPlanning.onBvsEvent(handleBvsEvent)
+
+    return () => {
+      if (updateTimer) {
+        clearTimeout(updateTimer)
+      }
+      unsubscribe()
+    }
+  }, [])
+
+  // Track last real-time event time to coordinate with polling
+  const lastEventTimeRef = useRef<number>(0)
+
+  // Poll for session updates - reduced frequency since we have real-time events
+  // The poll is mainly for recovery/sync, not primary updates
   useEffect(() => {
     const loadSession = async () => {
+      // Skip poll if we recently received a real-time event (within 2 seconds)
+      const now = Date.now()
+      if (now - lastEventTimeRef.current < 2000) {
+        return
+      }
+
       try {
         const result = await window.electron.bvsPlanning.listExecutionSessions()
         if (result.success && result.sessions) {
-          const session = result.sessions.find((s: any) => s.projectId === project.id)
+          // When multiple sessions exist for the same project, prefer running, then most recent
+          const projectSessions = result.sessions
+            .filter((s: any) => s.projectId === project.id)
+            .sort((a: any, b: any) => (b.startedAt || 0) - (a.startedAt || 0))
+          const session = projectSessions.find((s: any) => s.status === 'running') || projectSessions[0]
           if (session) {
             setHasActiveSession(true)
             setExecutionSessionId(session.id)
+            setSessionStatus(session.status || 'running')
             if (session.plan?.sections) {
-              // Update sections with live status from session
-              setSections(session.plan.sections.map((s: any) => ({
-                id: s.id,
-                name: s.name,
-                description: s.description,
-                status: s.status || 'pending',
-                progress: s.progress || 0,
-                workerId: s.workerId,
-                currentStep: s.currentStep,
-                currentFile: s.currentFile,
-                currentLine: s.currentLine,
-                files: s.files?.map((f: any) => ({
-                  path: f.path,
-                  status: f.status || 'pending'
-                })),
-                dependencies: s.dependencies || [],
-                dependents: s.dependents || [],
-                elapsedSeconds: s.elapsedSeconds,
-                errorMessage: s.errorMessage,
-                successCriteria: s.successCriteria?.map((c: any) => ({
-                  description: typeof c === 'string' ? c : c.description,
-                  passed: c.passed || false
+              // Only update if there are actual changes (compare by status/progress)
+              setSections(prevSections => {
+                const newSections: BvsSectionData[] = session.plan.sections.map((s: any) => ({
+                  ...mapSectionData(s),
+                  // Preserve accumulated worker output from real-time events
+                  workerOutput: prevSections.find(p => p.id === s.id)?.workerOutput || '',
                 }))
-              })))
+
+                // Check if anything actually changed to avoid unnecessary re-renders
+                const hasChanges = newSections.some((ns, i) => {
+                  const ps = prevSections[i]
+                  if (!ps) return true
+                  return ns.status !== ps.status ||
+                         ns.progress !== ps.progress ||
+                         ns.currentStep !== ps.currentStep
+                })
+
+                return hasChanges ? newSections : prevSections
+              })
             }
             // Update project progress from session
             if (session.sectionsCompleted !== project.sectionsCompleted) {
@@ -189,7 +425,10 @@ export function BvsExecutionDashboard({
               })
             }
           } else {
+            // No active session found - but don't clear sections
+            // They are loaded from the plan initially and should persist
             setHasActiveSession(false)
+            setSessionStatus(null)
           }
         }
       } catch (error) {
@@ -198,7 +437,8 @@ export function BvsExecutionDashboard({
     }
 
     loadSession()
-    pollInterval.current = setInterval(loadSession, 2000)
+    // Poll every 5 seconds since real-time events handle most updates
+    pollInterval.current = setInterval(loadSession, 5000)
 
     return () => {
       if (pollInterval.current) {
@@ -232,9 +472,51 @@ export function BvsExecutionDashboard({
     onBack()
   }
 
-  const handleStartExecution = async () => {
+  // Mark project as complete and navigate back
+  const handleMarkComplete = async () => {
     try {
-      const result = await window.electron.bvsPlanning.startExecution(projectPath, project.id)
+      // Update project status to completed
+      const result = await window.electron.bvsPlanning.updateProjectStatus(
+        projectPath,
+        project.id,
+        'completed'
+      )
+      if (result.success && result.project) {
+        onProjectUpdate(result.project)
+      }
+      // Navigate back to project list
+      handleBack()
+    } catch (error) {
+      console.error('[BvsExecutionDashboard] Error marking project complete:', error)
+      alert(`Error marking project complete: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }
+
+  // Start a fresh execution with selected phases/sections
+  const handleStartExecution = async (config: ExecutionConfig) => {
+    setShowStartModal(false)
+
+    try {
+      // Start execution with selected sections
+      const result = await window.electron.bvsPlanning.startExecutionWithSelection(
+        projectPath,
+        project.id,
+        config.selectedSections,
+        {
+          mode: 'ATTENDED_LEVEL',
+          limits: {
+            maxIterationsPerSubtask: 5,
+            maxCostPerSubtask: 0.50,
+            maxCostPerSection: 5.00,
+            maxTotalCost: 50.00,
+            stopOnLimitExceeded: true,
+          },
+          enableSubtaskSplitting: true,
+          enableBuildVerification: true,
+          autoCommitSubtasks: true,
+        }
+      )
+
       if (result.success) {
         setExecutionSessionId(result.sessionId)
         setHasActiveSession(true)
@@ -251,19 +533,54 @@ export function BvsExecutionDashboard({
     }
   }
 
+  // Resume a previous execution run
+  const handleResumeRun = async (runId: string) => {
+    setShowStartModal(false)
+
+    try {
+      const result = await window.electron.bvsPlanning.resumeExecutionRun(
+        projectPath,
+        project.id,
+        runId
+      )
+
+      if (result.success) {
+        setExecutionSessionId(result.sessionId)
+        setHasActiveSession(true)
+        // Refresh project status
+        const projectResult = await window.electron.bvsPlanning.getProject(projectPath, project.id)
+        if (projectResult.success && projectResult.project) {
+          onProjectUpdate(projectResult.project)
+        }
+      } else {
+        alert(`Failed to resume run: ${result.error}`)
+      }
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
+  }
+
+  // Delete a previous execution run
+  const handleDeleteRun = async (runId: string) => {
+    try {
+      await window.electron.bvsPlanning.deleteExecutionRun(
+        projectPath,
+        project.id,
+        runId
+      )
+    } catch (err) {
+      throw err
+    }
+  }
+
   const handlePauseExecution = async () => {
     if (executionSessionId) {
       await window.electron.bvsPlanning.pauseExecution(executionSessionId)
     }
   }
 
-  const handleResumeExecution = async () => {
-    if (executionSessionId) {
-      await window.electron.bvsPlanning.resumeExecution(executionSessionId)
-    } else {
-      // No active session, start fresh
-      await handleStartExecution()
-    }
+  const handleShowStartModal = () => {
+    setShowStartModal(true)
   }
 
   const handleRetrySection = async (sectionId: string) => {
@@ -359,8 +676,9 @@ export function BvsExecutionDashboard({
     ? Math.round((project.sectionsCompleted / project.sectionsTotal) * 100)
     : 0
 
-  // Check if we need to show resume button (project in_progress but no active session)
-  const showResumeButton = project.status === 'in_progress' && !hasActiveSession
+  // Determine which buttons to show based on session state
+  const showPauseButton = hasActiveSession && sessionStatus === 'running'
+  const showStartResumeButton = !hasActiveSession || sessionStatus === 'paused'
 
   return (
     <div className="h-full flex flex-col">
@@ -372,7 +690,9 @@ export function BvsExecutionDashboard({
             Back
           </Button>
           <div>
-            <h2 className="text-lg font-semibold">{project.name}</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold">{project.name}</h2>
+            </div>
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
               <span>
                 Progress: {project.sectionsCompleted}/{project.sectionsTotal} sections ({progressPercent}%)
@@ -411,22 +731,33 @@ export function BvsExecutionDashboard({
             )}
           </Button>
 
-          {showResumeButton && (
-            <Button variant="default" size="sm" onClick={handleResumeExecution}>
-              <Play className="h-4 w-4 mr-1" />
-              Resume Execution
+          {/* Complete Button - shown when all sections are done */}
+          {allSectionsComplete && (
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleMarkComplete}
+              className={cn(
+                executionSuccessful
+                  ? "bg-green-600 hover:bg-green-700"
+                  : "bg-yellow-600 hover:bg-yellow-700"
+              )}
+            >
+              <CheckCircle2 className="h-4 w-4 mr-1" />
+              {executionSuccessful ? 'Complete' : 'Complete (with failures)'}
             </Button>
           )}
-          {hasActiveSession && project.status === 'in_progress' && (
+
+          {showStartResumeButton && !allSectionsComplete && (
+            <Button variant="default" size="sm" onClick={handleShowStartModal}>
+              <Play className="h-4 w-4 mr-1" />
+              {hasActiveSession ? 'Resume' : 'Start / Resume'}
+            </Button>
+          )}
+          {showPauseButton && (
             <Button variant="outline" size="sm" onClick={handlePauseExecution}>
               <Pause className="h-4 w-4 mr-1" />
               Pause
-            </Button>
-          )}
-          {hasActiveSession && project.status === 'paused' && (
-            <Button variant="default" size="sm" onClick={handleResumeExecution}>
-              <Play className="h-4 w-4 mr-1" />
-              Resume
             </Button>
           )}
         </div>
@@ -508,6 +839,7 @@ export function BvsExecutionDashboard({
         {selectedSection && !showRevisionChat && (
           <BvsSectionDetailPanel
             section={selectedSection}
+            sessionId={executionSessionId}
             onClose={() => setSelectedSection(null)}
           />
         )}
@@ -525,6 +857,19 @@ export function BvsExecutionDashboard({
           />
         )}
       </div>
+
+      {/* Execution Start Modal - phase selection and run resumption */}
+      {showStartModal && (
+        <BvsExecutionStartModal
+          project={project}
+          projectPath={projectPath}
+          plan={currentPlan}
+          onStartExecution={handleStartExecution}
+          onResumeRun={handleResumeRun}
+          onDeleteRun={handleDeleteRun}
+          onClose={() => setShowStartModal(false)}
+        />
+      )}
     </div>
   )
 }

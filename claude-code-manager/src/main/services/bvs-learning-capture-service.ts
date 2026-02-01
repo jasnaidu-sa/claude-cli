@@ -184,6 +184,125 @@ export class BvsLearningCaptureService {
     return removed
   }
 
+  /**
+   * Get relevant learnings for a set of section patterns
+   *
+   * Used during planning to inject historical learnings into the planning prompt.
+   */
+  async getRelevantLearnings(config: {
+    projectPath?: string
+    sectionPatterns?: string[]
+    filePatterns?: string[]
+    limit?: number
+  }): Promise<LearningEntry[]> {
+    const { sectionPatterns = [], filePatterns = [], limit = 10 } = config
+
+    // Score each learning by relevance
+    const scoredLearnings = this.learnings.map(learning => {
+      let score = 0
+
+      // Match section name patterns
+      for (const pattern of sectionPatterns) {
+        if (learning.context.sectionName.toLowerCase().includes(pattern.toLowerCase())) {
+          score += 3
+        }
+        // Also check patterns identified in the learning
+        for (const learningPattern of learning.analysis.patterns) {
+          if (learningPattern.toLowerCase().includes(pattern.toLowerCase())) {
+            score += 2
+          }
+        }
+      }
+
+      // Match file patterns
+      for (const filePattern of filePatterns) {
+        const hasMatchingFile = learning.analysis.patterns.some(p =>
+          p.toLowerCase().includes(filePattern.toLowerCase())
+        )
+        if (hasMatchingFile) {
+          score += 2
+        }
+      }
+
+      // Boost recent learnings (within 30 days)
+      const daysSinceCapture = (Date.now() - learning.timestamp) / (24 * 60 * 60 * 1000)
+      if (daysSinceCapture < 30) {
+        score += 1
+      }
+
+      // Boost high severity
+      if (learning.severity === 'high') score += 2
+      else if (learning.severity === 'medium') score += 1
+
+      return { learning, score }
+    })
+
+    // Sort by score and return top N
+    return scoredLearnings
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(s => s.learning)
+  }
+
+  /**
+   * Get complexity history for similar file patterns
+   *
+   * Used to adjust complexity estimates based on historical data.
+   */
+  async getComplexityHistory(config: {
+    filePatterns: string[]
+    limit?: number
+  }): Promise<{
+    avgActualTurns: number
+    avgCost: number
+    samples: number
+  }> {
+    const { filePatterns, limit = 5 } = config
+
+    // Find learnings with similar file patterns
+    const matching = this.learnings.filter(learning => {
+      return filePatterns.some(pattern => {
+        // Check if any learning pattern mentions similar files
+        return learning.analysis.patterns.some(p =>
+          p.toLowerCase().includes(pattern.toLowerCase())
+        )
+      })
+    }).slice(0, limit)
+
+    if (matching.length === 0) {
+      return { avgActualTurns: 0, avgCost: 0, samples: 0 }
+    }
+
+    // Calculate averages from context
+    const totalActualValue = matching.reduce((sum, l) => sum + (l.context.actualValue || 0), 0)
+    const avgActualTurns = totalActualValue / matching.length
+
+    // Estimate cost based on complexity scores
+    const avgComplexity = matching.reduce((sum, l) => sum + l.analysis.complexity, 0) / matching.length
+    const avgCost = avgComplexity * 0.02  // Rough estimate: $0.02 per complexity point
+
+    return {
+      avgActualTurns,
+      avgCost,
+      samples: matching.length
+    }
+  }
+
+  /**
+   * Format learnings for injection into planning prompt
+   */
+  formatLearningsForPrompt(learnings: LearningEntry[]): string {
+    if (learnings.length === 0) return ''
+
+    const lines = learnings.map(l => {
+      const rec = l.recommendations[0] || 'No specific recommendation'
+      return `- [${l.category}] ${l.context.sectionName}: ${rec}`
+    })
+
+    return `\nHISTORICAL LEARNINGS (apply to your planning):\n${lines.join('\n')}\n`
+  }
+
   // Private methods
 
   private categorizeLimitViolation(

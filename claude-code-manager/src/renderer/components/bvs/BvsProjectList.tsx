@@ -207,6 +207,9 @@ export function BvsProjectList({
         {/* Project Info */}
         <div className="flex-1 min-w-0">
           <h3 className="font-medium truncate">{project.name}</h3>
+          <p className="text-xs text-muted-foreground/70 truncate font-mono">
+            {project.id}
+          </p>
           <p className="text-sm text-muted-foreground truncate">
             {project.description || 'No description'}
           </p>

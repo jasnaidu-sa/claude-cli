@@ -1020,6 +1020,9 @@ export function registerBvsHandlers(): void {
     async (_event: IpcMainInvokeEvent, sessionId: string, sectionId: string) => {
       try {
         const session = await orchestrator.getSession(sessionId)
+        if (!session) {
+          return { success: false, error: 'Session not found' }
+        }
         if (!session.plan) {
           return { success: false, error: 'No plan found' }
         }

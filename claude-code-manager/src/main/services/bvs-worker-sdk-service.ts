@@ -22,7 +22,6 @@
 import { EventEmitter } from 'events'
 import * as path from 'path'
 import * as fs from 'fs/promises'
-// @ts-expect-error glob types may not be available
 import { glob } from 'glob'
 import { exec } from 'child_process'
 import { promisify } from 'util'
@@ -32,7 +31,7 @@ import { ConfigStore } from './config-store'
 // Agent SDK types
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
-import type { BvsSection } from '../../shared/bvs-types'
+import type { BvsSection, BvsArchitectDiagnosis } from '../../shared/bvs-types'
 import type { ComplexityAnalysis, BvsModelId } from './bvs-complexity-analyzer-service'
 
 const execAsync = promisify(exec)
@@ -50,6 +49,8 @@ export interface WorkerConfig {
   maxTurns: number
   projectContext: ProjectContext
   complexity: ComplexityAnalysis
+  /** Architect diagnosis from previous failure - guides retry approach */
+  architectDiagnosis?: BvsArchitectDiagnosis
 }
 
 export interface ProjectContext {
@@ -145,8 +146,8 @@ export class BvsWorkerSdkService extends EventEmitter {
     console.log(`[BvsWorkerSDK:${workerId}] Worktree path: ${worktreePath || 'null'}`)
     console.log(`[BvsWorkerSDK:${workerId}] Project context path: ${config.projectContext.projectPath}`)
 
-    // Build prompt
-    const prompt = this.buildWorkerPrompt(section, config.projectContext, maxTurns)
+    // Build prompt (include architect diagnosis for retries)
+    const prompt = this.buildWorkerPrompt(section, config.projectContext, maxTurns, config.architectDiagnosis)
 
     // Track execution state
     let turnsUsed = 0
@@ -448,11 +449,17 @@ export class BvsWorkerSdkService extends EventEmitter {
         allowedTools: options.allowedTools
       })
 
-      // Execute query with streaming
-      const queryResult = sdk.query({
-        prompt: generateMessages(),
-        options
-      })
+      // Execute query with streaming - wrapped in try-catch for SDK subprocess errors
+      let queryResult: ReturnType<typeof sdk.query>
+      try {
+        queryResult = sdk.query({
+          prompt: generateMessages(),
+          options
+        })
+      } catch (initError) {
+        console.error(`[BvsWorkerSDK:${workerId}] SDK query initialization failed:`, initError)
+        throw new Error(`Failed to start worker: ${initError instanceof Error ? initError.message : 'Unknown error'}`)
+      }
 
       console.log(`[BvsWorkerSDK:${workerId}] Streaming output with MCP tools...`)
 
@@ -778,11 +785,15 @@ export class BvsWorkerSdkService extends EventEmitter {
 
   /**
    * Build worker prompt
+   *
+   * When architectDiagnosis is provided (retry scenario), includes the architect's
+   * analysis of why the previous attempt failed and recommended approach changes.
    */
   private buildWorkerPrompt(
     section: BvsSection,
     context: ProjectContext,
-    maxTurns: number
+    maxTurns: number,
+    architectDiagnosis?: BvsArchitectDiagnosis
   ): string {
     const successCriteria = section.successCriteria
       .map((c, i) => `${i + 1}. ${c.description}`)
@@ -799,7 +810,37 @@ export class BvsWorkerSdkService extends EventEmitter {
     // Detect if this is a database-related section
     const isDatabaseSection = this.isDatabaseRelatedSection(section)
 
+    // Build architect diagnosis section for retries
+    const diagnosisSection = architectDiagnosis ? `
+═══════════════════════════════════════════════════════════════════════════════
+*** RETRY ATTEMPT - PREVIOUS FAILURE DIAGNOSIS ***
+═══════════════════════════════════════════════════════════════════════════════
+
+An architect agent has analyzed why the previous attempt failed:
+
+FAILURE TYPE: ${architectDiagnosis.failureType.toUpperCase()}
+ROOT CAUSE: ${architectDiagnosis.rootCause}
+
+DIAGNOSIS:
+${architectDiagnosis.diagnosis}
+
+RECOMMENDED APPROACH:
+${architectDiagnosis.suggestedApproach}
+
+${architectDiagnosis.filesToReadFirst.length > 0 ? `FILES TO READ FIRST:
+${architectDiagnosis.filesToReadFirst.map(f => `- ${f}`).join('\n')}` : ''}
+
+${architectDiagnosis.warningsForWorker.length > 0 ? `WARNINGS:
+${architectDiagnosis.warningsForWorker.map(w => `⚠ ${w}`).join('\n')}` : ''}
+
+*** YOU MUST USE A DIFFERENT APPROACH THIS TIME ***
+Do NOT repeat the same steps that led to failure. Follow the recommended approach above.
+
+═══════════════════════════════════════════════════════════════════════════════
+` : ''
+
     return `You are a BVS worker implementing a section of code.
+${diagnosisSection}
 
 SECTION: ${section.name}
 DESCRIPTION: ${section.description}
@@ -902,6 +943,27 @@ ${isDatabaseSection ? `4. *** DATABASE TASKS: Creating migration files is NOT en
 6. The section FAILS if migrations exist but are not applied to the database` : `4. The outcome MUST be: files exist (found or created)`}
 7. You have ${maxTurns} turns maximum
 8. The section FAILS if required work is not actually done
+
+═══════════════════════════════════════════════════════════════════════════════
+*** FORBIDDEN ACTIONS - INSTANT FAILURE ***
+═══════════════════════════════════════════════════════════════════════════════
+
+You MUST NOT do any of the following. These are cheats that hide problems:
+
+1. NEVER set ignoreBuildErrors: true in next.config.js or any config file
+2. NEVER add @ts-ignore, @ts-expect-error, or @ts-nocheck comments
+3. NEVER add eslint-disable comments to suppress errors
+4. NEVER use "any" type to bypass TypeScript errors
+5. NEVER skip tests or disable test suites
+6. NEVER modify CI/CD configs to skip validation steps
+
+If you encounter TypeScript or build errors, you MUST:
+- FIX the actual error by correcting the code
+- Install missing dependencies if needed
+- Add proper type definitions
+- Import missing modules
+
+The section FAILS if you use ANY error suppression technique instead of fixing the actual problem.
 
 ═══════════════════════════════════════════════════════════════════════════════
 DECISION FLOWCHART:

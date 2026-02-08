@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 type ViewMode = 'grid' | 'single'
-type Panel = 'files' | 'browser' | 'settings' | 'worktrees' | 'autonomous' | 'ideas' | 'bvs'
+type Panel = 'files' | 'browser' | 'settings' | 'worktrees' | 'autonomous' | 'ideas' | 'bvs' | 'whatsapp'
 type Theme = 'light' | 'dark' | 'system'
 
 interface UIState {

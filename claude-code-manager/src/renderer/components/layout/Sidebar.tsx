@@ -1,13 +1,17 @@
 import React from 'react'
-import { FolderOpen, Globe, Settings, ChevronDown, Circle, GitBranch, Bot, Lightbulb, Layers } from 'lucide-react'
+import { FolderOpen, Globe, Settings, ChevronDown, Circle, GitBranch, Bot, Lightbulb, Layers, MessageCircle } from 'lucide-react'
 import { Button } from '../ui/button'
 import { useUIStore } from '@renderer/stores/ui-store'
 import { useSessionStore } from '@renderer/stores/session-store'
+import { useWhatsAppStore } from '@renderer/stores/whatsapp-store'
 import { cn, getStatusColor } from '@renderer/lib/utils'
 
 export function Sidebar() {
   const { sidebarOpen, activePanel, setActivePanel } = useUIStore()
   const { sessions, activeSessionId, setActiveSession } = useSessionStore()
+  const whatsappConnection = useWhatsAppStore((s) => s.connectionState)
+  const whatsappConversations = useWhatsAppStore((s) => s.conversations)
+  const totalUnread = whatsappConversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0)
 
   if (!sidebarOpen) return null
 
@@ -142,6 +146,34 @@ export function Sidebar() {
             >
               <Layers className="h-4 w-4" />
               BVS Workflow
+            </button>
+
+            <button
+              onClick={() => setActivePanel(activePanel === 'whatsapp' ? null : 'whatsapp')}
+              className={cn(
+                'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors',
+                activePanel === 'whatsapp'
+                  ? 'bg-primary/10 text-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+              )}
+            >
+              <MessageCircle className="h-4 w-4" />
+              <span className="flex-1 text-left">WhatsApp</span>
+              <span
+                className={cn(
+                  'h-2 w-2 rounded-full',
+                  whatsappConnection.status === 'connected'
+                    ? 'bg-green-500'
+                    : whatsappConnection.status === 'connecting' || whatsappConnection.status === 'reconnecting'
+                      ? 'bg-yellow-500'
+                      : 'bg-zinc-500'
+                )}
+              />
+              {totalUnread > 0 && (
+                <span className="text-[10px] bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                  {totalUnread > 99 ? '99+' : totalUnread}
+                </span>
+              )}
             </button>
           </div>
         </div>

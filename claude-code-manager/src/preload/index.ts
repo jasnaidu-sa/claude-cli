@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
+import { WHATSAPP_IPC_CHANNELS } from '../shared/whatsapp-ipc-channels'
 import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck, Idea, IdeaStage, IdeaEmailSource, OutlookConfig, ProjectType, InitiatorSession, RequirementsDoc, RalphPromptConfig, RalphPhase, RalphProgressEvent, RalphCheckpointEvent, RalphStatusEvent, RalphCheckpoint, RalphSessionSummary } from '../shared/types'
+import type { WhatsAppConnectionState, WhatsAppMessage, WhatsAppConversation, WhatsAppAgentMode, MemorySearchOptions, MemorySource, TaskStatus, TaskRunLog, HeartbeatResult, AgentIdentity, WhatsAppConfig, WhatsAppIpcResponse } from '../shared/whatsapp-types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy, ConflictResolutionResult, WorktreeLifecycle } from '../shared/types/git'
 import type { ContextData, ContextSummarizationRequest, ContextSummarizationResult, ContextProgress, ContextInjection, ContextAgentTask } from '../shared/context-types'
 
@@ -455,6 +457,65 @@ export interface ElectronAPI {
     onPlanWritten: (callback: (data: BvsPlanWrittenData) => void) => () => void
     onError: (callback: (data: BvsErrorData) => void) => () => void
     onBvsEvent: (callback: (data: any) => void) => () => void
+  }
+
+  // WhatsApp AI Assistant
+  whatsapp: {
+    // Connection
+    connect: () => Promise<WhatsAppIpcResponse>
+    disconnect: () => Promise<WhatsAppIpcResponse>
+    getStatus: () => Promise<WhatsAppIpcResponse<WhatsAppConnectionState>>
+    requestPairingCode: (phone: string) => Promise<WhatsAppIpcResponse<string>>
+    onConnectionUpdate: (callback: (state: WhatsAppConnectionState) => void) => () => void
+
+    // Messages
+    sendMessage: (jid: string, content: string) => Promise<WhatsAppIpcResponse<WhatsAppMessage>>
+    getMessages: (jid: string, since?: number, limit?: number) => Promise<WhatsAppIpcResponse<WhatsAppMessage[]>>
+    onMessageReceived: (callback: (msg: WhatsAppMessage) => void) => () => void
+    onMessageSent: (callback: (msg: WhatsAppMessage) => void) => () => void
+
+    // Conversations
+    listConversations: () => Promise<WhatsAppIpcResponse<WhatsAppConversation[]>>
+    getConversation: (jid: string) => Promise<WhatsAppIpcResponse<WhatsAppConversation>>
+    registerConversation: (jid: string, config: Partial<WhatsAppConversation>) => Promise<WhatsAppIpcResponse<WhatsAppConversation>>
+    updateConversation: (jid: string, updates: Partial<WhatsAppConversation>) => Promise<WhatsAppIpcResponse<WhatsAppConversation>>
+    unregisterConversation: (jid: string) => Promise<WhatsAppIpcResponse>
+
+    // Agent
+    setMode: (jid: string, mode: WhatsAppAgentMode) => Promise<WhatsAppIpcResponse>
+    getMode: (jid: string) => Promise<WhatsAppIpcResponse<WhatsAppAgentMode>>
+    onAgentStream: (callback: (data: any) => void) => () => void
+
+    // Memory
+    memorySearch: (options: MemorySearchOptions) => Promise<WhatsAppIpcResponse>
+    memoryIndex: (source: MemorySource, sourceId: string, text: string) => Promise<WhatsAppIpcResponse<number>>
+    memoryStats: () => Promise<WhatsAppIpcResponse<{ totalChunks: number; totalSources: number; dbSizeBytes: number }>>
+    memoryClear: () => Promise<WhatsAppIpcResponse>
+
+    // Tasks
+    taskList: (status?: TaskStatus) => Promise<WhatsAppIpcResponse>
+    taskCreate: (task: any) => Promise<WhatsAppIpcResponse>
+    taskUpdate: (id: string, updates: any) => Promise<WhatsAppIpcResponse>
+    taskDelete: (id: string) => Promise<WhatsAppIpcResponse>
+    onTaskExecuted: (callback: (log: TaskRunLog) => void) => () => void
+
+    // Heartbeat
+    heartbeatStart: () => Promise<WhatsAppIpcResponse>
+    heartbeatStop: () => Promise<WhatsAppIpcResponse>
+    heartbeatStatus: () => Promise<WhatsAppIpcResponse<{ running: boolean; lastResult: HeartbeatResult | null }>>
+    heartbeatTrigger: () => Promise<WhatsAppIpcResponse<HeartbeatResult>>
+    onHeartbeatResult: (callback: (result: HeartbeatResult) => void) => () => void
+
+    // Identity
+    identityGet: () => Promise<WhatsAppIpcResponse<AgentIdentity>>
+    identityUpdate: (field: string, content: string) => Promise<WhatsAppIpcResponse>
+
+    // Config
+    configGet: () => Promise<WhatsAppIpcResponse<WhatsAppConfig>>
+    configSet: (key: string, value: any) => Promise<WhatsAppIpcResponse>
+
+    // BVS Progress
+    onBvsProgress: (callback: (data: any) => void) => () => void
   }
 }
 
@@ -1636,6 +1697,122 @@ const electronAPI: ElectronAPI = {
       const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data)
       ipcRenderer.on('bvs:event', handler)
       return () => ipcRenderer.removeListener('bvs:event', handler)
+    }
+  },
+
+  // WhatsApp AI Assistant
+  whatsapp: {
+    // Connection
+    connect: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_CONNECT),
+    disconnect: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_DISCONNECT),
+    getStatus: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_GET_STATUS),
+    requestPairingCode: (phone: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_REQUEST_PAIRING_CODE, phone),
+    onConnectionUpdate: (callback: (state: WhatsAppConnectionState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: WhatsAppConnectionState) => callback(state)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_CONNECTION_UPDATE, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_CONNECTION_UPDATE, handler)
+    },
+
+    // Messages
+    sendMessage: (jid: string, content: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_SEND_MESSAGE, jid, content),
+    getMessages: (jid: string, since?: number, limit?: number) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_GET_MESSAGES, jid, since, limit),
+    onMessageReceived: (callback: (msg: WhatsAppMessage) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, msg: WhatsAppMessage) => callback(msg)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_MESSAGE_RECEIVED, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_MESSAGE_RECEIVED, handler)
+    },
+    onMessageSent: (callback: (msg: WhatsAppMessage) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, msg: WhatsAppMessage) => callback(msg)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_MESSAGE_SENT, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_MESSAGE_SENT, handler)
+    },
+
+    // Conversations
+    listConversations: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_LIST_CONVERSATIONS),
+    getConversation: (jid: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_GET_CONVERSATION, jid),
+    registerConversation: (jid: string, config: Partial<WhatsAppConversation>) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_REGISTER_CONVERSATION, jid, config),
+    updateConversation: (jid: string, updates: Partial<WhatsAppConversation>) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_UPDATE_CONVERSATION, jid, updates),
+    unregisterConversation: (jid: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_UNREGISTER_CONVERSATION, jid),
+
+    // Agent
+    setMode: (jid: string, mode: WhatsAppAgentMode) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_SET_MODE, jid, mode),
+    getMode: (jid: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_GET_MODE, jid),
+    onAgentStream: (callback: (data: any) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_AGENT_STREAM, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_AGENT_STREAM, handler)
+    },
+
+    // Memory
+    memorySearch: (options: MemorySearchOptions) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_MEMORY_SEARCH, options),
+    memoryIndex: (source: MemorySource, sourceId: string, text: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_MEMORY_INDEX, source, sourceId, text),
+    memoryStats: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_MEMORY_STATS),
+    memoryClear: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_MEMORY_CLEAR),
+
+    // Tasks
+    taskList: (status?: TaskStatus) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_TASK_LIST, status),
+    taskCreate: (task: any) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_TASK_CREATE, task),
+    taskUpdate: (id: string, updates: any) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_TASK_UPDATE, id, updates),
+    taskDelete: (id: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_TASK_DELETE, id),
+    onTaskExecuted: (callback: (log: TaskRunLog) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, log: TaskRunLog) => callback(log)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_TASK_EXECUTED, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_TASK_EXECUTED, handler)
+    },
+
+    // Heartbeat
+    heartbeatStart: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_HEARTBEAT_START),
+    heartbeatStop: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_HEARTBEAT_STOP),
+    heartbeatStatus: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_HEARTBEAT_STATUS),
+    heartbeatTrigger: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_HEARTBEAT_TRIGGER),
+    onHeartbeatResult: (callback: (result: HeartbeatResult) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, result: HeartbeatResult) => callback(result)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_HEARTBEAT_RESULT, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_HEARTBEAT_RESULT, handler)
+    },
+
+    // Identity
+    identityGet: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_IDENTITY_GET),
+    identityUpdate: (field: string, content: string) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_IDENTITY_UPDATE, field, content),
+
+    // Config
+    configGet: () =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_CONFIG_GET),
+    configSet: (key: string, value: any) =>
+      ipcRenderer.invoke(WHATSAPP_IPC_CHANNELS.WHATSAPP_CONFIG_SET, key, value),
+
+    // BVS Progress
+    onBvsProgress: (callback: (data: any) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: any) => callback(data)
+      ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_BVS_PROGRESS, handler)
+      return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_BVS_PROGRESS, handler)
     }
   }
 }

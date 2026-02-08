@@ -12,6 +12,16 @@ import { ResearchAgentRunner } from './services/research-agent-runner'
 import { startApiServer, stopApiServer, getApiServer, type ApiServerConfig } from './api-server'
 import { networkInterfaces } from 'os'
 
+// WhatsApp services
+import { WhatsAppService } from './services/whatsapp-service'
+import { WhatsAppAgentService } from './services/whatsapp-agent-service'
+import { VectorMemoryService } from './services/vector-memory-service'
+import { GroupQueueService } from './services/group-queue-service'
+import { AgentIdentityService } from './services/agent-identity-service'
+import { TaskSchedulerService } from './services/task-scheduler-service'
+import { HeartbeatService } from './services/heartbeat-service'
+import { registerWhatsAppHandlers } from './ipc/whatsapp-handlers'
+
 /**
  * Get all local IP addresses for the machine
  */
@@ -49,6 +59,15 @@ export let devServerManager: DevServerManager
 export let discoveryChatService: DiscoveryChatService
 export let discoveryChatServiceSDK: DiscoveryChatServiceSDK
 export let researchAgentRunner: ResearchAgentRunner
+
+// WhatsApp service references (conditionally initialized)
+export let whatsappService: WhatsAppService | null = null
+export let whatsappAgentService: WhatsAppAgentService | null = null
+export let vectorMemoryService: VectorMemoryService | null = null
+export let groupQueueService: GroupQueueService | null = null
+export let agentIdentityService: AgentIdentityService | null = null
+export let taskSchedulerService: TaskSchedulerService | null = null
+export let heartbeatService: HeartbeatService | null = null
 
 // Feature flag for SDK vs CLI discovery chat
 export const USE_SDK_DISCOVERY = true
@@ -146,6 +165,74 @@ app.whenReady().then(() => {
     })
   }
 
+  // Initialize WhatsApp services (async, conditional)
+  ;(async () => {
+    try {
+      const whatsappConfig = configStore.getWhatsAppConfig()
+      if (!whatsappConfig?.enabled) {
+        console.log('[Main] WhatsApp integration disabled')
+        return
+      }
+
+      console.log('[Main] Initializing WhatsApp services...')
+
+      // Phase 2 services (no inter-dependencies)
+      agentIdentityService = new AgentIdentityService(configStore)
+      vectorMemoryService = new VectorMemoryService(configStore)
+      groupQueueService = new GroupQueueService(whatsappConfig.maxConcurrentAgents || 3)
+      whatsappService = new WhatsAppService(configStore)
+
+      // Initialize async services
+      await agentIdentityService.initialize()
+      await vectorMemoryService.initialize()
+
+      // Phase 3 services (depend on Phase 2)
+      whatsappAgentService = new WhatsAppAgentService(
+        whatsappService, vectorMemoryService, agentIdentityService, groupQueueService, configStore
+      )
+      taskSchedulerService = new TaskSchedulerService(groupQueueService, whatsappService)
+      heartbeatService = new HeartbeatService(
+        whatsappService, agentIdentityService, configStore,
+        null, // ideasManager - can be wired later if needed
+        null  // bvsOrchestrator - can be wired later if needed
+      )
+
+      // Wire queue processing functions
+      groupQueueService.setProcessMessagesFn((jid: string) => whatsappAgentService!.processMessages(jid))
+      groupQueueService.setProcessTaskFn((jid: string, task: any) => whatsappAgentService!.processTask(jid, task))
+
+      // Register IPC handlers for WhatsApp (must happen after service creation)
+      registerWhatsAppHandlers(
+        whatsappService,
+        whatsappAgentService,
+        vectorMemoryService,
+        taskSchedulerService,
+        heartbeatService,
+        agentIdentityService,
+        configStore
+      )
+
+      // Auto-connect if configured
+      if (whatsappConfig.autoConnect) {
+        whatsappService.connect().catch((err: Error) =>
+          console.error('[Main] WhatsApp auto-connect failed:', err.message)
+        )
+      }
+
+      // Start scheduler
+      taskSchedulerService.start()
+
+      // Start heartbeat if enabled
+      if (whatsappConfig.heartbeat?.enabled) {
+        heartbeatService.start()
+      }
+
+      console.log('[Main] WhatsApp services initialized successfully')
+    } catch (err) {
+      console.error('[Main] WhatsApp initialization failed:', err)
+    }
+  })()
+
   // Default open or close DevTools by F12 in development
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -166,6 +253,11 @@ app.on('window-all-closed', async () => {
   devServerManager.stopAll()
   discoveryChatService.cleanup()
   discoveryChatServiceSDK.cleanup()
+
+  // Clean up WhatsApp services
+  if (heartbeatService) heartbeatService.stop()
+  if (taskSchedulerService) taskSchedulerService.stop()
+  if (whatsappService) await whatsappService.disconnect().catch(() => {})
 
   // Stop API server if running
   await stopApiServer()

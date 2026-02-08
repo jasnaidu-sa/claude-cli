@@ -1,3 +1,5 @@
+import { WhatsAppConfig } from './whatsapp-types'
+
 // Session types
 export interface Session {
   id: string
@@ -307,6 +309,8 @@ export interface AppConfig {
   autonomous: AutonomousConfig
   // API Server configuration (for remote access / thin client mode)
   apiServer?: ApiServerConfig
+  // WhatsApp AI Assistant configuration
+  whatsapp?: WhatsAppConfig
 }
 
 // API Server configuration

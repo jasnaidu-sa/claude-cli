@@ -19,7 +19,11 @@ import { randomBytes, createHash } from 'crypto'
 import { EventEmitter } from 'events'
 
 // Import services
-import { getMainWindow, sessionManager, configStore, discoveryChatService } from '../index'
+import {
+  getMainWindow, sessionManager, configStore, discoveryChatService,
+  whatsappService, whatsappAgentService, vectorMemoryService,
+  taskSchedulerService, heartbeatService, agentIdentityService,
+} from '../index'
 import { fileWatcher } from '../services/file-watcher'
 import { getRalphOrchestratorService } from '../services/ralph-orchestrator-service'
 import { getInitiatorService } from '../services/initiator-service'
@@ -512,6 +516,114 @@ export class ApiServer {
       }
     })
 
+    // ========================================================================
+    // WhatsApp
+    // ========================================================================
+
+    router.get('/whatsapp/status', async (_req, res) => {
+      try {
+        if (!whatsappService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const state = whatsappService.getConnectionState()
+        res.json({ success: true, data: state })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.get('/whatsapp/conversations', async (_req, res) => {
+      try {
+        if (!whatsappService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const conversations = whatsappService.listConversations()
+        res.json({ success: true, data: conversations })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.get('/whatsapp/conversations/:jid/messages', async (req, res) => {
+      try {
+        if (!whatsappService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const since = req.query.since ? parseInt(req.query.since as string) : undefined
+        const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined
+        const messages = whatsappService.getMessages(req.params.jid, since, limit)
+        res.json({ success: true, data: messages })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.post('/whatsapp/conversations/:jid/messages', async (req, res) => {
+      try {
+        if (!whatsappService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const { content } = req.body
+        const msg = await whatsappService.sendMessage(req.params.jid, content)
+        res.json({ success: true, data: msg })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.get('/whatsapp/tasks', async (_req, res) => {
+      try {
+        if (!taskSchedulerService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const tasks = taskSchedulerService.listTasks()
+        res.json({ success: true, data: tasks })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.post('/whatsapp/tasks', async (req, res) => {
+      try {
+        if (!taskSchedulerService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const task = taskSchedulerService.createTask(req.body)
+        res.json({ success: true, data: task })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.get('/whatsapp/heartbeat', async (_req, res) => {
+      try {
+        if (!heartbeatService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        res.json({
+          success: true,
+          data: {
+            running: heartbeatService.isRunning(),
+            lastResult: heartbeatService.getLastResult(),
+          },
+        })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
+    router.post('/whatsapp/heartbeat/trigger', async (_req, res) => {
+      try {
+        if (!heartbeatService) {
+          return res.json({ success: false, error: 'WhatsApp not enabled' })
+        }
+        const result = await heartbeatService.triggerNow()
+        res.json({ success: true, data: result })
+      } catch (error) {
+        res.json({ success: false, error: String(error) })
+      }
+    })
+
     // Mount router
     this.app.use('/api', router)
   }
@@ -625,6 +737,26 @@ export class ApiServer {
     ralphService.on('session:complete', (data) => {
       this.events.broadcast('ralph:session:complete', data)
     })
+
+    // Forward WhatsApp events to WebSocket clients
+    if (whatsappService) {
+      whatsappService.on('message-received', (msg) => {
+        this.events.broadcast('whatsapp:message', msg)
+      })
+      whatsappService.on('message-sent', (msg) => {
+        this.events.broadcast('whatsapp:message', msg)
+      })
+    }
+    if (whatsappAgentService) {
+      whatsappAgentService.on('stream-chunk', (data) => {
+        this.events.broadcast('whatsapp:agent-stream', data)
+      })
+    }
+    if (heartbeatService) {
+      heartbeatService.on('heartbeat-result', (result) => {
+        this.events.broadcast('whatsapp:heartbeat', result)
+      })
+    }
 
     // Listen for Initiator events
     const initiatorService = getInitiatorService()

@@ -116,6 +116,7 @@ export class VectorMemoryService extends EventEmitter {
     getChunksBySource?: Database.Statement
     countChunks?: Database.Statement
     countSources?: Database.Statement
+    exactMatchChunk?: Database.Statement
   } = {}
 
   constructor(configStore: ConfigStore) {
@@ -224,6 +225,152 @@ export class VectorMemoryService extends EventEmitter {
         created_at INTEGER NOT NULL
       );
     `)
+
+    // ==================================================================
+    // NEW UNIFIED AGENT ARCHITECTURE TABLES
+    // ==================================================================
+
+    // Episodes table - episodic memory (all messages, sync writes)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS episodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        metadata_json TEXT,
+        token_count INTEGER,
+        embedding BLOB,
+        indexed_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_episodes_session ON episodes(session_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel, source_id, timestamp);
+      CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp);
+    `)
+
+    // Episodes vector table for semantic search
+    const episodesVecExists = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='episodes_vec'"
+      )
+      .get()
+
+    if (!episodesVecExists) {
+      db.exec(
+        `CREATE VIRTUAL TABLE episodes_vec USING vec0(embedding float[${this.embeddingDim}]);`
+      )
+    }
+
+    // Episodes FTS5 table for keyword search
+    const episodesFtsExists = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='episodes_fts'"
+      )
+      .get()
+
+    if (!episodesFtsExists) {
+      db.exec(`
+        CREATE VIRTUAL TABLE episodes_fts USING fts5(
+          content,
+          tokenize='porter'
+        );
+      `)
+    }
+
+    // Memory WAL table - async operations queue with retry logic
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_wal (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        episode_id INTEGER,
+        operation TEXT NOT NULL,
+        payload_json TEXT,
+        retry_count INTEGER DEFAULT 0,
+        max_retries INTEGER DEFAULT 5,
+        next_retry_at INTEGER,
+        status TEXT DEFAULT 'pending',
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_wal_status ON memory_wal(status, next_retry_at);
+      CREATE INDEX IF NOT EXISTS idx_wal_episode ON memory_wal(episode_id);
+    `)
+
+    // Facts table - semantic memory (extracted knowledge)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity TEXT NOT NULL,
+        attribute TEXT NOT NULL,
+        value TEXT NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        source_episode_id INTEGER,
+        extracted_at INTEGER NOT NULL,
+        last_confirmed_at INTEGER,
+        superseded_by INTEGER,
+        embedding BLOB
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_facts_entity ON facts(entity);
+      CREATE INDEX IF NOT EXISTS idx_facts_superseded ON facts(superseded_by);
+      CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_episode_id);
+    `)
+
+    // Entity relations table - knowledge graph edges
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS entity_relations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_entity TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        to_entity TEXT NOT NULL,
+        weight REAL DEFAULT 1.0,
+        source_episode_id INTEGER,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_relations_from ON entity_relations(from_entity);
+      CREATE INDEX IF NOT EXISTS idx_relations_to ON entity_relations(to_entity);
+    `)
+
+    // Pattern observations table - procedural memory (raw observations)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS pattern_observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        tool_sequence TEXT NOT NULL,
+        context_summary TEXT,
+        success INTEGER NOT NULL,
+        quarantined INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        unquarantined_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_observations_session ON pattern_observations(session_id);
+      CREATE INDEX IF NOT EXISTS idx_observations_quarantine ON pattern_observations(quarantined);
+      CREATE INDEX IF NOT EXISTS idx_observations_success ON pattern_observations(success);
+    `)
+
+    // Crystallized patterns table - procedural memory (learned skills)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS crystallized_patterns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        slug TEXT NOT NULL UNIQUE,
+        tool_sequence TEXT NOT NULL,
+        observation_count INTEGER DEFAULT 0,
+        success_rate REAL DEFAULT 0.0,
+        skill_path TEXT,
+        status TEXT DEFAULT 'candidate',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_patterns_status ON crystallized_patterns(status);
+      CREATE INDEX IF NOT EXISTS idx_patterns_success_rate ON crystallized_patterns(success_rate);
+    `)
   }
 
   /**
@@ -298,12 +445,16 @@ export class VectorMemoryService extends EventEmitter {
     this.stmts.countSources = db.prepare(`
       SELECT COUNT(DISTINCT source_id) as count FROM memory_chunks
     `)
+
+    this.stmts.exactMatchChunk = db.prepare(`
+      SELECT id FROM memory_chunks WHERE source = ? AND source_id = ? AND content = ? LIMIT 1
+    `)
   }
 
   /**
    * Get the active database instance, throwing if not initialized.
    */
-  private getDb(): Database.Database {
+  public getDb(): Database.Database {
     if (!this.db) {
       throw new Error('VectorMemoryService not initialized. Call initialize() first.')
     }
@@ -1136,12 +1287,8 @@ export class VectorMemoryService extends EventEmitter {
   ): Promise<boolean> {
     const db = this.getDb()
 
-    // Quick check: exact content match
-    const exactMatch = db
-      .prepare(
-        'SELECT id FROM memory_chunks WHERE source = ? AND source_id = ? AND content = ? LIMIT 1'
-      )
-      .get(source, sourceId, content)
+    // Quick check: exact content match (uses cached prepared statement)
+    const exactMatch = this.stmts.exactMatchChunk!.get(source, sourceId, content)
 
     if (exactMatch) return true
 

@@ -10,11 +10,12 @@
  * - File watcher using chokidar for external edits
  * - Automatic directory structure creation
  * - Bi-directional sync: SQLite → Markdown (write), Markdown → SQLite (watch)
+ * - Obsidian-compatible wikilinks, tags, and entity files
  */
 
 import { EventEmitter } from 'events'
 import { watch, FSWatcher } from 'chokidar'
-import { writeFile, mkdir, access } from 'fs/promises'
+import { writeFile, readFile, mkdir, access } from 'fs/promises'
 import { join } from 'path'
 import type { EpisodeStoreService, Episode } from './episode-store-service'
 
@@ -38,6 +39,13 @@ interface SessionGroup {
   endTime: number
 }
 
+interface ExtractedEntity {
+  name: string
+  type: 'person' | 'project' | 'technology' | 'concept'
+  mentions: number
+  normalizedName: string
+}
+
 // ============================================================================
 // MarkdownSyncService
 // ============================================================================
@@ -51,6 +59,14 @@ export class MarkdownSyncService extends EventEmitter {
 
   /** Debounce interval in ms for file-change events. */
   private static readonly DEBOUNCE_MS = 500
+
+  /** Known technology keywords for entity extraction. */
+  private static readonly TECH_KEYWORDS = new Set([
+    'react', 'typescript', 'javascript', 'node', 'electron', 'vite', 'python',
+    'rust', 'docker', 'kubernetes', 'redis', 'postgres', 'sqlite', 'supabase',
+    'nextjs', 'tailwind', 'prisma', 'graphql', 'webpack', 'eslint', 'jest',
+    'vitest', 'anthropic', 'openai', 'langchain', 'chromadb', 'pinecone',
+  ])
 
   constructor(episodeStore: EpisodeStoreService, workspacePath: string) {
     super()
@@ -79,13 +95,14 @@ export class MarkdownSyncService extends EventEmitter {
 
   /**
    * Ensure all required directories exist in the memory vault structure.
-   * Creates: memory/, memory/episodes/, memory/knowledge/, memory/skills/, memory/health/
+   * Creates: memory/, memory/episodes/, memory/knowledge/, memory/knowledge/entities/, memory/skills/, memory/health/
    */
   async ensureDirectoryStructure(): Promise<void> {
     const dirs = [
       join(this.workspacePath, 'memory'),
       join(this.workspacePath, 'memory', 'episodes'),
       join(this.workspacePath, 'memory', 'knowledge'),
+      join(this.workspacePath, 'memory', 'knowledge', 'entities'),
       join(this.workspacePath, 'memory', 'skills'),
       join(this.workspacePath, 'memory', 'health'),
     ]
@@ -122,8 +139,25 @@ export class MarkdownSyncService extends EventEmitter {
     // Calculate metadata
     const metadata = this.calculateMetadata(date, sessions, allEpisodes)
 
-    // Generate markdown
-    const markdown = this.formatDailyLogMarkdown(metadata, sessions)
+    // Extract tags from sessions for frontmatter
+    const tags = this.extractTags(sessions)
+
+    // Extract entities from all content
+    const allContent = allEpisodes.map((ep) => ep.content).join('\n')
+    const entities = this.extractEntities(allContent)
+
+    // Generate markdown with tags
+    let markdown = this.formatDailyLogMarkdown(metadata, sessions, tags)
+
+    // Add wikilinks for entities with 2+ mentions
+    markdown = this.addWikilinks(markdown, entities)
+
+    // Fire-and-forget entity file generation
+    for (const entity of entities) {
+      this.generateEntityFile(entity, date).catch((err) =>
+        console.warn('[MarkdownSyncService] Entity file generation failed:', err),
+      )
+    }
 
     return markdown
   }
@@ -163,7 +197,7 @@ export class MarkdownSyncService extends EventEmitter {
     this.watcher = watch(memoryDir, {
       persistent: true,
       ignoreInitial: true,
-      depth: 2, // Watch memory/ and subdirectories
+      depth: 3, // Watch memory/ and subdirectories (increased for entities/)
       awaitWriteFinish: {
         stabilityThreshold: 300,
         pollInterval: 100,
@@ -212,6 +246,202 @@ export class MarkdownSyncService extends EventEmitter {
   async destroy(): Promise<void> {
     this.stopFileWatcher()
     this.initialized = false
+  }
+
+  // ==========================================================================
+  // Entity Extraction & Wikilinks
+  // ==========================================================================
+
+  /**
+   * Extract entities from content using regex-based detection.
+   * Finds technology keywords and capitalized proper nouns.
+   */
+  extractEntities(content: string): ExtractedEntity[] {
+    const entityCounts = new Map<string, { type: ExtractedEntity['type']; count: number }>()
+
+    // Match technology keywords (case-insensitive)
+    const lowerContent = content.toLowerCase()
+    for (const tech of MarkdownSyncService.TECH_KEYWORDS) {
+      // Use word boundary matching
+      const regex = new RegExp(`\\b${tech}\\b`, 'gi')
+      const matches = content.match(regex)
+      if (matches && matches.length > 0) {
+        const normalized = tech.toLowerCase()
+        entityCounts.set(normalized, {
+          type: 'technology',
+          count: matches.length,
+        })
+      }
+    }
+
+    // Match capitalized proper nouns (2+ letter words starting with uppercase,
+    // not at the start of a sentence, excluding common words)
+    const commonWords = new Set([
+      'the', 'this', 'that', 'with', 'from', 'have', 'will', 'been', 'were',
+      'they', 'their', 'what', 'when', 'where', 'which', 'would', 'could',
+      'should', 'about', 'after', 'before', 'between', 'through', 'during',
+      'session', 'message', 'user', 'assistant', 'system', 'error', 'note',
+      'todo', 'fix', 'bug', 'feature', 'update', 'added', 'removed',
+    ])
+
+    const properNounRegex = /(?<=[a-z.,;:!?\s])\b([A-Z][a-zA-Z]{2,})\b/g
+    let match: RegExpExecArray | null
+    while ((match = properNounRegex.exec(content)) !== null) {
+      const word = match[1]
+      const lower = word.toLowerCase()
+      if (commonWords.has(lower)) continue
+      // Skip if already found as technology
+      if (entityCounts.has(lower)) continue
+
+      const existing = entityCounts.get(lower)
+      if (existing) {
+        existing.count++
+      } else {
+        entityCounts.set(lower, { type: 'concept', count: 1 })
+      }
+    }
+
+    // Convert to ExtractedEntity array, only include entities with 2+ mentions
+    const entities: ExtractedEntity[] = []
+    for (const [normalized, { type, count }] of entityCounts) {
+      if (count >= 2) {
+        // Reconstruct display name
+        const name = type === 'technology'
+          ? normalized
+          : normalized.charAt(0).toUpperCase() + normalized.slice(1)
+
+        entities.push({ name, type, mentions: count, normalizedName: normalized })
+      }
+    }
+
+    return entities.sort((a, b) => b.mentions - a.mentions)
+  }
+
+  /**
+   * Add Obsidian wikilinks for entities with 2+ mentions.
+   * Replaces only the first occurrence in the content.
+   */
+  addWikilinks(content: string, entities: ExtractedEntity[]): string {
+    let result = content
+    for (const entity of entities) {
+      if (entity.mentions < 2) continue
+      const displayName = entity.name.charAt(0).toUpperCase() + entity.name.slice(1)
+      const linkTarget = `knowledge/entities/${entity.normalizedName}`
+      const wikilink = `[[${linkTarget}|${displayName}]]`
+
+      // Replace first occurrence (case-insensitive), but only outside of
+      // YAML frontmatter (skip lines between --- markers) and headings
+      const regex = new RegExp(`\\b${this.escapeRegex(entity.name)}\\b`, 'i')
+      // Find the first match that's not in frontmatter or heading
+      const lines = result.split('\n')
+      let inFrontmatter = false
+      let replaced = false
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === '---') {
+          inFrontmatter = !inFrontmatter
+          continue
+        }
+        if (inFrontmatter) continue
+        if (lines[i].startsWith('#')) continue
+        if (replaced) continue
+
+        if (regex.test(lines[i])) {
+          lines[i] = lines[i].replace(regex, wikilink)
+          replaced = true
+        }
+      }
+      if (replaced) {
+        result = lines.join('\n')
+      }
+    }
+    return result
+  }
+
+  /**
+   * Extract tags from session content for YAML frontmatter.
+   */
+  extractTags(sessions: SessionGroup[]): string[] {
+    const tags = new Set<string>()
+
+    for (const session of sessions) {
+      // Channel-based tags
+      tags.add(session.channel)
+
+      const allContent = session.episodes.map((ep) => ep.content).join(' ').toLowerCase()
+
+      // Content-based tags
+      if (/\b(?:learn|learned|til|today i learned|discovery)\b/i.test(allContent)) {
+        tags.add('learning')
+      }
+      if (/\b(?:debug|debugg|stack trace|error|exception|fix|bug)\b/i.test(allContent)) {
+        tags.add('debugging')
+      }
+      if (/\b(?:bvs|bounded verified|planning|plan|phase)\b/i.test(allContent)) {
+        tags.add('bvs')
+      }
+      if (/\b(?:planning|architecture|design|prd|spec)\b/i.test(allContent)) {
+        tags.add('planning')
+      }
+
+      // Technology mention tags
+      for (const tech of MarkdownSyncService.TECH_KEYWORDS) {
+        if (allContent.includes(tech)) {
+          tags.add(tech)
+        }
+      }
+    }
+
+    return Array.from(tags).sort()
+  }
+
+  /**
+   * Generate or update an entity file in memory/knowledge/entities/.
+   * Creates a markdown file with YAML frontmatter and backlinks.
+   */
+  async generateEntityFile(entity: ExtractedEntity, date: string): Promise<void> {
+    const fileName = `${entity.normalizedName}.md`
+    const filePath = join(this.workspacePath, 'memory', 'knowledge', 'entities', fileName)
+
+    // Check if file already exists to merge backlinks
+    let existingBacklinks: string[] = []
+    try {
+      const existing = await readFile(filePath, 'utf-8')
+      // Extract existing backlinks
+      const backlinkSection = existing.match(/## Backlinks\n([\s\S]*?)(?=\n##|$)/)
+      if (backlinkSection) {
+        existingBacklinks = backlinkSection[1]
+          .split('\n')
+          .filter((line) => line.startsWith('- '))
+          .map((line) => line.trim())
+      }
+    } catch {
+      // File doesn't exist yet, that's fine
+    }
+
+    // Add today's date as a backlink if not present
+    const todayLink = `- [[episodes/${date}|${date}]]`
+    if (!existingBacklinks.includes(todayLink)) {
+      existingBacklinks.push(todayLink)
+    }
+
+    const content = [
+      '---',
+      `name: ${entity.name}`,
+      `type: ${entity.type}`,
+      `last_seen: ${date}`,
+      `total_mentions: ${entity.mentions}`,
+      '---',
+      '',
+      `# ${entity.name.charAt(0).toUpperCase() + entity.name.slice(1)}`,
+      '',
+      `Type: ${entity.type}`,
+      '',
+      '## Backlinks',
+      ...existingBacklinks,
+      '',
+    ].join('\n')
+
+    await writeFile(filePath, content, 'utf-8')
   }
 
   // ==========================================================================
@@ -296,7 +526,8 @@ export class MarkdownSyncService extends EventEmitter {
    */
   private formatDailyLogMarkdown(
     metadata: DailyLogMetadata,
-    sessions: SessionGroup[]
+    sessions: SessionGroup[],
+    tags: string[] = []
   ): string {
     const lines: string[] = []
 
@@ -306,6 +537,9 @@ export class MarkdownSyncService extends EventEmitter {
     lines.push(`channels: [${metadata.channels.join(', ')}]`)
     lines.push(`sessions: ${metadata.sessions}`)
     lines.push(`total_messages: ${metadata.totalMessages}`)
+    if (tags.length > 0) {
+      lines.push(`tags: [${tags.join(', ')}]`)
+    }
     lines.push('---')
     lines.push('')
 
@@ -372,5 +606,12 @@ export class MarkdownSyncService extends EventEmitter {
     } catch {
       return false
     }
+  }
+
+  /**
+   * Escape special regex characters in a string.
+   */
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
 }

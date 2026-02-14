@@ -144,6 +144,12 @@ export interface TelegramConfig {
   webhookUrl?: string
   /** Trigger pattern for group chats. */
   triggerPattern: string
+  /** Routing rules for multi-group message routing. */
+  routingRules: TelegramRoutingRule[]
+  /** Whether to auto-create groups for unmatched categories. */
+  autoCreateGroups: boolean
+  /** Fallback chat ID when no routing rule matches. */
+  fallbackChatId: string | null
 }
 
 /** Callback query from inline keyboard. */

@@ -255,7 +255,9 @@ app.whenReady().then(() => {
       console.log('[Main] Hooks Service initialized')
 
       // Markdown Sync Service
-      markdownSyncService = new MarkdownSyncService(episodeStore)
+      const workspacePath = (agentIdentityService as any).getWorkspacePath?.()
+        || join(app.getPath('userData'), 'whatsapp-workspace')
+      markdownSyncService = new MarkdownSyncService(episodeStore, workspacePath)
       console.log('[Main] Markdown Sync initialized')
 
       // Context Manager
@@ -349,6 +351,11 @@ app.whenReady().then(() => {
       // Wire skills into the agent service
       whatsappAgentService.setSkillsServices(skillsManager, skillsConfigStore, patternCrystallizer)
 
+      // Wire Unified Agent Architecture memory services into the agent
+      if (episodeStore && hooksService && contextManagerService) {
+        whatsappAgentService.setMemoryServices(episodeStore, hooksService, contextManagerService)
+      }
+
       skillExecutor.start()
       console.log('[Main] Self-extension services initialized')
 
@@ -381,11 +388,28 @@ app.whenReady().then(() => {
       }
       channelRouter.registerChannel(whatsappTransport)
 
+      // Register fallback Telegram IPC handlers (for when Telegram is not configured).
+      // These return safe defaults so the renderer never finds an unhandled channel.
+      // When Telegram IS configured, registerTelegramHandlers() removes and replaces them.
+      const { TELEGRAM_IPC_CHANNELS: TG_CHANNELS } = await import('@shared/telegram-ipc-channels')
+      const telegramFallbackHandler = async () => ({
+        success: true,
+        data: { status: 'disconnected' },
+      })
+      for (const channel of [TG_CHANNELS.TELEGRAM_GET_STATUS, TG_CHANNELS.TELEGRAM_CONFIG_GET]) {
+        ipcMain.handle(channel, telegramFallbackHandler)
+      }
+
       // Initialize Telegram if configured
       const telegramConfig = (configStore.get('whatsapp') as any)?.telegram
       if (telegramConfig?.enabled && telegramConfig?.botToken) {
         console.log('[Main] Initializing Telegram service...')
-        telegramService = new TelegramService(telegramConfig)
+        telegramService = new TelegramService({
+          ...telegramConfig,
+          routingRules: telegramConfig.routingRules ?? [],
+          autoCreateGroups: telegramConfig.autoCreateGroups ?? false,
+          fallbackChatId: telegramConfig.fallbackChatId ?? null,
+        })
         channelRouter.registerChannel(telegramService)
 
         // Wire Telegram messages to agent service

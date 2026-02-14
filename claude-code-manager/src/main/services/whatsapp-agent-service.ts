@@ -30,6 +30,13 @@ import type { VectorMemoryService } from './vector-memory-service'
 import type { AgentIdentityService } from './agent-identity-service'
 import type { GroupQueueService } from './group-queue-service'
 import type { ConfigStore } from './config-store'
+import type { SkillsManagerService } from './skills-manager-service'
+import type { SkillsConfigStore } from './skills-config-store'
+import type { PatternCrystallizerService } from './pattern-crystallizer-service'
+import type { EpisodeStoreService } from './episode-store-service'
+import type { HooksService, HookContext } from './hooks-service'
+import type { ContextManagerService, AssembleContextOptions } from './context-manager-service'
+import { createAgentSelfToolsMcpServer } from './agent-self-tools-mcp'
 
 // Agent SDK types
 import type { Options, SDKUserMessage, Query } from '@anthropic-ai/claude-agent-sdk'
@@ -173,6 +180,19 @@ export class WhatsAppAgentService extends EventEmitter {
   /** Active abort controllers for running queries. */
   private activeAbortControllers: Map<string, AbortController> = new Map()
 
+  /** Self-extension services (set after construction via setSkillsServices). */
+  private skillsManager: SkillsManagerService | null = null
+  private skillsConfigStore: SkillsConfigStore | null = null
+  private patternCrystallizer: PatternCrystallizerService | null = null
+
+  /** LLM router for cost-optimized model routing (set via setLlmRouter). */
+  private llmRouter: import('./llm-router-service').LlmRouterService | null = null
+
+  /** Unified Agent Architecture memory services (set via setMemoryServices). */
+  private episodeStore: EpisodeStoreService | null = null
+  private hooksService: HooksService | null = null
+  private contextManager: ContextManagerService | null = null
+
   constructor(
     whatsappService: WhatsAppService,
     memoryService: VectorMemoryService,
@@ -186,6 +206,45 @@ export class WhatsAppAgentService extends EventEmitter {
     this.identityService = identityService
     this.queueService = queueService
     this.configStore = configStore
+  }
+
+  // ==========================================================================
+  // Self-Extension Integration
+  // ==========================================================================
+
+  /**
+   * Set the skills services for self-extension capabilities.
+   * Called after construction because these services are initialized later.
+   */
+  setSkillsServices(
+    skillsManager: SkillsManagerService,
+    skillsConfigStore: SkillsConfigStore,
+    patternCrystallizer: PatternCrystallizerService,
+  ): void {
+    this.skillsManager = skillsManager
+    this.skillsConfigStore = skillsConfigStore
+    this.patternCrystallizer = patternCrystallizer
+    console.log(LOG_PREFIX, 'Skills services wired')
+  }
+
+  setLlmRouter(router: import('./llm-router-service').LlmRouterService): void {
+    this.llmRouter = router
+    console.log(LOG_PREFIX, 'LLM Router wired')
+  }
+
+  /**
+   * Set the Unified Agent Architecture memory services.
+   * Called after construction because these services are initialized later.
+   */
+  setMemoryServices(
+    episodeStore: EpisodeStoreService,
+    hooksService: HooksService,
+    contextManager: ContextManagerService,
+  ): void {
+    this.episodeStore = episodeStore
+    this.hooksService = hooksService
+    this.contextManager = contextManager
+    console.log(LOG_PREFIX, 'Memory services wired into WhatsApp Agent')
   }
 
   // ==========================================================================
@@ -203,21 +262,58 @@ export class WhatsAppAgentService extends EventEmitter {
 
     // Listen for incoming messages and enqueue for processing
     this.whatsappService.on('message-received', (msg: WhatsAppMessage) => {
-      if (msg.isFromMe) return
+      console.log(LOG_PREFIX, `[MSG-IN] Received message-received event: jid=${msg.conversationJid}, fromMe=${msg.isFromMe}, content="${msg.content.substring(0, 50)}"`)
+      const config = this.configStore.getWhatsAppConfig()
 
+      // For self-chat: allow fromMe messages (user talks to themselves)
+      // For all other chats: skip messages from the bot itself
       const conversation = this.whatsappService.getConversation(msg.conversationJid)
-      if (!conversation?.isRegistered) return
+      console.log(LOG_PREFIX, `[MSG-IN] Conversation: chatType=${conversation?.chatType}, isRegistered=${conversation?.isRegistered}, requiresTrigger=${conversation?.requiresTrigger}, selfChatMode=${config.selfChatMode}`)
+      if (msg.isFromMe) {
+        const isSelfChat = conversation?.chatType === 'self'
+        if (!isSelfChat || !config.selfChatMode) {
+          console.log(LOG_PREFIX, `[MSG-IN] SKIP: fromMe but not self-chat or selfChatMode disabled`)
+          return
+        }
+      }
 
-      // Check trigger pattern for groups
-      if (conversation.requiresTrigger && conversation.triggerPattern) {
-        const triggerRegex = new RegExp(conversation.triggerPattern, 'i')
-        if (!triggerRegex.test(msg.content)) return
+      if (!conversation?.isRegistered) {
+        // Auto-register self-chat conversations when selfChatMode is enabled
+        if (conversation?.chatType === 'self' && config.selfChatMode) {
+          console.log(LOG_PREFIX, 'Auto-registering self-chat conversation:', msg.conversationJid)
+          this.whatsappService.registerConversation(msg.conversationJid, {
+            isRegistered: true,
+            chatType: 'self',
+            agentMode: config.defaultAgentMode || 'auto',
+            requiresTrigger: true,
+            triggerPattern: config.defaultTriggerPattern || '^@Claude\\b',
+          })
+        } else {
+          console.log(LOG_PREFIX, `[MSG-IN] SKIP: not registered and not auto-registerable`)
+          return
+        }
+      }
+
+      // Re-fetch conversation after potential registration
+      const updatedConversation = this.whatsappService.getConversation(msg.conversationJid)
+
+      // Check trigger pattern
+      if (updatedConversation?.requiresTrigger && updatedConversation?.triggerPattern) {
+        const triggerRegex = new RegExp(updatedConversation.triggerPattern, 'i')
+        console.log(LOG_PREFIX, `[MSG-IN] Trigger check: pattern="${updatedConversation.triggerPattern}", content="${msg.content.substring(0, 50)}", matches=${triggerRegex.test(msg.content)}`)
+        if (!triggerRegex.test(msg.content)) {
+          console.log(LOG_PREFIX, `[MSG-IN] SKIP: trigger pattern not matched`)
+          return
+        }
       }
 
       // Self-chat mode check
-      const config = this.configStore.getWhatsAppConfig()
-      if (conversation.chatType === 'self' && !config.selfChatMode) return
+      if (updatedConversation?.chatType === 'self' && !config.selfChatMode) {
+        console.log(LOG_PREFIX, `[MSG-IN] SKIP: self-chat mode disabled`)
+        return
+      }
 
+      console.log(LOG_PREFIX, `[MSG-IN] ENQUEUE: ${msg.conversationJid}`)
       this.queueService.enqueueMessage(msg.conversationJid)
     })
 
@@ -233,19 +329,26 @@ export class WhatsAppAgentService extends EventEmitter {
    * when it is this conversation's turn to run.
    */
   async processMessages(conversationJid: string): Promise<void> {
+    console.log(LOG_PREFIX, `[PROCESS] processMessages called for: ${conversationJid}`)
     const conversation = this.whatsappService.getConversation(conversationJid)
     if (!conversation) {
       console.warn(LOG_PREFIX, `Conversation not found: ${conversationJid}`)
       return
     }
 
-    // Get unprocessed inbound messages since last agent response
+    // Get unprocessed messages since last agent response
     const since = conversation.lastAgentResponseAt ?? 0
     const allMessages = this.whatsappService.getMessages(conversationJid, since)
+    const isSelfChat = conversation.chatType === 'self'
+    console.log(LOG_PREFIX, `[PROCESS] since=${since}, allMessages=${allMessages.length}, isSelfChat=${isSelfChat}`)
+    for (const m of allMessages) {
+      console.log(LOG_PREFIX, `[PROCESS]   msg: id=${m.id}, isProcessed=${m.isProcessed}, isFromMe=${m.isFromMe}, direction=${m.direction}, content="${m.content.substring(0, 40)}"`)
+    }
     const unprocessed = allMessages.filter(
-      (m) => !m.isProcessed && !m.isFromMe && m.direction === 'inbound',
+      (m) => !m.isProcessed && (isSelfChat ? m.isFromMe : (!m.isFromMe && m.direction === 'inbound')),
     )
 
+    console.log(LOG_PREFIX, `[PROCESS] unprocessed=${unprocessed.length}`)
     if (unprocessed.length === 0) {
       return
     }
@@ -438,6 +541,50 @@ export class WhatsAppAgentService extends EventEmitter {
       // Non-critical
     }
 
+    // 0a. Insert user message episodes (sync writes for immediate consistency)
+    if (this.episodeStore) {
+      const sessionId = this.sessions.get(jid) ?? `wa-${jid}-${Date.now()}`
+      for (const msg of messages) {
+        try {
+          this.episodeStore.insertEpisode(
+            sessionId,
+            'whatsapp',
+            jid,
+            'user',
+            msg.content,
+          )
+        } catch (err) {
+          console.warn(LOG_PREFIX, 'Failed to insert user episode:', err)
+        }
+      }
+    }
+
+    // 0b. Run pre-response hooks (can abort the operation)
+    if (this.hooksService) {
+      const hookCtx: HookContext = {
+        event: 'agent:respond',
+        phase: 'pre',
+        data: {
+          jid,
+          mode,
+          messageCount: messages.length,
+          latestContent: messages[messages.length - 1]?.content ?? '',
+        },
+        timestamp: new Date().toISOString(),
+      }
+      const hookResult = await this.hooksService.run('agent:respond', 'pre', hookCtx)
+      if (hookResult && !hookResult.continue) {
+        console.log(LOG_PREFIX, `Pre-response hook aborted execution for ${jid}`)
+        this.emit('stream-chunk', {
+          conversationJid: jid,
+          type: 'complete',
+          text: '',
+          mode,
+        } as AgentStreamEvent)
+        return
+      }
+    }
+
     // 1. Build system prompt context
     const systemPrompt = await this.buildSystemPrompt(conversation, messages, mode, modeConfig)
 
@@ -459,6 +606,17 @@ export class WhatsAppAgentService extends EventEmitter {
     const memoryMcpServer = this.createMemoryMcpServer(sdk)
     const bvsMcpServer = this.createBvsMcpServer(sdk)
     const taskMcpServer = this.createTaskMcpServer(sdk)
+
+    // Create self-tools MCP server if skills services are available
+    let selfToolsMcpServer: ReturnType<typeof sdk.createSdkMcpServer> | null = null
+    if (this.skillsManager && this.skillsConfigStore) {
+      selfToolsMcpServer = createAgentSelfToolsMcpServer(
+        sdk,
+        this.skillsManager,
+        this.skillsConfigStore,
+        this.patternCrystallizer,
+      )
+    }
 
     // 6. Build SDK options
     const abortController = new AbortController()
@@ -493,6 +651,7 @@ export class WhatsAppAgentService extends EventEmitter {
         'memory-tools': memoryMcpServer,
         'bvs-tools': bvsMcpServer,
         'task-tools': taskMcpServer,
+        ...(selfToolsMcpServer ? { 'agent-self-tools': selfToolsMcpServer } : {}),
       },
       allowedTools: ['mcp__*'],
       ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
@@ -608,6 +767,46 @@ export class WhatsAppAgentService extends EventEmitter {
       )
     }
 
+    // 9a. Insert assistant response episode + WAL entry for async embedding
+    if (this.episodeStore && responseText.trim()) {
+      const epSessionId = this.sessions.get(jid) ?? sessionId ?? `wa-${jid}-${Date.now()}`
+      try {
+        const episodeId = this.episodeStore.insertEpisode(
+          epSessionId,
+          'whatsapp',
+          jid,
+          'assistant',
+          responseText.trim(),
+        )
+        // Queue WAL entry for async embedding
+        this.episodeStore.insertWalEntry(
+          episodeId,
+          'embed_episode',
+          { sessionId: epSessionId, channel: 'whatsapp', sourceId: jid },
+        )
+      } catch (err) {
+        console.warn(LOG_PREFIX, 'Failed to insert assistant episode:', err)
+      }
+    }
+
+    // 9b. Fire-and-forget post-response hooks
+    if (this.hooksService) {
+      const postCtx: HookContext = {
+        event: 'agent:respond',
+        phase: 'post',
+        data: {
+          jid,
+          mode,
+          responseLength: responseText.length,
+          costUsd: totalCostUsd,
+        },
+        timestamp: new Date().toISOString(),
+      }
+      this.hooksService.run('agent:respond', 'post', postCtx).catch((err) =>
+        console.warn(LOG_PREFIX, 'Post-response hook error:', err),
+      )
+    }
+
     // 10. Update conversation metadata
     this.whatsappService.updateConversation(jid, {
       lastAgentResponseAt: Date.now(),
@@ -632,12 +831,31 @@ export class WhatsAppAgentService extends EventEmitter {
       }
     }
 
-    // 14. Index conversation into memory (async, non-blocking)
-    const memConfig = config.memory
-    if (memConfig.enabled && memConfig.autoIndexConversations) {
-      this.memoryService
-        .indexConversation(jid, messages)
-        .catch((err) => console.warn(LOG_PREFIX, 'Memory indexing failed:', err))
+    // 14. Record pattern observation for crystallization
+    if (this.patternCrystallizer) {
+      this.patternCrystallizer.recordObservation({
+        sessionId: sessionId ?? 'unknown',
+        goalSummary: messages.map((m) => m.content).join(' ').slice(0, 200),
+        toolSequence: ['sdk_query'], // Tool sequence would be populated from SDK events in production
+        toolArgs: [],
+        outcome: responseText.trim() ? 'success' : 'failure',
+        durationMs: Date.now() - Date.now(), // Would use actual timing
+        costUsd: totalCostUsd,
+        timestamp: Date.now(),
+        source: 'whatsapp',
+      })
+    }
+
+    // 15. Index conversation into memory (async, non-blocking)
+    // Only use legacy vector indexing if episodeStore is not available
+    // (when episodeStore is present, the WAL entry from step 9a handles async embedding)
+    if (!this.episodeStore) {
+      const memConfig = config.memory
+      if (memConfig.enabled && memConfig.autoIndexConversations) {
+        this.memoryService
+          .indexConversation(jid, messages)
+          .catch((err) => console.warn(LOG_PREFIX, 'Memory indexing failed:', err))
+      }
     }
 
     // 15. Emit stream complete
@@ -681,10 +899,41 @@ export class WhatsAppAgentService extends EventEmitter {
       parts.push(memoryContext)
     }
 
-    // 3. Conversation cost summary
+    // 3. Available skills context
+    if (this.skillsManager) {
+      const skills = this.skillsManager.listSkills().filter((s) => s.active)
+      if (skills.length > 0) {
+        const skillLines = skills.map((s) => {
+          const triggers = s.frontmatter.triggers
+            .map((t) => t.command || t.cron || t.keywords?.join(',') || t.event || '')
+            .filter(Boolean)
+            .join(', ')
+          return `- ${s.frontmatter.name} (${s.id}): ${s.frontmatter.description} [triggers: ${triggers}]`
+        })
+        parts.push(
+          `# Available Skills\n\nYou have ${skills.length} skills available. Use the agent-self-tools MCP to manage them.\n\n${skillLines.join('\n')}`,
+        )
+      }
+    }
+
+    // 4. Conversation cost summary
     const costSummary = this.getCostSummary(conversation.jid)
     if (costSummary) {
       parts.push(costSummary)
+    }
+
+    // 5. Context Manager budgeting (if available)
+    if (this.contextManager) {
+      const assembled = this.contextManager.assembleContext({
+        systemPrompt: parts[0] ?? '',
+        memoryContext: memoryContext ?? '',
+        recentMessages: messages.map((m) => ({
+          role: m.isFromMe ? 'assistant' : 'user',
+          content: m.content,
+        })),
+      })
+      // Return the budgeted assembly as a single string
+      return assembled.sections.map((s) => s.content).join('\n\n---\n\n')
     }
 
     return parts.join('\n\n---\n\n')

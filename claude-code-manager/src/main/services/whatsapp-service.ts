@@ -34,6 +34,7 @@ import makeWASocket, {
   type ConnectionState,
   type BaileysEventMap,
 } from '@whiskeysockets/baileys'
+import QRCode from 'qrcode'
 import type { Boom } from '@hapi/boom'
 import type {
   WhatsAppConnectionState,
@@ -425,25 +426,36 @@ export class WhatsAppService extends EventEmitter {
       }
     })
 
-    // --- Incoming messages ---
-    sock.ev.on('messages.upsert', (upsert: BaileysEventMap['messages.upsert']) => {
-      this.handleMessagesUpsert(upsert)
-    })
+    // --- Use Baileys v7 process() for bufferable events ---
+    sock.ev.process(async (events) => {
+      const eventKeys = Object.keys(events)
+      console.log(LOG_PREFIX, `[ev.process] Events received: ${eventKeys.join(', ')}`)
 
-    // --- Chat updates (for conversation metadata) ---
-    sock.ev.on('chats.upsert', (chats: BaileysEventMap['chats.upsert']) => {
-      for (const chat of chats) {
-        if (chat.id) {
-          this.ensureConversation(chat.id, chat.name || undefined)
+      // --- Incoming messages ---
+      if (events['messages.upsert']) {
+        const upsert = events['messages.upsert']
+        console.log(LOG_PREFIX, `messages.upsert: type=${upsert.type}, count=${upsert.messages.length}`)
+        for (const m of upsert.messages) {
+          console.log(LOG_PREFIX, `  msg: from=${m.key.remoteJid}, fromMe=${m.key.fromMe}, id=${m.key.id}, hasMessage=${!!m.message}`)
+        }
+        this.handleMessagesUpsert(upsert)
+      }
+
+      // --- Chat updates ---
+      if (events['chats.upsert']) {
+        for (const chat of events['chats.upsert']) {
+          if (chat.id) {
+            this.ensureConversation(chat.id, chat.name || undefined)
+          }
         }
       }
-    })
 
-    // --- Contact updates ---
-    sock.ev.on('contacts.upsert', (contacts: BaileysEventMap['contacts.upsert']) => {
-      for (const contact of contacts) {
-        if (contact.id) {
-          this.ensureConversation(contact.id, contact.name ?? contact.notify ?? undefined)
+      // --- Contact updates ---
+      if (events['contacts.upsert']) {
+        for (const contact of events['contacts.upsert']) {
+          if (contact.id) {
+            this.ensureConversation(contact.id, contact.name ?? contact.notify ?? undefined)
+          }
         }
       }
     })
@@ -455,10 +467,25 @@ export class WhatsAppService extends EventEmitter {
 
   private handleConnectionUpdate(update: Partial<ConnectionState>): void {
     const { connection, lastDisconnect, qr } = update
+    console.log(LOG_PREFIX, 'Connection update:', JSON.stringify({ connection, hasQr: !!qr, qrLen: qr?.length, keys: Object.keys(update) }))
 
     if (qr) {
-      this.updateConnectionState({ status: 'qr_ready', qrCode: qr })
-      this.emit('qr-code', qr)
+      console.log(LOG_PREFIX, 'QR code received, length:', qr.length)
+      // Baileys emits raw QR text data - convert to a data URL for the renderer
+      QRCode.toDataURL(qr, { width: 280, margin: 2 })
+        .then((dataUrl: string) => {
+          console.log(LOG_PREFIX, 'QR code converted to data URL, length:', dataUrl.length)
+          this.updateConnectionState({ status: 'qr_ready', qrCode: dataUrl })
+          this.emit('connection-update', this.connectionState)
+          this.emit('qr-code', dataUrl)
+        })
+        .catch((err: Error) => {
+          console.error(LOG_PREFIX, 'Failed to convert QR code:', err)
+          // Fall back to raw string
+          this.updateConnectionState({ status: 'qr_ready', qrCode: qr })
+          this.emit('connection-update', this.connectionState)
+          this.emit('qr-code', qr)
+        })
     }
 
     if (connection === 'open') {
@@ -617,10 +644,14 @@ export class WhatsAppService extends EventEmitter {
       }
 
       // Debounce inbound messages for registered conversations
-      if (convo?.isRegistered && !waMessage.isFromMe) {
+      // For self-chat: treat fromMe messages as inbound (user talking to themselves)
+      const isSelfChat = convo?.chatType === 'self'
+      const shouldDebounce = convo?.isRegistered && (!waMessage.isFromMe || isSelfChat)
+      console.log(LOG_PREFIX, `[MSG-ROUTE] jid=${waMessage.conversationJid}, isFromMe=${waMessage.isFromMe}, isSelfChat=${isSelfChat}, isRegistered=${convo?.isRegistered}, shouldDebounce=${shouldDebounce}, content="${waMessage.content.substring(0, 50)}"`)
+      if (shouldDebounce) {
         this.debounceMessage(waMessage)
       } else {
-        // For non-registered or outbound: emit immediately
+        console.log(LOG_PREFIX, `[MSG-ROUTE] Emitting message-received directly`)
         this.emit('message-received', waMessage)
       }
     }

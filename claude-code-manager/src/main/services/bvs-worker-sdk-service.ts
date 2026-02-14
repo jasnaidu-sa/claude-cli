@@ -113,6 +113,30 @@ async function getSDK(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')
   return sdkModule
 }
 
+/**
+ * Get the path to the Claude Code CLI executable bundled with the SDK.
+ * In packaged Electron apps, the SDK is extracted from asar to app.asar.unpacked,
+ * so we need to adjust the path accordingly.
+ */
+function getClaudeCodeCliPath(): string | undefined {
+  try {
+    const sdkPath = require.resolve('@anthropic-ai/claude-agent-sdk')
+    const sdkDir = path.dirname(sdkPath)
+    let cliPath = path.join(sdkDir, 'cli.js')
+
+    // In packaged Electron apps, the SDK is in asarUnpack, so the path
+    // should be app.asar.unpacked instead of app.asar
+    if (cliPath.includes('app.asar') && !cliPath.includes('app.asar.unpacked')) {
+      cliPath = cliPath.replace('app.asar', 'app.asar.unpacked')
+    }
+
+    return cliPath
+  } catch (e) {
+    console.warn('[BvsWorkerSDK] Could not resolve SDK CLI path:', e)
+    return undefined
+  }
+}
+
 // ============================================================================
 // BVS Worker SDK Service
 // ============================================================================
@@ -409,12 +433,32 @@ export class BvsWorkerSdkService extends EventEmitter {
 
       // Build SDK options - use mcpServers NOT tools
       // mcpServers is Record<string, McpServerConfig> - object not array
+      //
+      // IMPORTANT: In packaged Electron apps, environment variables from the system
+      // may not be inherited. We explicitly pass them here to ensure the SDK subprocess
+      // has access to ANTHROPIC_API_KEY and other required variables.
+      //
+      // For OAuth authentication, the CLI reads credentials from ~/.claude/.credentials.json
+      const userHome = process.env.HOME || process.env.USERPROFILE || ''
+      const sdkEnv: Record<string, string | undefined> = {
+        ...process.env,
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
+        HOME: userHome,
+        USERPROFILE: userHome,
+        PATH: process.env.PATH,
+      }
+
+      // Get the bundled CLI path for packaged apps
+      const cliPath = getClaudeCodeCliPath()
+
       const options: Options = {
         model: sdkModel,
         maxTurns,
         cwd,
         includePartialMessages: true,  // Enable streaming
         permissionMode: 'bypassPermissions',  // Auto-approve tool use for worker
+        allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
         mcpServers: {
           [`bvs-worker-${workerId}`]: workerMcpServer,  // Custom worker tools
           ...userMcpConfig  // External MCP servers (only for database sections)
@@ -422,7 +466,10 @@ export class BvsWorkerSdkService extends EventEmitter {
         // Allow all tools from our MCP servers (mcp__<server-name>__<tool-name> format)
         allowedTools: [
           'mcp__*'  // All MCP tools
-        ]
+        ],
+        env: sdkEnv, // Pass environment to SDK subprocess
+        // Specify the bundled CLI path for packaged Electron apps
+        ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
       }
 
       // Create message generator (AsyncGenerator required for MCP tools to work)
@@ -446,7 +493,9 @@ export class BvsWorkerSdkService extends EventEmitter {
         cwd: options.cwd,
         permissionMode: options.permissionMode,
         mcpServers: Object.keys(options.mcpServers || {}),
-        allowedTools: options.allowedTools
+        allowedTools: options.allowedTools,
+        hasAnthropicApiKey: !!sdkEnv.ANTHROPIC_API_KEY,
+        hasClaudeApiKey: !!sdkEnv.CLAUDE_API_KEY,
       })
 
       // Execute query with streaming - wrapped in try-catch for SDK subprocess errors

@@ -168,9 +168,16 @@ export const useWhatsAppStore = create<WhatsAppStore>()(
       connect: async () => {
         try {
           console.log(LOG, 'Connecting...')
+          // Show QR modal immediately so user can see status
+          set({ showQrModal: true })
           const result = await window.electron.whatsapp.connect()
           if (!result.success) {
             console.error(LOG, 'Connect failed:', result.error)
+          }
+          // Fetch current state (may already have QR code from auto-connect)
+          const statusResult = await window.electron.whatsapp.getStatus()
+          if (statusResult.success && statusResult.data) {
+            set({ connectionState: statusResult.data })
           }
         } catch (err) {
           console.error(LOG, 'Connect error:', err)
@@ -279,6 +286,19 @@ export const useWhatsAppStore = create<WhatsAppStore>()(
 
       initListeners: () => {
         const unsubs: Array<() => void> = []
+
+        // Fetch current connection state on mount (may have QR from auto-connect)
+        window.electron.whatsapp.getStatus().then((result) => {
+          if (result.success && result.data) {
+            console.log(LOG, 'Initial status:', result.data.status)
+            set({ connectionState: result.data })
+            if (result.data.status === 'qr_ready') {
+              set({ showQrModal: true })
+            }
+          }
+        }).catch((err) => {
+          console.error(LOG, 'Failed to fetch initial status:', err)
+        })
 
         // Connection state changes
         unsubs.push(

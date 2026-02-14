@@ -670,7 +670,7 @@ export class IdeasManager extends EventEmitter {
   /**
    * Update Agent SDK session ID for conversation continuity
    */
-  updateSessionId(id: string, sessionId: string): Idea {
+  updateSessionId(id: string, sessionId: string | undefined): Idea {
     const idea = this.ideas.get(id)
     if (!idea) {
       throw new Error(`Idea not found: ${id}`)

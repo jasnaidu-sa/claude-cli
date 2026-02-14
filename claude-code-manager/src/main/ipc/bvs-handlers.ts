@@ -36,10 +36,17 @@ export function registerBvsHandlers(): void {
     BVS_IPC_CHANNELS.BVS_START_PLANNING,
     async (_event: IpcMainInvokeEvent, projectPath: string, forceNew: boolean = false, bvsProjectId?: string) => {
       try {
+        console.log('[BVS-IPC] Starting planning session:', { projectPath, forceNew, bvsProjectId })
         const session = await planningAgent.createSession(projectPath, forceNew, bvsProjectId)
+        console.log('[BVS-IPC] Returning session to frontend:', {
+          sessionId: session.id,
+          phase: session.phase,
+          messagesCount: session.messages?.length ?? 0,
+        })
         return { success: true, session }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error'
+        console.error('[BVS-IPC] Failed to start planning session:', message)
         return { success: false, error: message }
       }
     }

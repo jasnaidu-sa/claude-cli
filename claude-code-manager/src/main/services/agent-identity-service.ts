@@ -12,7 +12,7 @@ import type {
 import type { ConfigStore } from './config-store'
 
 /** Path to the bundled template workspace files shipped with the application. */
-const TEMPLATE_DIR = join(__dirname, '..', '..', '..', 'whatsapp-workspace')
+const TEMPLATE_DIR = join(__dirname, '..', '..', 'whatsapp-workspace')
 
 /**
  * AgentIdentityService manages loading, caching, and watching the agent

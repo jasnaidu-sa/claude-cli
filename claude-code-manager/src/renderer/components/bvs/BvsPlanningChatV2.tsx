@@ -52,6 +52,7 @@ interface BvsPlanningChatV2Props {
   forceNew?: boolean  // If true, always create a new session (don't resume existing)
   isPrdUpload?: boolean  // If true, show PRD upload UI with drag-drop
   onPlanReady?: (planPath: string) => void
+  onGoToExecution?: () => void  // Navigate directly to execution view
   className?: string
 }
 
@@ -653,6 +654,7 @@ export function BvsPlanningChatV2({
   forceNew = false,
   isPrdUpload = false,
   onPlanReady,
+  onGoToExecution,
   className,
 }: BvsPlanningChatV2Props) {
   // State
@@ -783,10 +785,18 @@ export function BvsPlanningChatV2({
       try {
         // Pass forceNew to skip resuming existing sessions when user wants a new project
         // Pass bvsProjectId to load a specific project's session when resuming
+        console.log('[BvsPlanningChatV2] Initializing session:', { projectPath, forceNew, bvsProjectId })
         const result = await window.electron.bvsPlanning.startSession(projectPath, forceNew, bvsProjectId)
+        console.log('[BvsPlanningChatV2] Session result:', {
+          success: result.success,
+          sessionId: result.session?.id,
+          phase: result.session?.phase,
+          messagesCount: result.session?.messages?.length ?? 0,
+          firstMessagePreview: result.session?.messages?.[0]?.content?.substring(0, 100),
+        })
         if (result.success && result.session) {
           setSession(result.session)
-          setMessages(result.session.messages)
+          setMessages(result.session.messages || [])
           // Reset processing state when session loads
           setIsProcessing(false)
           setStreamingContent('')
@@ -795,6 +805,7 @@ export function BvsPlanningChatV2({
           setError(result.error || 'Failed to start planning session')
         }
       } catch (err) {
+        console.error('[BvsPlanningChatV2] Failed to initialize session:', err)
         setError('Failed to connect to planning service')
       }
     }
@@ -1343,13 +1354,26 @@ export function BvsPlanningChatV2({
       {/* Complete state */}
       {session?.phase === 'complete' && (
         <div className="p-4 border-t border-border bg-green-500/10">
-          <div className="flex items-center gap-2 text-green-400">
-            <CheckCircle className="h-5 w-5" />
-            <span className="font-medium">Plan created successfully!</span>
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2 text-green-400">
+                <CheckCircle className="h-5 w-5" />
+                <span className="font-medium">Plan created successfully!</span>
+              </div>
+              <p className="text-sm text-muted-foreground mt-1">
+                The plan has been written and is ready for execution.
+              </p>
+            </div>
+            {onGoToExecution && (
+              <Button
+                onClick={onGoToExecution}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                <ChevronRight className="h-4 w-4 mr-1" />
+                Start Execution
+              </Button>
+            )}
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            The plan has been written to .bvs/plan.md
-          </p>
         </div>
       )}
     </div>

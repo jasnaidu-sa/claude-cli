@@ -180,6 +180,44 @@ async function getSDK(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')
   return sdkModule
 }
 
+/**
+ * Get the path to the Claude Code CLI executable bundled with the SDK.
+ * In packaged Electron apps, the SDK is extracted from asar to app.asar.unpacked,
+ * so we need to adjust the path accordingly.
+ */
+function getClaudeCodeCliPath(): string | undefined {
+  try {
+    // The SDK's cli.js is the bundled Claude Code CLI
+    const sdkPath = require.resolve('@anthropic-ai/claude-agent-sdk')
+    const sdkDir = path.dirname(sdkPath)
+    let cliPath = path.join(sdkDir, 'cli.js')
+
+    console.log('[BvsPlanningV2] SDK path (raw):', sdkPath)
+
+    // In packaged Electron apps, the SDK is in asarUnpack, so the path
+    // should be app.asar.unpacked instead of app.asar
+    // require.resolve returns path inside asar, but files are actually in unpacked
+    if (cliPath.includes('app.asar') && !cliPath.includes('app.asar.unpacked')) {
+      cliPath = cliPath.replace('app.asar', 'app.asar.unpacked')
+      console.log('[BvsPlanningV2] Adjusted CLI path for packaged app:', cliPath)
+    }
+
+    console.log('[BvsPlanningV2] CLI path:', cliPath)
+
+    return cliPath
+  } catch (e) {
+    console.warn('[BvsPlanningV2] Could not resolve SDK CLI path:', e)
+    return undefined
+  }
+}
+
+/**
+ * Get the user's home directory path for .claude credentials
+ */
+function getClaudeHomePath(): string {
+  return path.join(process.env.HOME || process.env.USERPROFILE || '', '.claude')
+}
+
 // ============================================================================
 // Project Management Utilities
 // ============================================================================
@@ -1008,13 +1046,20 @@ export class BvsPlanningAgentV2 extends EventEmitter {
     if (bvsProjectId) {
       const projectDir = path.join(projectsDir, bvsProjectId)
       const sessionPath = path.join(projectDir, BVS_PROJECT_FILES.PLANNING_SESSION)
+      console.log('[BvsPlanningV2] Attempting to load session from:', sessionPath)
       try {
         const content = await fs.readFile(sessionPath, 'utf-8')
         const session = JSON.parse(content) as PlanningSessionV2
-        console.log('[BvsPlanningV2] Loading specific project session:', bvsProjectId)
+        console.log('[BvsPlanningV2] Loaded session for project:', bvsProjectId, {
+          sessionId: session.id,
+          phase: session.phase,
+          messagesCount: session.messages?.length ?? 0,
+          hasProjectDir: !!session.projectDir,
+          projectDir: session.projectDir,
+        })
         return session
       } catch (error) {
-        console.warn('[BvsPlanningV2] Failed to load specific project:', bvsProjectId, error)
+        console.warn('[BvsPlanningV2] Failed to load specific project:', bvsProjectId, 'path:', sessionPath, 'error:', error)
         return null
       }
     }
@@ -1065,11 +1110,27 @@ export class BvsPlanningAgentV2 extends EventEmitter {
   async createSession(projectPath: string, forceNew: boolean = false, bvsProjectId?: string): Promise<PlanningSessionV2> {
     // Try to load existing session (unless forceNew is true)
     if (!forceNew) {
+      console.log('[BvsPlanningV2] Attempting to resume session for:', { projectPath, bvsProjectId })
       const existing = await this.loadSession(projectPath, bvsProjectId)
-      if (existing && existing.phase !== 'complete') {
-        console.log('[BvsPlanningV2] Resuming existing session:', existing.id, 'for project:', bvsProjectId || 'auto-detect')
-        this.sessions.set(existing.id, existing)
-        return existing
+      if (existing) {
+        // If bvsProjectId was provided, always return the session (even if complete)
+        // This allows viewing conversation history for completed projects
+        // Only create new session when no specific project is requested AND phase is complete
+        if (bvsProjectId || existing.phase !== 'complete') {
+          console.log('[BvsPlanningV2] Resuming existing session:', {
+            sessionId: existing.id,
+            projectId: bvsProjectId || 'auto-detect',
+            phase: existing.phase,
+            messagesCount: existing.messages?.length ?? 0,
+            firstMessagePreview: existing.messages?.[0]?.content?.substring(0, 100),
+          })
+          this.sessions.set(existing.id, existing)
+          return existing
+        } else {
+          console.log('[BvsPlanningV2] Found session but phase is complete and no specific project requested:', existing.phase)
+        }
+      } else {
+        console.log('[BvsPlanningV2] No existing session found for:', bvsProjectId)
       }
     } else {
       console.log('[BvsPlanningV2] Force new session requested, skipping resume check')
@@ -1404,17 +1465,47 @@ Respond appropriately for the current phase.`
 
     // Configure SDK options - use mcpServers NOT tools
     // CRITICAL: tools: [...] is IGNORED by Agent SDK - must use mcpServers
+    //
+    // IMPORTANT: In packaged Electron apps, environment variables from the system
+    // may not be inherited. We explicitly pass them here to ensure the SDK subprocess
+    // has access to ANTHROPIC_API_KEY and other required variables.
+    //
+    // For OAuth authentication, the CLI reads credentials from ~/.claude/.credentials.json
+    // We ensure HOME/USERPROFILE is set so the CLI can find it.
+    const userHome = process.env.HOME || process.env.USERPROFILE || ''
+    const sdkEnv: Record<string, string | undefined> = {
+      ...process.env,
+      // Ensure critical env vars are passed (may be set in parent shell but not inherited)
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
+      // Ensure home directory is set for OAuth credentials lookup
+      HOME: userHome,
+      USERPROFILE: userHome,
+      // Add user's PATH to ensure claude CLI can be found
+      PATH: process.env.PATH,
+    }
+
+    // Get the bundled CLI path for packaged apps
+    const cliPath = getClaudeCodeCliPath()
+    console.log('[BvsPlanningV2] Using CLI path:', cliPath || 'default (auto-detect)')
+    console.log('[BvsPlanningV2] User home:', userHome)
+    console.log('[BvsPlanningV2] Credentials path:', path.join(userHome, '.claude', '.credentials.json'))
+
     const options: Options = {
       model: SONNET_MODEL,
       maxTurns: MAX_TURNS,
       cwd: session.projectPath,
       includePartialMessages: true,
       permissionMode: 'bypassPermissions',  // Auto-approve tool use (no interactive prompts)
+      allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
       mcpServers: {
         'bvs-planning-tools': planningMcpServer
       },
       allowedTools: ['mcp__*'], // Allow all MCP tools
       abortController,
+      env: sdkEnv, // Pass environment to SDK subprocess
+      // Specify the bundled CLI path for packaged Electron apps
+      ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
       // NOTE: SDK resume disabled - it loads full conversation history internally
       // which combined with our prompt causes "Prompt is too long" errors
       // ...(session.sdkSessionId ? { resume: session.sdkSessionId } : {})
@@ -1433,6 +1524,13 @@ Respond appropriately for the current phase.`
       } as SDKUserMessage
     }
 
+    // Capture stderr from CLI for debugging
+    let stderrOutput = ''
+    options.stderr = (data: string) => {
+      stderrOutput += data
+      console.log('[BvsPlanningV2] CLI stderr:', data)
+    }
+
     // Log SDK options for debugging
     console.log('[BvsPlanningV2] SDK Options:', {
       model: options.model,
@@ -1440,21 +1538,31 @@ Respond appropriately for the current phase.`
       cwd: options.cwd,
       permissionMode: options.permissionMode,
       mcpServers: Object.keys(options.mcpServers || {}),
-      allowedTools: options.allowedTools
+      allowedTools: options.allowedTools,
+      hasAnthropicApiKey: !!sdkEnv.ANTHROPIC_API_KEY,
+      hasClaudeApiKey: !!sdkEnv.CLAUDE_API_KEY,
+      hasPath: !!sdkEnv.PATH,
+      pathToClaudeCodeExecutable: cliPath,
     })
 
     // Execute query - wrapped in try-catch to handle SDK subprocess errors
     let queryResult: ReturnType<typeof sdk.query>
     try {
+      console.log('[BvsPlanningV2] Starting SDK query...')
+      console.log('[BvsPlanningV2] ANTHROPIC_API_KEY set:', !!process.env.ANTHROPIC_API_KEY)
       queryResult = sdk.query({
         prompt: generateMessages(),
         options
       })
+      console.log('[BvsPlanningV2] SDK query started successfully')
     } catch (initError) {
       console.error('[BvsPlanningV2] SDK query initialization failed:', initError)
+      const errorMessage = initError instanceof Error ? initError.message : 'Unknown error'
+      const fullError = `Failed to start planning agent: ${errorMessage}. Check that ANTHROPIC_API_KEY is set and valid.`
+      console.error('[BvsPlanningV2] Full error:', fullError)
       this.sendToRenderer(BVS_PLANNING_CHANNELS.ERROR, {
         sessionId,
-        error: `Failed to start planning agent: ${initError instanceof Error ? initError.message : 'Unknown error'}`
+        error: fullError
       })
       throw initError
     }
@@ -1584,10 +1692,22 @@ Respond appropriately for the current phase.`
         parsedSections = this.parseSections(responseContent)
         // Don't throw - continue to save the response
       } else {
-        console.error('[BvsPlanningV2] Error processing message:', error)
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        console.error('[BvsPlanningV2] Error processing message:', errorMessage)
+        console.error('[BvsPlanningV2] Error stack:', error instanceof Error ? error.stack : 'No stack')
+        console.error('[BvsPlanningV2] CLI stderr output:', stderrOutput || '(no stderr)')
+
+        // Provide more helpful error message for common issues
+        let userFriendlyError = errorMessage
+        if (errorMessage.includes('exit') && errorMessage.includes('code')) {
+          // Include stderr output in error message for debugging
+          const stderrInfo = stderrOutput ? `\n\nCLI Output:\n${stderrOutput.slice(0, 500)}` : ''
+          userFriendlyError = `Agent process failed: ${errorMessage}.${stderrInfo}\n\nThis may be due to:\n• Missing or invalid ANTHROPIC_API_KEY\n• Network connectivity issues\n• Model unavailability\n\nCheck the developer console for more details.`
+        }
+
         this.sendToRenderer(BVS_PLANNING_CHANNELS.ERROR, {
           sessionId,
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: userFriendlyError
         })
         throw error
       }
@@ -1848,58 +1968,95 @@ If they want changes:
   }
 
   /**
+   * Extract a JSON array from content between a START marker and optional END marker.
+   * If the END marker is missing (truncated response), attempts to recover by:
+   * 1. Finding the last complete JSON object in the array
+   * 2. Closing the array bracket
+   */
+  private extractJsonArray(content: string, startMarker: string, endMarker: string, label: string): unknown[] | undefined {
+    // First try: exact match with both markers
+    const exactMatch = content.match(new RegExp(`${startMarker}\\s*([\\s\\S]*?)\\s*${endMarker}`))
+    if (exactMatch) {
+      try {
+        const parsed = JSON.parse(exactMatch[1].trim())
+        console.log(`[BvsPlanningV2] Parsed ${label} with end marker: ${parsed.length} items`)
+        return parsed
+      } catch (err) {
+        console.warn(`[BvsPlanningV2] Failed to parse ${label} JSON (with end marker):`, err)
+      }
+    }
+
+    // Second try: START marker exists but END marker is missing (truncated response)
+    const startIdx = content.indexOf(startMarker)
+    if (startIdx === -1) return undefined
+
+    console.log(`[BvsPlanningV2] Found ${startMarker} but no ${endMarker} - attempting recovery`)
+    const afterMarker = content.substring(startIdx + startMarker.length)
+    const arrayStart = afterMarker.indexOf('[')
+    if (arrayStart === -1) return undefined
+
+    // Find the last complete top-level object in the array by tracking brace depth
+    let depth = 0
+    let lastCompleteObjectEnd = -1
+    for (let i = arrayStart; i < afterMarker.length; i++) {
+      const ch = afterMarker[i]
+      if (ch === '[' || ch === '{') depth++
+      if (ch === ']' || ch === '}') {
+        depth--
+        // depth === 1 means we just closed a top-level object inside the array
+        if (depth === 1 && ch === '}') {
+          lastCompleteObjectEnd = i
+        }
+        // depth === 0 means the array was properly closed
+        if (depth === 0 && ch === ']') {
+          // Array was actually closed, try parsing
+          try {
+            const parsed = JSON.parse(afterMarker.substring(arrayStart, i + 1))
+            console.log(`[BvsPlanningV2] Parsed ${label} (closed array): ${parsed.length} items`)
+            return parsed
+          } catch {
+            // Fall through to recovery
+          }
+        }
+      }
+    }
+
+    // Recovery: truncate at last complete object and close the array
+    if (lastCompleteObjectEnd > 0) {
+      const truncated = afterMarker.substring(arrayStart, lastCompleteObjectEnd + 1)
+        .replace(/,\s*$/, '') + '\n]'
+      try {
+        const parsed = JSON.parse(truncated)
+        console.log(`[BvsPlanningV2] Recovered ${label} from truncated response: ${parsed.length} items (some may be missing)`)
+        return parsed
+      } catch (err) {
+        console.warn(`[BvsPlanningV2] Failed to recover ${label} from truncated response:`, err)
+      }
+    }
+
+    console.warn(`[BvsPlanningV2] Could not parse ${label} - no complete objects found`)
+    return undefined
+  }
+
+  /**
    * Parse options from response content
    */
   private parseOptions(content: string): PlanningOption[] | undefined {
-    const match = content.match(/---OPTIONS_START---\s*([\s\S]*?)\s*---OPTIONS_END---/)
-    if (match) {
-      try {
-        return JSON.parse(match[1])
-      } catch {
-        console.warn('[BvsPlanningV2] Failed to parse options JSON')
-      }
-    }
-    return undefined
+    return this.extractJsonArray(content, '---OPTIONS_START---', '---OPTIONS_END---', 'options') as PlanningOption[] | undefined
   }
 
   /**
    * Parse questions from response content
    */
   private parseQuestions(content: string): PlanningQuestion[] | undefined {
-    const match = content.match(/---QUESTIONS_START---\s*([\s\S]*?)\s*---QUESTIONS_END---/)
-    if (match) {
-      try {
-        const jsonStr = match[1].trim()
-        console.log('[BvsPlanningV2] Found questions block, parsing...')
-        const parsed = JSON.parse(jsonStr)
-        console.log('[BvsPlanningV2] Parsed questions:', parsed.length, 'questions')
-        return parsed
-      } catch (err) {
-        console.warn('[BvsPlanningV2] Failed to parse questions JSON:', err)
-        console.warn('[BvsPlanningV2] JSON content:', match[1].substring(0, 200))
-      }
-    } else {
-      // Check if there's a questions block that didn't match
-      if (content.includes('QUESTIONS_START')) {
-        console.warn('[BvsPlanningV2] Found QUESTIONS_START but regex did not match')
-      }
-    }
-    return undefined
+    return this.extractJsonArray(content, '---QUESTIONS_START---', '---QUESTIONS_END---', 'questions') as PlanningQuestion[] | undefined
   }
 
   /**
    * Parse sections from response content
    */
   private parseSections(content: string): PlannedSection[] | undefined {
-    const match = content.match(/---SECTIONS_START---\s*([\s\S]*?)\s*---SECTIONS_END---/)
-    if (match) {
-      try {
-        return JSON.parse(match[1])
-      } catch {
-        console.warn('[BvsPlanningV2] Failed to parse sections JSON')
-      }
-    }
-    return undefined
+    return this.extractJsonArray(content, '---SECTIONS_START---', '---SECTIONS_END---', 'sections') as PlannedSection[] | undefined
   }
 
   /**

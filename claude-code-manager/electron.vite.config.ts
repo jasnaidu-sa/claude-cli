@@ -6,7 +6,9 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({
       // Ensure native modules and their dependencies are fully externalized
-      include: ['node-pty', '@anthropic-ai/claude-code']
+      include: ['node-pty', '@anthropic-ai/claude-code', 'sharp'],
+      // ESM-only packages must be bundled (not externalized) for CJS compatibility
+      exclude: ['@whiskeysockets/baileys', '@huggingface/transformers']
     })],
     build: {
       outDir: 'dist/main',
@@ -16,7 +18,8 @@ export default defineConfig({
         },
         external: [
           'node-pty',
-          '@anthropic-ai/claude-code'
+          '@anthropic-ai/claude-code',
+          'sharp'
         ]
       }
     },

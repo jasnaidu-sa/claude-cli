@@ -271,6 +271,12 @@ export function BvsView({ onClose }: BvsViewProps) {
               setIsPrdUpload(false)
               setMode('project-list')
             }}
+            onGoToExecution={() => {
+              console.log('[BvsView] Going to execution for project:', selectedBvsProject?.id)
+              setForceNewSession(false)
+              setIsPrdUpload(false)
+              setMode('executing')
+            }}
           />
         </div>
       </div>

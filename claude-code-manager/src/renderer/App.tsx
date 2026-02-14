@@ -12,6 +12,7 @@ import { AutonomousView } from './components/autonomous'
 import { IdeasView } from './components/ideas'
 import { BvsView } from './components/bvs/BvsView'
 import { WhatsAppView } from './components/whatsapp/WhatsAppView'
+import { TelegramView } from './components/telegram/TelegramView'
 import { useUIStore } from './stores/ui-store'
 import { useSessionStore } from './stores/session-store'
 import { useDevServerAutoStart } from './hooks/useDevServerAutoStart'
@@ -61,10 +62,10 @@ export default function App() {
   const hasActiveSessions = sessions.length > 0
 
   // Check if we should show a right panel
-  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || activePanel === 'ideas' || activePanel === 'bvs' || activePanel === 'whatsapp' || (activePanel === 'files' && selectedFile)
+  const showRightPanel = activePanel === 'settings' || activePanel === 'browser' || activePanel === 'worktrees' || activePanel === 'autonomous' || activePanel === 'ideas' || activePanel === 'bvs' || activePanel === 'whatsapp' || activePanel === 'telegram' || (activePanel === 'files' && selectedFile)
 
   // Check if autonomous, ideas, or bvs should take full width (no active sessions)
-  const autonomousFullWidth = (activePanel === 'autonomous' || activePanel === 'ideas' || activePanel === 'bvs' || activePanel === 'whatsapp') && !hasActiveSessions
+  const autonomousFullWidth = (activePanel === 'autonomous' || activePanel === 'ideas' || activePanel === 'bvs' || activePanel === 'whatsapp' || activePanel === 'telegram') && !hasActiveSessions
 
   // Handle resize of right panel
   const handleRightPanelResize = useCallback((delta: number) => {
@@ -98,6 +99,9 @@ export default function App() {
     }
     if (activePanel === 'whatsapp') {
       return <WhatsAppView onClose={() => setActivePanel(null)} />
+    }
+    if (activePanel === 'telegram') {
+      return <TelegramView onClose={() => setActivePanel(null)} />
     }
     if (activePanel === 'files' && selectedFile) {
       return <FileViewer />

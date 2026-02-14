@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import { IPC_CHANNELS } from '../shared/types'
 import { WHATSAPP_IPC_CHANNELS } from '../shared/whatsapp-ipc-channels'
+import { TELEGRAM_IPC_CHANNELS } from '../shared/telegram-ipc-channels'
+import { SETTINGS_IPC_CHANNELS } from '../shared/openrouter-ipc-channels'
+import { SKILLS_IPC_CHANNELS } from '../shared/skills-types'
 import type { Session, FileNode, AppConfig, TerminalOutput, BrowserTab, BrowserSnapshot, ConsoleMessage, NetworkRequest, DevServerInfo, EditedFile, OrchestratorConfig, OrchestratorSession, OrchestratorOutput, OrchestratorProgress, WorkflowConfig, WorkflowStatus, WorkflowProgress, ProgressSnapshot, SchemaValidationResult, ComplexityAnalysis, ReadinessCheck, Idea, IdeaStage, IdeaEmailSource, OutlookConfig, ProjectType, InitiatorSession, RequirementsDoc, RalphPromptConfig, RalphPhase, RalphProgressEvent, RalphCheckpointEvent, RalphStatusEvent, RalphCheckpoint, RalphSessionSummary } from '../shared/types'
 import type { WhatsAppConnectionState, WhatsAppMessage, WhatsAppConversation, WhatsAppAgentMode, MemorySearchOptions, MemorySource, TaskStatus, TaskRunLog, HeartbeatResult, AgentIdentity, WhatsAppConfig, WhatsAppIpcResponse } from '../shared/whatsapp-types'
 import type { Worktree, WorktreeStatus, Branch, MergePreview, MergeResult, RemoteStatus, CreateWorktreeOptions, MergeStrategy, ConflictResolutionResult, WorktreeLifecycle } from '../shared/types/git'
@@ -516,6 +519,42 @@ export interface ElectronAPI {
 
     // BVS Progress
     onBvsProgress: (callback: (data: any) => void) => () => void
+  }
+
+  // Telegram Bot
+  telegram: {
+    connect: () => Promise<{ success: boolean; error?: string }>
+    disconnect: () => Promise<{ success: boolean; error?: string }>
+    getStatus: () => Promise<{ success: boolean; data?: any; error?: string }>
+    sendMessage: (chatId: string, content: string) => Promise<{ success: boolean; data?: any; error?: string }>
+    configGet: () => Promise<{ success: boolean; data?: any; error?: string }>
+    configSet: (config: any) => Promise<{ success: boolean; error?: string }>
+    onConnectionUpdate: (callback: (state: any) => void) => () => void
+    onMessageReceived: (callback: (msg: any) => void) => () => void
+    onMessageSent: (callback: (msg: any) => void) => () => void
+  }
+
+  // Settings (OpenRouter, LLM, Skills, Channel Router)
+  settings: {
+    openRouterConfigGet: () => Promise<{ success: boolean; data?: any; error?: string }>
+    openRouterConfigSet: (config: any) => Promise<{ success: boolean; error?: string }>
+    openRouterStatsGet: () => Promise<{ success: boolean; data?: any; error?: string }>
+    openRouterStatsReset: () => Promise<{ success: boolean; error?: string }>
+    openRouterTest: () => Promise<{ success: boolean; data?: any; error?: string }>
+    llmRoutingGet: () => Promise<{ success: boolean; data?: any; error?: string }>
+    llmRoutingSet: (task: string, entry: any) => Promise<{ success: boolean; error?: string }>
+    skillsList: () => Promise<{ success: boolean; data?: any[]; error?: string }>
+    skillsGet: (id: string) => Promise<{ success: boolean; data?: any; error?: string }>
+    skillsToggle: (id: string, active: boolean) => Promise<{ success: boolean; data?: any; error?: string }>
+    skillsCreate: (id: string, frontmatter: any, body: string) => Promise<{ success: boolean; data?: any; error?: string }>
+    skillsDelete: (id: string) => Promise<{ success: boolean; error?: string }>
+    skillsConfigGet: (skillId: string) => Promise<{ success: boolean; data?: any; error?: string }>
+    skillsConfigSet: (skillId: string, config: any) => Promise<{ success: boolean; error?: string }>
+    skillsScheduledJobs: () => Promise<{ success: boolean; data?: any[]; error?: string }>
+    skillsExecute: (id: string) => Promise<{ success: boolean; data?: any; error?: string }>
+    skillsAuditLog: () => Promise<{ success: boolean; data?: any[]; error?: string }>
+    channelRouterConfigGet: () => Promise<{ success: boolean; data?: any; error?: string }>
+    channelRouterConfigSet: (config: any) => Promise<{ success: boolean; error?: string }>
   }
 }
 
@@ -1814,6 +1853,79 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(WHATSAPP_IPC_CHANNELS.WHATSAPP_BVS_PROGRESS, handler)
       return () => ipcRenderer.removeListener(WHATSAPP_IPC_CHANNELS.WHATSAPP_BVS_PROGRESS, handler)
     }
+  },
+
+  // Telegram Bot
+  telegram: {
+    connect: () =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_CONNECT),
+    disconnect: () =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_DISCONNECT),
+    getStatus: () =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_GET_STATUS),
+    sendMessage: (chatId: string, content: string) =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_SEND_MESSAGE, chatId, content),
+    configGet: () =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_CONFIG_GET),
+    configSet: (config: any) =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_CONFIG_SET, config),
+    onConnectionUpdate: (callback: (state: any) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: any) => callback(state)
+      ipcRenderer.on(TELEGRAM_IPC_CHANNELS.TELEGRAM_CONNECTION_UPDATE, handler)
+      return () => ipcRenderer.removeListener(TELEGRAM_IPC_CHANNELS.TELEGRAM_CONNECTION_UPDATE, handler)
+    },
+    onMessageReceived: (callback: (msg: any) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, msg: any) => callback(msg)
+      ipcRenderer.on(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_RECEIVED, handler)
+      return () => ipcRenderer.removeListener(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_RECEIVED, handler)
+    },
+    onMessageSent: (callback: (msg: any) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, msg: any) => callback(msg)
+      ipcRenderer.on(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_SENT, handler)
+      return () => ipcRenderer.removeListener(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_SENT, handler)
+    },
+  },
+
+  // Settings (OpenRouter, LLM, Skills, Channel Router)
+  settings: {
+    openRouterConfigGet: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_CONFIG_GET),
+    openRouterConfigSet: (config: any) =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_CONFIG_SET, config),
+    openRouterStatsGet: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_STATS_GET),
+    openRouterStatsReset: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_STATS_RESET),
+    openRouterTest: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_TEST),
+    llmRoutingGet: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.LLM_ROUTING_GET),
+    llmRoutingSet: (task: string, entry: any) =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.LLM_ROUTING_SET, task, entry),
+    skillsList: () =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_LIST),
+    skillsGet: (id: string) =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_GET, id),
+    skillsToggle: (id: string, active: boolean) =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_TOGGLE, id, active),
+    skillsCreate: (id: string, frontmatter: any, body: string) =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_CREATE, id, frontmatter, body),
+    skillsDelete: (id: string) =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_DELETE, id),
+    skillsConfigGet: (skillId: string) =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_GET_CONFIG, skillId),
+    skillsConfigSet: (skillId: string, config: any) =>
+      ipcRenderer.invoke(SKILLS_IPC_CHANNELS.SKILLS_SET_CONFIG, skillId, config),
+    skillsScheduledJobs: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SKILLS_SCHEDULED_JOBS),
+    skillsExecute: (id: string) =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SKILLS_EXECUTE_MANUAL, id),
+    skillsAuditLog: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.SKILLS_AUDIT_LOG),
+    channelRouterConfigGet: () =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.CHANNEL_ROUTER_CONFIG_GET),
+    channelRouterConfigSet: (config: any) =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.CHANNEL_ROUTER_CONFIG_SET, config),
   }
 }
 

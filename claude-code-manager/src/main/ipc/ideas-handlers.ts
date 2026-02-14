@@ -15,6 +15,7 @@ import { getLinkContentExtractor } from '../services/link-content-extractor'
 import { getBrowserContentFetcher } from '../services/browser-content-fetcher'
 import type { CreateIdeaOptions, UpdateIdeaOptions } from '../services/ideas-manager'
 import type { Idea, IdeaStage, OutlookConfig, ProjectType } from '@shared/types'
+import path from 'path'
 
 // Agent SDK types (dynamic import for ESM compatibility)
 import type { Query, SDKUserMessage, Options } from '@anthropic-ai/claude-agent-sdk'
@@ -28,6 +29,46 @@ async function getSDK(): Promise<typeof import('@anthropic-ai/claude-agent-sdk')
     console.log('[IdeasHandler] Agent SDK loaded successfully')
   }
   return sdkModule
+}
+
+/**
+ * Get the path to the Claude Code CLI executable bundled with the SDK.
+ * In packaged Electron apps, the SDK is extracted from asar to app.asar.unpacked,
+ * so we need to adjust the path accordingly.
+ */
+function getClaudeCodeCliPath(): string | undefined {
+  try {
+    const sdkPath = require.resolve('@anthropic-ai/claude-agent-sdk')
+    const sdkDir = path.dirname(sdkPath)
+    let cliPath = path.join(sdkDir, 'cli.js')
+
+    // In packaged Electron apps, the SDK is in asarUnpack, so the path
+    // should be app.asar.unpacked instead of app.asar
+    if (cliPath.includes('app.asar') && !cliPath.includes('app.asar.unpacked')) {
+      cliPath = cliPath.replace('app.asar', 'app.asar.unpacked')
+    }
+
+    return cliPath
+  } catch (e) {
+    console.warn('[IdeasHandler] Could not resolve SDK CLI path:', e)
+    return undefined
+  }
+}
+
+/**
+ * Build environment for SDK subprocess.
+ * In packaged Electron apps, env vars may not be inherited.
+ */
+function buildSdkEnv(): Record<string, string | undefined> {
+  const userHome = process.env.HOME || process.env.USERPROFILE || ''
+  return {
+    ...process.env,
+    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+    CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
+    HOME: userHome,
+    USERPROFILE: userHome,
+    PATH: process.env.PATH,
+  }
 }
 
 // Active queries for cancellation
@@ -545,7 +586,20 @@ export function registerIdeasHandlers(): void {
         // Determine if we should enable file tools (any mode with associated project gets read access)
         const hasProject = !!(idea.associatedProjectPath || idea.projectName)
         const projectPath = idea.associatedProjectPath || null
-        const enableTools = hasProject // Enable tools for any mode if project exists
+
+        // Verify project path exists before enabling tools
+        let enableTools = hasProject
+        if (enableTools && projectPath) {
+          try {
+            const fs = await import('fs')
+            if (!fs.existsSync(projectPath)) {
+              console.warn('[IdeasHandler] Project path does not exist, disabling tools:', projectPath)
+              enableTools = false
+            }
+          } catch {
+            enableTools = false
+          }
+        }
 
         console.log('[IdeasHandler] Mode:', mode, 'Project path:', projectPath, 'Enable tools:', enableTools)
 
@@ -553,25 +607,28 @@ export function registerIdeasHandlers(): void {
         const existingSessionId = idea.sessionId
         console.log('[IdeasHandler] Existing session ID:', existingSessionId || 'none')
 
-        // Create async generator for streaming input (matching discovery-chat-service-sdk pattern)
-        async function* generateMessages(): AsyncGenerator<SDKUserMessage> {
-          yield {
-            type: 'user' as const,
-            message: {
-              role: 'user' as const,
-              content: contextPrompt
-            },
-            parent_tool_use_id: null,
-            session_id: existingSessionId || ideaId // Use existing session or idea ID as fallback
-          }
-        }
+        // Collect stderr for debugging
+        const stderrChunks: string[] = []
 
-        // SDK options - enable tools for plan mode with project
+        // Build env and CLI path for packaged Electron apps
+        const sdkEnv = buildSdkEnv()
+        const cliPath = getClaudeCodeCliPath()
+        console.log('[IdeasHandler] CLI path:', cliPath || 'default')
+        console.log('[IdeasHandler] ANTHROPIC_API_KEY set:', !!sdkEnv.ANTHROPIC_API_KEY)
+
+        // SDK options
         const sdkOptions: Options = {
           model: 'claude-3-5-haiku-20241022', // Fast model for discussions
-          maxTurns: enableTools ? 15 : 1, // Allow multiple turns if using tools
-          includePartialMessages: true, // Get token-by-token streaming
-          permissionMode: 'default'
+          maxTurns: enableTools ? 15 : 1,
+          includePartialMessages: true,
+          permissionMode: 'bypassPermissions',       // Auto-approve tool use (no interactive prompts)
+          allowDangerouslySkipPermissions: true,      // Required for bypassPermissions mode
+          env: sdkEnv,                               // Pass env vars (API key, home dir) to subprocess
+          ...(cliPath ? { pathToClaudeCodeExecutable: cliPath } : {}),
+          stderr: (data: string) => {
+            stderrChunks.push(data)
+            console.log('[IdeasHandler] SDK stderr:', data.trim())
+          }
         }
 
         // Resume existing session if available (maintains conversation context!)
@@ -586,121 +643,166 @@ export function registerIdeasHandlers(): void {
           sdkOptions.cwd = projectPath // Set working directory to project
 
           if (mode === 'execute') {
-            // Execute mode: full read+write capabilities
             sdkOptions.tools = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'LS', 'Bash']
-            sdkOptions.maxTurns = 10 // Allow more turns for complex execution tasks
-            console.log('[IdeasHandler] Enabled EXECUTE tools (read+write) for project:', projectPath)
+            sdkOptions.maxTurns = 10
+            console.log('[IdeasHandler] Enabled EXECUTE tools (read+write+bash) for project:', projectPath)
           } else if (mode === 'plan') {
-            // Plan mode: read-only with more turns for exploration
-            sdkOptions.tools = ['Read', 'Glob', 'Grep', 'LS']
-            sdkOptions.maxTurns = 15 // Allow many turns for exploration and file reading
-            console.log('[IdeasHandler] Enabled PLAN tools (read-only) for project:', projectPath)
+            // Plan mode: read + write (can create PRDs, plans, docs) but no Bash
+            sdkOptions.tools = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'LS']
+            sdkOptions.maxTurns = 15
+            console.log('[IdeasHandler] Enabled PLAN tools (read+write) for project:', projectPath)
           } else {
             // Chat mode: read-only tools for context
             sdkOptions.tools = ['Read', 'Glob', 'Grep', 'LS']
-            sdkOptions.maxTurns = 15 // Allow enough turns to read multiple files and respond
+            sdkOptions.maxTurns = 15
             console.log('[IdeasHandler] Enabled CHAT tools (read-only) for project:', projectPath)
           }
         } else {
           sdkOptions.tools = [] // No tools if no project
         }
 
-        // Start SDK query with streaming
-        const queryResult = sdk.query({
-          prompt: generateMessages(),
-          options: sdkOptions
-        })
-
-        // Store query for potential cancellation
-        activeIdeasQueries.set(ideaId, queryResult)
-
-        let fullResponse = ''
-        let capturedSessionId: string | undefined
-        const startTime = Date.now()
-
-        // Process streaming messages (matching discovery-chat-service-sdk pattern)
-        let chunkCount = 0
-        for await (const message of queryResult) {
-          // Capture session ID from system init message (for resuming conversation!)
-          if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
-            capturedSessionId = message.session_id
-            console.log('[IdeasHandler] Captured session ID:', capturedSessionId)
+        // Helper to run the SDK query and process streaming
+        const runQuery = async (options: Options): Promise<void> => {
+          // Recreate generator each attempt (generators are single-use)
+          async function* msgs(): AsyncGenerator<SDKUserMessage> {
+            yield {
+              type: 'user' as const,
+              message: {
+                role: 'user' as const,
+                content: contextPrompt
+              },
+              parent_tool_use_id: null,
+              session_id: options.resume || ideaId
+            }
           }
 
-          // Handle streaming partial messages (token-by-token!)
-          if (message.type === 'stream_event' && message.event) {
-            const event = message.event as { type: string; delta?: { type?: string; text?: string } }
+          const queryResult = sdk.query({
+            prompt: msgs(),
+            options
+          })
 
-            if (event.type === 'content_block_delta' && event.delta?.text) {
-              const delta = event.delta.text
-              fullResponse += delta
-              chunkCount++
+          // Store query for potential cancellation
+          activeIdeasQueries.set(ideaId, queryResult)
 
-              // Send chunk to renderer
+          let fullResponse = ''
+          let capturedSessionId: string | undefined
+          const startTime = Date.now()
+
+          let chunkCount = 0
+          for await (const message of queryResult) {
+            if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
+              capturedSessionId = message.session_id
+              console.log('[IdeasHandler] Captured session ID:', capturedSessionId)
+            }
+
+            if (message.type === 'stream_event' && message.event) {
+              const event = message.event as { type: string; delta?: { type?: string; text?: string } }
+
+              if (event.type === 'content_block_delta' && event.delta?.text) {
+                const delta = event.delta.text
+                fullResponse += delta
+                chunkCount++
+
+                sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
+                  ideaId,
+                  type: 'chunk',
+                  chunk: delta
+                })
+              }
+            } else if (message.type === 'assistant' && message.message?.content) {
+              for (const block of message.message.content) {
+                if (block.type === 'text' && 'text' in block) {
+                  const newText = block.text as string
+                  if (newText.length > fullResponse.length) {
+                    const delta = newText.slice(fullResponse.length)
+                    sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
+                      ideaId,
+                      type: 'chunk',
+                      chunk: delta
+                    })
+                  }
+                  fullResponse = newText
+                }
+              }
+            } else if (message.type === 'result') {
+              const duration = Date.now() - startTime
+              console.log('[IdeasHandler] SDK query complete in', duration, 'ms')
+              console.log('[IdeasHandler] Cost:', message.total_cost_usd, 'USD')
+            }
+          }
+
+          activeIdeasQueries.delete(ideaId)
+
+          console.log('[IdeasHandler] Received', chunkCount, 'chunks')
+          console.log('[IdeasHandler] Full response length:', fullResponse.length)
+          console.log('[IdeasHandler] Full response preview:', fullResponse.substring(0, 200))
+
+          if (capturedSessionId && !existingSessionId) {
+            console.log('[IdeasHandler] Storing new session ID:', capturedSessionId)
+            ideasManager.updateSessionId(ideaId, capturedSessionId)
+          }
+
+          if (fullResponse.trim()) {
+            console.log('[IdeasHandler] Adding response to discussion and sending completion')
+            ideasManager.addDiscussionMessage(ideaId, 'assistant', fullResponse.trim())
+
+            sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
+              ideaId,
+              type: 'complete',
+              fullResponse: fullResponse.trim()
+            })
+            console.log('[IdeasHandler] Completion event sent with full response')
+          } else {
+            console.log('[IdeasHandler] No response content, sending empty completion')
+            sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
+              ideaId,
+              type: 'complete'
+            })
+          }
+        }
+
+        // Attempt the query - retry without session resume if it fails
+        try {
+          await runQuery(sdkOptions)
+        } catch (firstError) {
+          const errMsg = getErrorMessage(firstError)
+          console.warn('[IdeasHandler] SDK query failed:', errMsg)
+          if (stderrChunks.length > 0) {
+            console.warn('[IdeasHandler] SDK stderr output:', stderrChunks.join(''))
+          }
+
+          // If we were resuming a session, retry without it (session may be stale/expired)
+          if (existingSessionId) {
+            console.log('[IdeasHandler] Retrying without session resume (session may be stale)...')
+            // Clear the stale session ID from the idea
+            ideasManager.updateSessionId(ideaId, undefined)
+
+            const retryOptions = { ...sdkOptions }
+            delete retryOptions.resume
+            delete retryOptions.forkSession
+
+            try {
+              await runQuery(retryOptions)
+            } catch (retryError) {
+              console.error('[IdeasHandler] SDK retry also failed:', retryError)
+              activeIdeasQueries.delete(ideaId)
               sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
                 ideaId,
-                type: 'chunk',
-                chunk: delta
+                type: 'error',
+                error: getErrorMessage(retryError)
               })
+              return { success: false, error: getErrorMessage(retryError) }
             }
+          } else {
+            // No session to clear - this is a real error
+            activeIdeasQueries.delete(ideaId)
+            sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
+              ideaId,
+              type: 'error',
+              error: errMsg
+            })
+            return { success: false, error: errMsg }
           }
-          // Handle complete assistant message (fallback)
-          else if (message.type === 'assistant' && message.message?.content) {
-            for (const block of message.message.content) {
-              if (block.type === 'text' && 'text' in block) {
-                const newText = block.text as string
-                if (newText.length > fullResponse.length) {
-                  const delta = newText.slice(fullResponse.length)
-                  sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
-                    ideaId,
-                    type: 'chunk',
-                    chunk: delta
-                  })
-                }
-                fullResponse = newText
-              }
-            }
-          }
-          // Handle result (final message)
-          else if (message.type === 'result') {
-            const duration = Date.now() - startTime
-            console.log('[IdeasHandler] SDK query complete in', duration, 'ms')
-            console.log('[IdeasHandler] Cost:', message.total_cost_usd, 'USD')
-          }
-        }
-
-        // Clean up active query
-        activeIdeasQueries.delete(ideaId)
-
-        console.log('[IdeasHandler] Received', chunkCount, 'chunks')
-        console.log('[IdeasHandler] Full response length:', fullResponse.length)
-        console.log('[IdeasHandler] Full response preview:', fullResponse.substring(0, 200))
-
-        // Store session ID if captured (for conversation continuity!)
-        if (capturedSessionId && !existingSessionId) {
-          console.log('[IdeasHandler] Storing new session ID:', capturedSessionId)
-          ideasManager.updateSessionId(ideaId, capturedSessionId)
-        }
-
-        // Add assistant response to discussion
-        if (fullResponse.trim()) {
-          console.log('[IdeasHandler] Adding response to discussion and sending completion')
-          ideasManager.addDiscussionMessage(ideaId, 'assistant', fullResponse.trim())
-
-          // Send completion event
-          sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
-            ideaId,
-            type: 'complete',
-            fullResponse: fullResponse.trim()
-          })
-          console.log('[IdeasHandler] Completion event sent with full response')
-        } else {
-          console.log('[IdeasHandler] No response content, sending empty completion')
-          // Still send complete even if no response
-          sendToAllWindows(IPC_CHANNELS.IDEAS_DISCUSS_STREAM, {
-            ideaId,
-            type: 'complete'
-          })
         }
 
         return { success: true }

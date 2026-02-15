@@ -11,6 +11,7 @@ export const TELEGRAM_IPC_CHANNELS = {
   TELEGRAM_SEND_MESSAGE: 'telegram:send-message',
   TELEGRAM_MESSAGE_RECEIVED: 'telegram:message-received',
   TELEGRAM_MESSAGE_SENT: 'telegram:message-sent',
+  TELEGRAM_GET_MESSAGES: 'telegram:get-messages',
 
   // Config
   TELEGRAM_CONFIG_GET: 'telegram:config-get',
@@ -34,6 +35,11 @@ export const TELEGRAM_IPC_CHANNELS = {
   CHANNEL_UX_SEND_NOTIFICATION: 'channel-ux:send-notification',
   CHANNEL_UX_FORWARD_CONFIG_GET: 'channel-ux:forward-config-get',
   CHANNEL_UX_FORWARD_CONFIG_SET: 'channel-ux:forward-config-set',
+
+  // Routing Rules
+  TELEGRAM_ROUTING_RULES_GET: 'telegram:routing-rules-get',
+  TELEGRAM_ROUTING_RULES_UPSERT: 'telegram:routing-rules-upsert',
+  TELEGRAM_ROUTING_RULES_DELETE: 'telegram:routing-rules-delete',
 
   // Events (main -> renderer)
   CHANNEL_UX_APPROVAL_RESPONSE: 'channel-ux:approval-response',

@@ -527,11 +527,15 @@ export interface ElectronAPI {
     disconnect: () => Promise<{ success: boolean; error?: string }>
     getStatus: () => Promise<{ success: boolean; data?: any; error?: string }>
     sendMessage: (chatId: string, content: string) => Promise<{ success: boolean; data?: any; error?: string }>
+    getMessages: () => Promise<{ success: boolean; data?: any[]; error?: string }>
     configGet: () => Promise<{ success: boolean; data?: any; error?: string }>
     configSet: (config: any) => Promise<{ success: boolean; error?: string }>
     onConnectionUpdate: (callback: (state: any) => void) => () => void
     onMessageReceived: (callback: (msg: any) => void) => () => void
     onMessageSent: (callback: (msg: any) => void) => () => void
+    routingRulesGet: () => Promise<{ success: boolean; data?: any[]; error?: string }>
+    routingRulesUpsert: (rule: any) => Promise<{ success: boolean; error?: string }>
+    routingRulesDelete: (ruleId: string) => Promise<{ success: boolean; error?: string }>
   }
 
   // Settings (OpenRouter, LLM, Skills, Channel Router)
@@ -541,6 +545,7 @@ export interface ElectronAPI {
     openRouterStatsGet: () => Promise<{ success: boolean; data?: any; error?: string }>
     openRouterStatsReset: () => Promise<{ success: boolean; error?: string }>
     openRouterTest: () => Promise<{ success: boolean; data?: any; error?: string }>
+    openRouterSearchModels: (query: string) => Promise<{ success: boolean; data?: any[]; error?: string }>
     llmRoutingGet: () => Promise<{ success: boolean; data?: any; error?: string }>
     llmRoutingSet: (task: string, entry: any) => Promise<{ success: boolean; error?: string }>
     skillsList: () => Promise<{ success: boolean; data?: any[]; error?: string }>
@@ -1865,6 +1870,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_GET_STATUS),
     sendMessage: (chatId: string, content: string) =>
       ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_SEND_MESSAGE, chatId, content),
+    getMessages: () =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_GET_MESSAGES),
     configGet: () =>
       ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_CONFIG_GET),
     configSet: (config: any) =>
@@ -1884,6 +1891,12 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_SENT, handler)
       return () => ipcRenderer.removeListener(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_SENT, handler)
     },
+    routingRulesGet: () =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_ROUTING_RULES_GET),
+    routingRulesUpsert: (rule: any) =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_ROUTING_RULES_UPSERT, rule),
+    routingRulesDelete: (ruleId: string) =>
+      ipcRenderer.invoke(TELEGRAM_IPC_CHANNELS.TELEGRAM_ROUTING_RULES_DELETE, ruleId),
   },
 
   // Settings (OpenRouter, LLM, Skills, Channel Router)
@@ -1898,6 +1911,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_STATS_RESET),
     openRouterTest: () =>
       ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_TEST),
+    openRouterSearchModels: (query: string) =>
+      ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.OPENROUTER_SEARCH_MODELS, query),
     llmRoutingGet: () =>
       ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.LLM_ROUTING_GET),
     llmRoutingSet: (task: string, entry: any) =>

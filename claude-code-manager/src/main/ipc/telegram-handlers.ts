@@ -5,15 +5,59 @@
  * messaging, config, and channel routing.
  */
 
-import { ipcMain, BrowserWindow } from 'electron'
+import { ipcMain, BrowserWindow, app } from 'electron'
 import { TELEGRAM_IPC_CHANNELS } from '@shared/telegram-ipc-channels'
 import type { TelegramService } from '../services/telegram-service'
 import type { ChannelRouterService } from '../services/channel-router-service'
 import type { ChannelUxService } from '../services/channel-ux-service'
 import type { ConfigStore } from '../services/config-store'
-import type { TelegramConfig, ChannelType } from '@shared/channel-types'
+import type { TelegramConfig, ChannelType, TelegramRoutingRule } from '@shared/channel-types'
+import * as fs from 'fs'
+import * as path from 'path'
 
 const LOG = '[Telegram-IPC]'
+const MAX_MESSAGE_HISTORY = 500
+
+// Persistent message history — backed by JSON file
+const HISTORY_FILE = path.join(app.getPath('userData'), 'telegram-messages.json')
+let messageHistory: any[] = []
+
+// Load history from disk on module init
+try {
+  if (fs.existsSync(HISTORY_FILE)) {
+    const raw = fs.readFileSync(HISTORY_FILE, 'utf-8')
+    messageHistory = JSON.parse(raw)
+    if (!Array.isArray(messageHistory)) messageHistory = []
+    console.log(LOG, `Loaded ${messageHistory.length} messages from disk`)
+  }
+} catch (err) {
+  console.warn(LOG, 'Failed to load message history:', err)
+  messageHistory = []
+}
+
+function saveHistory(): void {
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(messageHistory.slice(-MAX_MESSAGE_HISTORY)), 'utf-8')
+  } catch { /* ignore write errors */ }
+}
+
+// Debounce disk writes — save at most every 2 seconds
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+function debouncedSave(): void {
+  if (saveTimer) return
+  saveTimer = setTimeout(() => {
+    saveHistory()
+    saveTimer = null
+  }, 2000)
+}
+
+function addToHistory(msg: any): void {
+  messageHistory.push(msg)
+  if (messageHistory.length > MAX_MESSAGE_HISTORY) {
+    messageHistory.splice(0, messageHistory.length - MAX_MESSAGE_HISTORY)
+  }
+  debouncedSave()
+}
 
 function sendToAllWindows(channel: string, data: unknown): void {
   BrowserWindow.getAllWindows().forEach((win) => {
@@ -21,6 +65,15 @@ function sendToAllWindows(channel: string, data: unknown): void {
       win.webContents.send(channel, data)
     }
   })
+}
+
+function persistRoutingRules(configStore: ConfigStore, rules: TelegramRoutingRule[]): void {
+  const whatsappConfig = (configStore.get('whatsapp') as any) || {}
+  const telegramConfig = whatsappConfig.telegram || {}
+  configStore.set('whatsapp', {
+    ...whatsappConfig,
+    telegram: { ...telegramConfig, routingRules: rules },
+  } as any)
 }
 
 export function registerTelegramHandlers(
@@ -87,6 +140,11 @@ export function registerTelegramHandlers(
       }
     },
   )
+
+  // Get message history (for loading on mount)
+  ipcMain.handle(TELEGRAM_IPC_CHANNELS.TELEGRAM_GET_MESSAGES, async () => {
+    return { success: true, data: messageHistory }
+  })
 
   // ========================================================================
   // Config
@@ -177,6 +235,48 @@ export function registerTelegramHandlers(
   )
 
   // ========================================================================
+  // Routing Rules
+  // ========================================================================
+
+  ipcMain.handle(TELEGRAM_IPC_CHANNELS.TELEGRAM_ROUTING_RULES_GET, async () => {
+    try {
+      const rules = telegramService.getRoutingRules()
+      return { success: true, data: rules }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { success: false, error: message }
+    }
+  })
+
+  ipcMain.handle(
+    TELEGRAM_IPC_CHANNELS.TELEGRAM_ROUTING_RULES_UPSERT,
+    async (_event, rule: TelegramRoutingRule) => {
+      try {
+        telegramService.upsertRoutingRule(rule)
+        persistRoutingRules(configStore, telegramService.getRoutingRules())
+        return { success: true }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { success: false, error: message }
+      }
+    },
+  )
+
+  ipcMain.handle(
+    TELEGRAM_IPC_CHANNELS.TELEGRAM_ROUTING_RULES_DELETE,
+    async (_event, ruleId: string) => {
+      try {
+        telegramService.removeRoutingRule(ruleId)
+        persistRoutingRules(configStore, telegramService.getRoutingRules())
+        return { success: true }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { success: false, error: message }
+      }
+    },
+  )
+
+  // ========================================================================
   // Event Forwarding (main -> renderer)
   // ========================================================================
 
@@ -185,10 +285,12 @@ export function registerTelegramHandlers(
   })
 
   telegramService.on('message-received', (msg) => {
+    addToHistory(msg)
     sendToAllWindows(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_RECEIVED, msg)
   })
 
   telegramService.on('message-sent', (msg) => {
+    addToHistory(msg)
     sendToAllWindows(TELEGRAM_IPC_CHANNELS.TELEGRAM_MESSAGE_SENT, msg)
   })
 

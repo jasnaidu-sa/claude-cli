@@ -32,6 +32,8 @@ import { PatternCrystallizerService } from './services/pattern-crystallizer-serv
 import { TelegramService } from './services/telegram-service'
 import { ChannelRouterService } from './services/channel-router-service'
 import { registerTelegramHandlers, registerChannelUxHandlers } from './ipc/telegram-handlers'
+import { getSettingsDeps } from './ipc/settings-handlers'
+import type { TelegramConfig } from '@shared/channel-types'
 
 // LLM Router services
 import { OpenRouterService } from './services/openrouter-service'
@@ -388,10 +390,185 @@ app.whenReady().then(() => {
       }
       channelRouter.registerChannel(whatsappTransport)
 
-      // Register fallback Telegram IPC handlers (for when Telegram is not configured).
-      // These return safe defaults so the renderer never finds an unhandled channel.
-      // When Telegram IS configured, registerTelegramHandlers() removes and replaces them.
+      // Helper: lazily create TelegramService, register real IPC handlers, and connect.
+      // Called both at startup (if already configured) and on-demand from the renderer.
       const { TELEGRAM_IPC_CHANNELS: TG_CHANNELS } = await import('@shared/telegram-ipc-channels')
+
+      // Simple conversation history per chat (last N messages for context)
+      const telegramChatHistory = new Map<string, Array<{ role: 'user' | 'assistant'; content: string }>>()
+      const MAX_HISTORY = 20
+
+      // Process a Telegram message — uses OpenRouter if available, falls back to Agent SDK
+      async function handleTelegramMessage(msg: any) {
+        if (!telegramService) return
+        const chatId = msg.chatId
+        const content = msg.content?.trim()
+        if (!content) return
+
+        // Filter group messages by trigger pattern
+        const tgConfig = telegramService.getConfig()
+        const isGroup = String(chatId).startsWith('-')
+        if (isGroup && tgConfig.triggerPattern) {
+          const pattern = tgConfig.triggerPattern
+          if (!content.includes(pattern) && !content.startsWith('/')) {
+            return // Ignore group messages that don't match trigger
+          }
+        }
+
+        console.log('[Main] Processing Telegram message:', content.substring(0, 50))
+
+        // Add user message to history
+        const history = telegramChatHistory.get(chatId) ?? []
+        history.push({ role: 'user', content })
+        if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY)
+        telegramChatHistory.set(chatId, history)
+
+        // Send typing indicator and keep it alive every 4s while processing
+        let typingActive = true
+        const typingLoop = (async () => {
+          while (typingActive) {
+            try { await telegramService!.sendTypingIndicator(chatId) } catch { /* ignore */ }
+            await new Promise((r) => setTimeout(r, 4000))
+          }
+        })()
+
+        try {
+          let responseText = ''
+
+          // Check both module-level and settings deps for OpenRouter
+          const orService = openRouterService || getSettingsDeps()?.openRouterService
+          if (orService) {
+            // ---- OpenRouter path (fast, cheap) ----
+            console.log('[Main] Using OpenRouter for Telegram response')
+            const messages = [
+              { role: 'system' as const, content: 'You are a helpful AI assistant communicating via Telegram. Be concise — aim for 1-3 short paragraphs max.' },
+              ...history,
+            ]
+            // Append :online to enable OpenRouter's built-in web search
+            const baseModel = orService.getConfig().defaultModel
+            const onlineModel = baseModel.includes(':online') ? baseModel : `${baseModel}:online`
+            const result = await orService.complete(messages, {
+              model: onlineModel,
+              temperature: 0.7,
+              maxTokens: 1024,
+            })
+            responseText = result.content
+            console.log(`[Main] OpenRouter response: model=${result.model}, cost=$${result.costUsd.toFixed(4)}, ${result.durationMs}ms`)
+          } else {
+            // ---- Agent SDK fallback ----
+            console.log('[Main] Using Agent SDK for Telegram response (no OpenRouter key)')
+            let sdkModule = await import('@anthropic-ai/claude-agent-sdk')
+            const systemPrompt = 'You are a helpful AI assistant communicating via Telegram. Be concise — aim for 1-3 short paragraphs max.'
+
+            async function* generateMessages(): AsyncGenerator<import('@anthropic-ai/claude-agent-sdk').SDKUserMessage> {
+              yield {
+                type: 'user' as const,
+                message: { role: 'user' as const, content },
+                parent_tool_use_id: null,
+                session_id: '',
+              } as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage
+            }
+
+            const queryResult = sdkModule.query({
+              prompt: generateMessages(),
+              options: {
+                model: 'claude-haiku-4-5-20251001',
+                maxTurns: 1,
+                systemPrompt,
+                cwd: process.cwd(),
+                permissionMode: 'bypassPermissions',
+                allowDangerouslySkipPermissions: true,
+                env: {
+                  ...process.env,
+                  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+                  CLAUDE_API_KEY: process.env.CLAUDE_API_KEY,
+                  HOME: process.env.HOME || process.env.USERPROFILE || '',
+                  USERPROFILE: process.env.USERPROFILE || process.env.HOME || '',
+                  PATH: process.env.PATH,
+                },
+              },
+            })
+
+            for await (const message of queryResult) {
+              if (message.type === 'assistant') {
+                const msgContent = (message as any).message?.content
+                if (Array.isArray(msgContent)) {
+                  for (const block of msgContent) {
+                    if (block.type === 'text' && block.text && block.text.length > responseText.length) {
+                      responseText = block.text
+                    }
+                  }
+                }
+              }
+              if (message.type === 'result') {
+                const resultMsg = message as any
+                if (resultMsg.result && typeof resultMsg.result === 'string' && resultMsg.result.length > responseText.length) {
+                  responseText = resultMsg.result
+                }
+              }
+            }
+          }
+
+          // Stop typing indicator
+          typingActive = false
+          await typingLoop
+
+          // Add assistant response to history
+          if (responseText.trim()) {
+            history.push({ role: 'assistant', content: responseText.trim() })
+            if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY)
+            telegramChatHistory.set(chatId, history)
+            await telegramService.sendMessage(chatId, responseText.trim())
+          } else {
+            await telegramService.sendMessage(chatId, 'I processed your message but had no text response.')
+          }
+
+          console.log('[Main] Telegram response sent to chat:', chatId)
+        } catch (err) {
+          typingActive = false
+          await typingLoop
+          console.error('[Main] Telegram agent error:', err)
+          try {
+            const errorMsg = err instanceof Error ? err.message : String(err)
+            await telegramService.sendMessage(chatId, `Sorry, I encountered an error: ${errorMsg}`)
+          } catch {
+            // Ignore send errors
+          }
+        }
+      }
+
+      const initializeTelegram = (config: TelegramConfig): TelegramService => {
+        console.log('[Main] Initializing Telegram service...')
+        const svc = new TelegramService({
+          ...config,
+          routingRules: config.routingRules ?? [],
+          autoCreateGroups: config.autoCreateGroups ?? false,
+          fallbackChatId: config.fallbackChatId ?? null,
+        })
+        telegramService = svc
+        channelRouter!.registerChannel(svc)
+
+        // Wire Telegram messages to agent processing
+        svc.on('message-received', (msg: any) => {
+          console.log('[Main] Telegram message received:', msg.content?.substring(0, 50))
+          handleTelegramMessage(msg).catch((err) =>
+            console.error('[Main] Telegram message handler error:', err)
+          )
+        })
+
+        // Wire cross-channel forwarding
+        svc.on('message-received', (msg: any) => {
+          channelUxService?.forwardMessage(msg)
+        })
+
+        // Replace fallback IPC handlers with real ones
+        registerTelegramHandlers(svc, channelRouter!, configStore)
+        return svc
+      }
+
+      // Register fallback Telegram IPC handlers (for when Telegram is not yet configured).
+      // These return safe defaults so the renderer never finds an unhandled channel.
+      // TELEGRAM_CONFIG_SET and TELEGRAM_CONNECT lazily create the service on first use.
       const telegramFallbackHandler = async () => ({
         success: true,
         data: { status: 'disconnected' },
@@ -400,29 +577,109 @@ app.whenReady().then(() => {
         ipcMain.handle(channel, telegramFallbackHandler)
       }
 
-      // Initialize Telegram if configured
+      // Fallback CONFIG_SET: saves config and lazily creates the service
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_CONFIG_SET, async (_event: any, config: Partial<TelegramConfig>) => {
+        try {
+          // Persist to config store
+          const whatsappConfig = (configStore.get('whatsapp') as any) || {}
+          const existingTelegramConfig = whatsappConfig.telegram || {}
+          const mergedConfig = { ...existingTelegramConfig, ...config }
+          configStore.set('whatsapp', { ...whatsappConfig, telegram: mergedConfig } as any)
+          console.log('[Main] Telegram config saved (lazy handler)')
+
+          // If we now have enough to create the service, do it
+          if (!telegramService && mergedConfig.enabled && mergedConfig.botToken) {
+            initializeTelegram(mergedConfig as TelegramConfig)
+          } else if (telegramService) {
+            telegramService.updateConfig(config)
+          }
+
+          return { success: true }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { success: false, error: message }
+        }
+      })
+
+      // Fallback CONNECT: creates the service if needed, then connects
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_CONNECT, async () => {
+        try {
+          if (!telegramService) {
+            // Load config from store and create service
+            const whatsappConfig = (configStore.get('whatsapp') as any) || {}
+            const tgConfig = whatsappConfig.telegram
+            if (!tgConfig?.botToken) {
+              return { success: false, error: 'No bot token configured' }
+            }
+            initializeTelegram({ ...tgConfig } as TelegramConfig)
+          }
+          console.log('[Main] Telegram connecting (lazy handler)...')
+          await telegramService!.connect()
+          return { success: true }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          console.error('[Main] Telegram connect failed:', message)
+          return { success: false, error: message }
+        }
+      })
+
+      // Fallback GET_MESSAGES: returns empty until real handlers are registered
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_GET_MESSAGES, async () => {
+        return { success: true, data: [] }
+      })
+
+      // Fallback SEND_MESSAGE: no-op until service is ready
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_SEND_MESSAGE, async () => {
+        return { success: false, error: 'Telegram not connected' }
+      })
+
+      // Fallback ANSWER_CALLBACK
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_ANSWER_CALLBACK, async () => {
+        return { success: false, error: 'Telegram not connected' }
+      })
+
+      // Fallback channel router handlers
+      ipcMain.handle(TG_CHANNELS.CHANNEL_ROUTER_STATUS, async () => {
+        return { success: true, data: { channels: [] } }
+      })
+      ipcMain.handle(TG_CHANNELS.CHANNEL_ROUTER_SEND, async () => {
+        return { success: false, error: 'Channel router not ready' }
+      })
+      ipcMain.handle(TG_CHANNELS.CHANNEL_ROUTER_SEND_ALL, async () => {
+        return { success: false, error: 'Channel router not ready' }
+      })
+
+      // Fallback Routing Rules handlers
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_ROUTING_RULES_GET, async () => {
+        return { success: true, data: [] }
+      })
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_ROUTING_RULES_UPSERT, async () => {
+        return { success: false, error: 'Telegram not connected' }
+      })
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_ROUTING_RULES_DELETE, async () => {
+        return { success: false, error: 'Telegram not connected' }
+      })
+
+      // Fallback DISCONNECT
+      ipcMain.handle(TG_CHANNELS.TELEGRAM_DISCONNECT, async () => {
+        try {
+          if (telegramService) {
+            await telegramService.disconnect()
+          }
+          return { success: true }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { success: false, error: message }
+        }
+      })
+
+      // Initialize Telegram at startup if already configured
       const telegramConfig = (configStore.get('whatsapp') as any)?.telegram
       if (telegramConfig?.enabled && telegramConfig?.botToken) {
-        console.log('[Main] Initializing Telegram service...')
-        telegramService = new TelegramService({
-          ...telegramConfig,
-          routingRules: telegramConfig.routingRules ?? [],
-          autoCreateGroups: telegramConfig.autoCreateGroups ?? false,
-          fallbackChatId: telegramConfig.fallbackChatId ?? null,
-        })
-        channelRouter.registerChannel(telegramService)
-
-        // Wire Telegram messages to agent service
-        telegramService.on('message-received', (msg: any) => {
-          // Route telegram messages through the agent service
-          // by creating synthetic WhatsApp messages or handling directly
-          console.log('[Main] Telegram message received:', msg.content?.substring(0, 50))
-        })
-
-        registerTelegramHandlers(telegramService, channelRouter, configStore)
+        initializeTelegram(telegramConfig as TelegramConfig)
 
         // Auto-connect Telegram
-        telegramService.connect().catch((err: Error) =>
+        telegramService!.connect().catch((err: Error) =>
           console.error('[Main] Telegram auto-connect failed:', err.message)
         )
       }
@@ -468,14 +725,11 @@ app.whenReady().then(() => {
         skillsConfigStore,
         channelRouter,
         skillExecutor,
+        configStore,
       })
 
-      // Wire cross-channel forwarding if both channels are available
-      if (telegramService) {
-        telegramService.on('message-received', (msg: any) => {
-          channelUxService?.forwardMessage(msg)
-        })
-      }
+      // Wire cross-channel forwarding for WhatsApp
+      // (Telegram forwarding is handled inside initializeTelegram)
       if (whatsappService) {
         whatsappService.on('message-received', (msg: any) => {
           if (msg.isFromMe) return
